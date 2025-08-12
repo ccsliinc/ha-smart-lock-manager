@@ -67,6 +67,15 @@ python test_environment.py
 # Start HA with component  
 ./scripts/start_ha.sh
 
+# Start HA with filtered logging (easier to read)
+./scripts/start_ha_filtered.sh
+
+# Debug component specifically (only our logs + errors)
+./scripts/debug_component.sh
+
+# Watch logs in real-time (run in separate terminal)
+./scripts/watch_logs.sh
+
 # Run specific tests
 ./venv/bin/pytest tests/test_config_flow.py
 
