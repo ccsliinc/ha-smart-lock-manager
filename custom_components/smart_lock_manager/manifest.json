@@ -1,0 +1,11 @@
+{
+  "domain": "smart_lock_manager",
+  "name": "Smart Lock Manager",
+  "documentation": "https://github.com/jsugamele/smart_lock_manager",
+  "dependencies": [],
+  "after_dependencies" : [ "input_boolean", "input_datetime", "input_number", "input_select", "ozw", "zwave" ],
+  "codeowners": ["@jsugamele"],
+  "config_flow": true,
+  "issue_tracker": "https://github.com/jsugamele/smart_lock_manager/issues",
+  "requirements": []
+}
