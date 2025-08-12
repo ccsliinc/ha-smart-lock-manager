@@ -6,80 +6,92 @@
 # Test everything works
 ./scripts/test_component.sh
 
-# Start Home Assistant (full logs)
-./scripts/start_ha.sh
-
-# Start with filtered logs (recommended)
-./scripts/start_ha_filtered.sh
+# Start Home Assistant with clean logging
+./scripts/start_ha_clean.sh
 ```
 
 ## 📋 Available Scripts
 
-### `setup_dev.sh`
-- Sets up the complete development environment
-- Creates virtual environment, installs dependencies
+### `setup_dev.sh` 
+**One-time setup for development environment**
+- Creates virtual environment and installs dependencies
 - Installs pre-commit hooks
-- One-time setup script
+- Creates necessary directories
+- Run this once when starting development
 
-### `test_component.sh` 
+### `test_component.sh` ⭐ **Always run this first**
+**Test component before starting HA**
 - Tests Python syntax across all component files
 - Verifies imports work correctly
-- Validates manifest.json
-- **Run this first** to catch basic issues
+- Validates manifest.json structure
+- Catches basic issues before HA startup
 
-### `start_ha.sh`
-- Starts Home Assistant with full debug logging
-- Sets up symlinks automatically  
-- Shows ALL log output (can be overwhelming)
+### `start_ha_clean.sh` ⭐ **Recommended for development**
+**Start Home Assistant with optimized logging**
+- Uses Home Assistant's native logger configuration
+- Shows Smart Lock Manager logs at DEBUG level
+- Quiets noisy components (HTTP, websockets, etc.)
+- Much more reliable than shell filtering approaches
+- Shows setup and config entry logs for debugging integration loading
 
-### `start_ha_filtered.sh` ⭐ **Recommended**
-- Starts HA with filtered, colored logs
-- Shows only: Loader, Smart Lock Manager, Config, Errors, Warnings
-- **Best for development** - easier to spot issues
-
-### `debug_component.sh`
-- Shows ONLY Smart Lock Manager and error logs
-- Most focused debugging experience
-- Great for troubleshooting specific component issues
-
-### `watch_logs.sh`
-- Watches HA logs in real-time (separate terminal)
-- Useful when HA is already running
-- Filtered and color-coded output
-
-## 🎨 Log Color Coding
-
-- 🔴 **Red**: Errors and Critical issues
-- 🟡 **Yellow**: Warnings
-- 🟢 **Green**: Smart Lock Manager logs
-- 🔵 **Cyan**: Setup and configuration logs
-- ⚪ **White**: General information
-
-## 💡 Development Workflow
+## 🎯 Development Workflow
 
 1. **First time setup**: `./scripts/setup_dev.sh`
-2. **Test component**: `./scripts/test_component.sh` 
-3. **Start development**: `./scripts/start_ha_filtered.sh`
-4. **In another terminal**: `./scripts/watch_logs.sh` (optional)
-5. **Make changes** to component code
-6. **Restart HA** to see changes (Ctrl+C, then rerun script)
+2. **Before each session**: `./scripts/test_component.sh` 
+3. **Start development**: `./scripts/start_ha_clean.sh`
+4. **Make changes** to component code
+5. **Restart HA** to see changes (Ctrl+C, then rerun script)
+
+## 🔧 Logging Configuration
+
+The clean logging approach uses `config/configuration.yaml`:
+
+```yaml
+logger:
+  default: warning  # Quiet by default
+  logs:
+    custom_components.smart_lock_manager: debug  # Our component
+    homeassistant.config_entries: info          # Setup logs
+    homeassistant.loader: info                  # Loading logs
+    homeassistant.setup: info                   # Setup logs
+```
+
+This gives you:
+- **All Smart Lock Manager logs** at debug level
+- **Integration loading progress** 
+- **Clean, focused output** without noise
+- **Native HA logging** (no fragile shell filtering)
 
 ## 🐛 Troubleshooting
 
 **Component won't load?**
-- Run `./scripts/test_component.sh` first
-- Check for Python syntax errors
-- Verify all imports are available
+1. Run `./scripts/test_component.sh` first
+2. Check the startup logs for error messages
+3. Verify manifest.json has all required fields
 
-**Can't see your changes?**
-- Restart Home Assistant completely
-- Check symlinks: `ls -la config/custom_components/`
-- Verify you're editing the right files
-
-**Logs too noisy?**
-- Use `./scripts/debug_component.sh` for minimal output
-- Use `./scripts/start_ha_filtered.sh` for balanced view
+**Can't see your logs?**
+- Smart Lock Manager logs appear with `[custom_components.smart_lock_manager]` prefix
+- Loading issues show under `[homeassistant.loader]`
+- Setup issues show under `[homeassistant.config_entries]`
 
 **Need to reset environment?**
 - Delete `venv/` folder and rerun `./scripts/setup_dev.sh`
-- Remove `config/` folder to reset HA configuration
+- Delete `config/home-assistant_v2.db*` files to reset HA state
+
+## 💡 Pro Tips
+
+- **Use the Home Assistant UI** at http://localhost:8123 to configure integrations
+- **Check Settings → Integrations** to see if Smart Lock Manager appears
+- **Look for the component** in Settings → System → Logs for detailed debug info
+- **Restart HA completely** after code changes (component reloading isn't reliable)
+
+## 🎨 What You'll See
+
+With clean logging, expect output like:
+```
+INFO [homeassistant.loader] Loaded smart_lock_manager from custom_components.smart_lock_manager
+INFO [homeassistant.setup] Setting up smart_lock_manager
+DEBUG [custom_components.smart_lock_manager] Smart Lock Manager Version 1.0.0 starting up
+```
+
+Much cleaner than before!
