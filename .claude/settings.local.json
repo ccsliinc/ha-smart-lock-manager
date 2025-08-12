@@ -16,7 +16,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(curl:*)",
       "Bash(mv:*)",
-      "Bash(../../venv/bin/python -m py_compile:*)"
+      "Bash(../../venv/bin/python -m py_compile:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []

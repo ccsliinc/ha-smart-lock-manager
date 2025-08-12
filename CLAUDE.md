@@ -58,8 +58,14 @@ custom_components/smart_lock_manager/
 # Test environment
 python test_environment.py
 
-# Start HA with component
-python dev_start.py
+# Test component specifically
+./scripts/test_component.sh
+
+# Set up development environment
+./scripts/setup_dev.sh
+
+# Start HA with component  
+./scripts/start_ha.sh
 
 # Run specific tests
 ./venv/bin/pytest tests/test_config_flow.py
