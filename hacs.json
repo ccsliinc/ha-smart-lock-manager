@@ -1,0 +1,8 @@
+{
+  "name": "Smart Lock Manager",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["lock"],
+  "iot_class": "Local Polling",
+  "version": "1.0.0"
+}

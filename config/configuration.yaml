@@ -1,0 +1,51 @@
+# Home Assistant configuration for development
+
+# Core
+homeassistant:
+  name: Development
+  latitude: 40.7128
+  longitude: -74.0060
+  elevation: 0
+  unit_system: metric
+  time_zone: America/New_York
+  external_url: http://localhost:8123
+  internal_url: http://localhost:8123
+
+# Enable the frontend
+frontend:
+
+# Enable configuration UI
+config:
+
+# Enable mobile app support
+mobile_app:
+
+# Enable cloud
+cloud:
+
+# Text to speech
+tts:
+  - platform: google_translate
+
+# Example automation
+automation: !include automations.yaml
+
+# Example script
+script: !include scripts.yaml
+
+# Example scene
+scene: !include scenes.yaml
+
+# Recorder (using SQLite for development)
+recorder:
+  db_url: sqlite:///config/home-assistant_v2.db
+  purge_keep_days: 7
+
+# Logger for development
+logger:
+  default: info
+  logs:
+    custom_components: debug
+
+# Development tools
+system_health:

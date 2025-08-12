@@ -8,7 +8,15 @@
       "Bash(mkdir:*)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(chmod:*)",
+      "Bash(pre-commit:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)",
+      "Bash(mv:*)",
+      "Bash(../../venv/bin/python -m py_compile:*)"
     ],
     "deny": [],
     "ask": []
