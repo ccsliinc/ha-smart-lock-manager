@@ -1,0 +1,34 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+        args:
+          - --safe
+          - --quiet
+        language_version: python3
+        files: ^((custom_components|tests)/.+)?[^/]+\.py$
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args:
+          - --profile=black
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        additional_dependencies:
+          - flake8-docstrings==1.7.0
+          - pydocstyle==6.3.0
+        files: ^(custom_components|tests)/.+\.py$
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.17.1
+    hooks:
+      - id: mypy
+        args:
+          - --ignore-missing-imports
+        files: ^custom_components/.+\.py$
