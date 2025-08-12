@@ -1,6 +1,6 @@
 """Constants for Smart Lock Manager."""
 
-from homeassistant.const import STATE_LOCKED, STATE_UNLOCKED
+from homeassistant.components.lock import LockState
 
 DOMAIN = "smart_lock_manager"
 VERSION = "1.0.0"
@@ -66,7 +66,7 @@ SERVICE_SET_CODE = "set_code"
 SERVICE_GENERATE_PACKAGE = "generate_package"
 
 # Misc
-LOCK_STATE = [STATE_LOCKED, STATE_UNLOCKED]
+LOCK_STATE = [LockState.LOCKED, LockState.UNLOCKED]
 
 # Action maps for handling alarm types and access control
 ACCESS_CONTROL = "access_control"
@@ -99,8 +99,8 @@ ACTION_MAP = {
 }
 
 LOCK_STATE_MAP = {
-    ALARM_TYPE: {STATE_LOCKED: 24, STATE_UNLOCKED: 25},
-    ACCESS_CONTROL: {STATE_LOCKED: 3, STATE_UNLOCKED: 4},
+    ALARM_TYPE: {LockState.LOCKED: 24, LockState.UNLOCKED: 25},
+    ACCESS_CONTROL: {LockState.LOCKED: 3, LockState.UNLOCKED: 4},
 }
 
 import logging
