@@ -41,11 +41,22 @@ recorder:
   db_url: sqlite:///config/home-assistant_v2.db
   purge_keep_days: 7
 
-# Logger for development
+# Logger for development - focused on our component
 logger:
-  default: info
+  default: warning  # Keep most logs quiet
   logs:
-    custom_components: debug
+    # Our component - full debug
+    custom_components.smart_lock_manager: debug
+    
+    # Setup and config entries - useful for debugging integration loading
+    homeassistant.config_entries: info
+    homeassistant.loader: info
+    homeassistant.setup: info
+    
+    # Keep these quiet unless there are issues
+    homeassistant.components.http: warning
+    homeassistant.components.websocket_api: warning
+    aiohttp: warning
 
 # Development tools
 system_health:
