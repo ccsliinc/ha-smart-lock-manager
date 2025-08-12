@@ -33,8 +33,15 @@ def main():
                     symlink_path.symlink_to(component.absolute())
                     print(f"Created symlink: {symlink_path} -> {component.absolute()}")
 
+    # Use virtual environment Python if available
+    venv_python = Path("venv/bin/python")
+    if venv_python.exists():
+        python_executable = str(venv_python.absolute())
+    else:
+        python_executable = sys.executable
+    
     # Start Home Assistant
-    cmd = [sys.executable, "-m", "homeassistant", "--config", "config", "--debug"]
+    cmd = [python_executable, "-m", "homeassistant", "--config", "config", "--debug"]
 
     print("Starting Home Assistant in development mode...")
     print(f"Config directory: {Path('config').absolute()}")
