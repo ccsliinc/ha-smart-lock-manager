@@ -28,6 +28,7 @@ ATTR_ACTION_TEXT = "action_text"
 ATTR_CODE_SLOT_NAME = "code_slot_name"
 
 # Attributes
+ATTR_CODE_SLOT = "code_slot"
 ATTR_NAME = "lockname"
 ATTR_NODE_ID = "node_id"
 ATTR_USER_CODE = "usercode"
