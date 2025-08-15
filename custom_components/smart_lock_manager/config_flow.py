@@ -1,5 +1,7 @@
 """Config flow for Smart Lock Manager."""
 
+from typing import Any, Dict, Optional
+
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
@@ -7,12 +9,15 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import DOMAIN
 
 
-class SmartLockManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class SmartLockManagerConfigFlow(config_entries.ConfigFlow):
     """Handle a config flow for Smart Lock Manager."""
 
     VERSION = 1
+    DOMAIN = DOMAIN
 
-    async def async_step_user(self, user_input=None) -> FlowResult:
+    async def async_step_user(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> FlowResult:
         """Handle the initial step."""
         errors = {}
 
@@ -58,7 +63,9 @@ class SmartLockManagerOptionsFlow(config_entries.OptionsFlow):
         """Initialize options flow."""
         self.config_entry = config_entry
 
-    async def async_step_init(self, user_input=None) -> FlowResult:
+    async def async_step_init(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
@@ -76,6 +83,8 @@ class SmartLockManagerOptionsFlow(config_entries.OptionsFlow):
 
     @staticmethod
     @config_entries.callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "SmartLockManagerOptionsFlow":
         """Create the options flow."""
         return SmartLockManagerOptionsFlow(config_entry)

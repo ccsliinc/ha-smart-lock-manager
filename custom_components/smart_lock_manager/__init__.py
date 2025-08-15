@@ -1,6 +1,5 @@
 """Smart Lock Manager Integration."""
 
-import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
@@ -16,13 +15,6 @@ from .api.http import async_register_http_views, async_unregister_http_views
 
 # Z-Wave JS imports for reading actual lock codes
 try:
-    from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
-    from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
-    from homeassistant.helpers.entity_registry import (
-        async_get as async_get_entity_registry,
-    )
-    from zwave_js_server.util.lock import get_usercode_from_node
-
     ZWAVE_JS_AVAILABLE = True
 except (ModuleNotFoundError, ImportError):
     ZWAVE_JS_AVAILABLE = False
@@ -65,14 +57,12 @@ from .const import (
     VERSION,
 )
 from .frontend.panel import async_register_panel, async_unregister_panel
-from .models.lock import LockSettings, SmartLockManagerLock
+from .models.lock import SmartLockManagerLock
 from .services.lock_services import LockServices
 from .services.management_services import ManagementServices
 from .services.slot_services import SlotServices
 from .services.system_services import SystemServices
 from .services.zwave_services import ZWaveServices
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def _save_lock_data(
@@ -367,16 +357,16 @@ async def _register_services(hass: HomeAssistant) -> None:
     """Register Smart Lock Manager services using modular service classes."""
 
     # Create service wrappers to pass hass parameter to static methods
-    async def set_code_wrapper(service_call):
+    async def set_code_wrapper(service_call: ServiceCall) -> None:
         return await LockServices.set_code(hass, service_call)
 
-    async def clear_code_wrapper(service_call):
+    async def clear_code_wrapper(service_call: ServiceCall) -> None:
         return await LockServices.clear_code(hass, service_call)
 
-    async def refresh_codes_wrapper(service_call):
+    async def refresh_codes_wrapper(service_call: ServiceCall) -> None:
         return await ZWaveServices.refresh_codes(hass, service_call)
 
-    async def generate_package_wrapper(service_call):
+    async def generate_package_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.generate_package(hass, service_call)
 
     # Register services using modular classes
@@ -404,37 +394,37 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     """Register advanced Smart Lock Manager services using modular service classes."""
 
     # Create service wrappers to pass hass parameter to static methods
-    async def set_code_advanced_wrapper(service_call):
+    async def set_code_advanced_wrapper(service_call: ServiceCall) -> None:
         return await LockServices.set_code_advanced(hass, service_call)
 
-    async def enable_slot_wrapper(service_call):
+    async def enable_slot_wrapper(service_call: ServiceCall) -> None:
         return await SlotServices.enable_slot(hass, service_call)
 
-    async def disable_slot_wrapper(service_call):
+    async def disable_slot_wrapper(service_call: ServiceCall) -> None:
         return await SlotServices.disable_slot(hass, service_call)
 
-    async def reset_slot_usage_wrapper(service_call):
+    async def reset_slot_usage_wrapper(service_call: ServiceCall) -> None:
         return await SlotServices.reset_slot_usage(hass, service_call)
 
-    async def resize_slots_wrapper(service_call):
+    async def resize_slots_wrapper(service_call: ServiceCall) -> None:
         return await SlotServices.resize_slots(hass, service_call)
 
-    async def read_zwave_codes_wrapper(service_call):
+    async def read_zwave_codes_wrapper(service_call: ServiceCall) -> None:
         return await ZWaveServices.read_zwave_codes(hass, service_call)
 
-    async def sync_slot_to_zwave_wrapper(service_call):
+    async def sync_slot_to_zwave_wrapper(service_call: ServiceCall) -> None:
         return await ZWaveServices.sync_slot_to_zwave(hass, service_call)
 
-    async def sync_child_locks_wrapper(service_call):
+    async def sync_child_locks_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.sync_child_locks(hass, service_call)
 
-    async def get_usage_stats_wrapper(service_call):
+    async def get_usage_stats_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.get_usage_stats(hass, service_call)
 
-    async def update_lock_settings_wrapper(service_call):
+    async def update_lock_settings_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.update_lock_settings(hass, service_call)
 
-    async def update_global_settings_wrapper(service_call):
+    async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
 
     # Register advanced services using modular classes
@@ -556,7 +546,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
 
             if lock:
                 # Step 1: Check for slot validity changes and auto-disable expired slots
-                changed_slots = lock.check_and_update_slot_validity()
+                lock.check_and_update_slot_validity()
 
                 # Step 2: Read current Z-Wave codes every 30 seconds
                 zwave_codes = {}
