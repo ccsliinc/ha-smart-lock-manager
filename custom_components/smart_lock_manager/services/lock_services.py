@@ -6,7 +6,14 @@ from typing import Optional
 
 from homeassistant.core import HomeAssistant, ServiceCall
 
-from ..const import ATTR_CODE_SLOT, ATTR_ENTITY_ID, ATTR_USER_CODE, DOMAIN, PRIMARY_LOCK
+from ..const import (
+    ATTR_CODE_SLOT,
+    ATTR_CODE_SLOT_NAME,
+    ATTR_ENTITY_ID,
+    ATTR_USER_CODE,
+    DOMAIN,
+    PRIMARY_LOCK,
+)
 from ..models.lock import SmartLockManagerLock
 
 _LOGGER = logging.getLogger(__name__)

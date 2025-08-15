@@ -1,7 +1,6 @@
 """HTTP views for Smart Lock Manager frontend."""
 
 import logging
-import os
 from pathlib import Path
 
 from aiohttp import web
@@ -24,7 +23,7 @@ class SmartLockManagerFrontendView(HomeAssistantView):
         # Get the path to our frontend files
         self.frontend_path = Path(__file__).parent.parent / "frontend" / "dist"
 
-    async def get(self, request, filename):
+    async def get(self, request: web.Request, filename: str) -> web.Response:
         """Serve frontend files."""
 
         try:

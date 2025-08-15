@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -268,7 +268,7 @@ class SmartLockManagerLock:
         return changed_slots
 
     def get_slots_needing_sync(
-        self, zwave_codes: Dict[int, Dict] = None
+        self, zwave_codes: Optional[Dict[int, Dict[Any, Any]]] = None
     ) -> Dict[str, List[int]]:
         """
         Get slots that need Z-Wave synchronization based on actual lock state.
@@ -311,7 +311,9 @@ class SmartLockManagerLock:
 
         return {"add": add_slots, "remove": remove_slots, "retry": retry_slots}
 
-    def update_sync_status(self, zwave_codes: Dict[int, Dict] = None) -> None:
+    def update_sync_status(
+        self, zwave_codes: Optional[Dict[int, Dict[Any, Any]]] = None
+    ) -> None:
         """Update slot sync status based on actual Z-Wave codes."""
         zwave_codes = zwave_codes or {}
 
@@ -439,7 +441,7 @@ class SmartLockManagerLock:
                         child_slot.notify_on_use = slot.notify_on_use
                         # Don't sync usage counters - each lock tracks its own usage
 
-    def get_usage_statistics(self) -> Dict[str, any]:
+    def get_usage_statistics(self) -> Dict[str, Any]:
         """Get usage statistics for this lock."""
         total_uses = sum(slot.use_count for slot in self.code_slots.values())
         active_users = len(

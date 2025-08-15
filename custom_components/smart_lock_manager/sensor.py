@@ -8,10 +8,13 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 
 from .const import DOMAIN, PRIMARY_LOCK
-from .models.lock import SmartLockManagerLock
+from .models.lock import CodeSlot, SmartLockManagerLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,8 +43,8 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         hass: HomeAssistant,
         entry: ConfigEntry,
         lock: SmartLockManagerLock,
-        coordinator,
-    ):
+        coordinator: DataUpdateCoordinator,
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._hass = hass
@@ -155,14 +158,14 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "architecture": "object_oriented_advanced",
         }
 
-    def _get_slot_display_title(self, slot_num: int, slot: "CodeSlot") -> str:
+    def _get_slot_display_title(self, slot_num: int, slot: CodeSlot) -> str:
         """Generate the display title for slot (e.g., 'Slot 1: John Doe' or 'Slot 2:')."""
         if slot.user_name:
             return f"Slot {slot_num}: {slot.user_name}"
         else:
             return f"Slot {slot_num}:"
 
-    def _get_slot_status_text(self, slot: "CodeSlot", is_valid_now: bool) -> str:
+    def _get_slot_status_text(self, slot: CodeSlot, is_valid_now: bool) -> str:
         """Calculate definitive slot status text in backend."""
         # Empty slot - no PIN code configured
         if not slot.pin_code:
@@ -191,7 +194,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
 
         return "Unknown Status"
 
-    def _get_slot_status_color(self, slot: "CodeSlot", is_valid_now: bool) -> str:
+    def _get_slot_status_color(self, slot: CodeSlot, is_valid_now: bool) -> str:
         """Calculate definitive slot status color in backend."""
         # Grey - empty slot (no PIN code)
         if not slot.pin_code:
@@ -219,7 +222,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
 
         return "#9e9e9e"  # Default grey
 
-    def _get_slot_status_reason(self, slot: "CodeSlot", is_valid_now: bool) -> str:
+    def _get_slot_status_reason(self, slot: CodeSlot, is_valid_now: bool) -> str:
         """Provide detailed status explanation for debugging."""
         if not slot.is_active or not slot.pin_code:
             return "No PIN code configured"

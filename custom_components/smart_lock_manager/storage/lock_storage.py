@@ -48,7 +48,7 @@ async def save_lock_data(
         _LOGGER.error("Failed to save slot data for %s: %s", lock.lock_name, e)
 
 
-async def load_lock_data(hass: HomeAssistant, store) -> Dict[str, Any]:
+async def load_lock_data(hass: HomeAssistant, store: Any) -> Dict[str, Any]:
     """Load lock data from persistent storage."""
     try:
         stored_data = await store.async_load() or {}
