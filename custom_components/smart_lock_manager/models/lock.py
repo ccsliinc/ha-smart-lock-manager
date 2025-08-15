@@ -155,11 +155,24 @@ class SmartLockManagerLock:
         if slot_number not in self.code_slots:
             return False
 
+        # Validate PIN code format for Z-Wave locks
+        if pin_code:
+            if not pin_code.isdigit():
+                _LOGGER.error("PIN code must be numeric only: %s", pin_code)
+                return False
+            if len(pin_code) < 4 or len(pin_code) > 8:
+                _LOGGER.error(
+                    "PIN code must be 4-8 digits: %s (length: %d)",
+                    pin_code,
+                    len(pin_code),
+                )
+                return False
+
         slot = self.code_slots[slot_number]
         slot.pin_code = pin_code
         slot.user_name = user_name
         slot.is_active = bool(pin_code)
-        slot.is_synced = True  # Assume synced for now
+        slot.is_synced = False  # Mark as unsynced until Z-Wave confirms
         slot.created_at = datetime.now()
 
         _LOGGER.debug(
@@ -288,11 +301,24 @@ class SmartLockManagerLock:
             if slot.is_active and slot.pin_code and slot.is_valid_now():
                 # Check if code matches what's in the lock
                 if not zwave_code or zwave_code != slot.pin_code:
+                    _LOGGER.debug(
+                        "🔄 Slot %s needs sync: HA=%s, ZWave=%s",
+                        slot_number,
+                        slot.pin_code,
+                        zwave_code or "None",
+                    )
                     if slot.sync_attempts < 10:
                         add_slots.append(slot_number)
                     else:
                         retry_slots.append(slot_number)
                         slot.sync_error = f"Failed to sync after 10 attempts"
+                else:
+                    _LOGGER.debug(
+                        "✅ Slot %s already in sync: HA=%s, ZWave=%s",
+                        slot_number,
+                        slot.pin_code,
+                        zwave_code,
+                    )
 
             # Smart Lock Manager wants this slot disabled/removed
             elif not slot.is_active or not slot.pin_code or not slot.is_valid_now():
@@ -326,8 +352,20 @@ class SmartLockManagerLock:
                     slot.is_synced = True
                     slot.sync_attempts = 0  # Reset on success
                     slot.sync_error = None
+                    _LOGGER.debug(
+                        "✅ Slot %s sync OK: HA=%s, ZWave=%s",
+                        slot_number,
+                        slot.pin_code,
+                        zwave_code,
+                    )
                 else:
                     slot.is_synced = False
+                    _LOGGER.info(
+                        "❌ Slot %s sync MISMATCH: HA=%s, ZWave=%s",
+                        slot_number,
+                        slot.pin_code,
+                        zwave_code or "None",
+                    )
             elif not slot.is_active or not slot.pin_code:
                 # Slot should be empty
                 slot.is_synced = not bool(zwave_code)
