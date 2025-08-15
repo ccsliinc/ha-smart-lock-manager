@@ -28,7 +28,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Start Home Assistant for development/testing
-./scripts/start_ha_clean.sh
+./scripts/start_ha.sh
 
 # Run tests
 ./venv/bin/pytest
@@ -220,8 +220,8 @@ data:
 ## Development Commands
 
 ```bash
-# Start HA with clean logging
-./scripts/start_ha_clean.sh
+# Start Home Assistant for development
+./scripts/start_ha.sh
 
 # Create test lock entities
 ./scripts/create_fake_locks.py

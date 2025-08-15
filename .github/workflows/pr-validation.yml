@@ -1,0 +1,198 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pre-commit
+    
+    - name: Run pre-commit hooks
+      run: pre-commit run --all-files
+      
+    - name: Check for TODO comments in production code
+      run: |
+        # Allow TODO in test files and scripts, but not in production code
+        if grep -r "TODO" custom_components/smart_lock_manager/ --include="*.py" --exclude-dir=tests --exclude-dir=scripts; then
+          echo "❌ Found TODO comments in production code. Please create GitHub issues instead."
+          exit 1
+        else
+          echo "✅ No TODO comments found in production code"
+        fi
+        
+    - name: Validate manifest.json
+      run: |
+        python -c "
+        import json
+        with open('custom_components/smart_lock_manager/manifest.json') as f:
+            manifest = json.load(f)
+        required_keys = ['domain', 'name', 'version', 'codeowners', 'documentation', 'issue_tracker']
+        missing = [k for k in required_keys if k not in manifest]
+        if missing:
+            print(f'❌ Missing required keys in manifest: {missing}')
+            exit(1)
+        print('✅ Manifest validation passed')
+        "
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio
+        
+    - name: Run tests
+      run: |
+        if [ -d "tests" ]; then
+          pytest tests/ -v --cov=custom_components.smart_lock_manager
+        else
+          echo "⚠️ No tests directory found - skipping tests"
+        fi
+
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check required documentation files
+      run: |
+        required_files=(
+          "README.md"
+          "CLAUDE.md" 
+          "LICENSE"
+          "PULL_REQUEST_TEMPLATE.md"
+        )
+        
+        missing_files=()
+        for file in "${required_files[@]}"; do
+          if [ ! -f "$file" ]; then
+            missing_files+=("$file")
+          fi
+        done
+        
+        if [ ${#missing_files[@]} -ne 0 ]; then
+          echo "❌ Missing required documentation files: ${missing_files[*]}"
+          exit 1
+        else
+          echo "✅ All required documentation files present"
+        fi
+        
+    - name: Check for keymaster references
+      run: |
+        if grep -ri "keymaster\|key.master\|key_master" custom_components/smart_lock_manager/ --exclude-dir=.git; then
+          echo "❌ Found keymaster references that should be removed"
+          exit 1
+        else
+          echo "✅ No keymaster references found"
+        fi
+
+  security:
+    runs-on: ubuntu-latest  
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check for hardcoded secrets
+      run: |
+        # Check for common secret patterns
+        patterns=(
+          "password.*=.*['\"].*['\"]"
+          "token.*=.*['\"].*['\"]"
+          "secret.*=.*['\"].*['\"]"  
+          "api_key.*=.*['\"].*['\"]"
+        )
+        
+        found_secrets=false
+        for pattern in "${patterns[@]}"; do
+          if grep -r -E "$pattern" custom_components/smart_lock_manager/ --include="*.py"; then
+            found_secrets=true
+          fi
+        done
+        
+        if [ "$found_secrets" = true ]; then
+          echo "❌ Potential hardcoded secrets found"
+          exit 1  
+        else
+          echo "✅ No hardcoded secrets detected"
+        fi
+        
+    - name: Check PIN code handling
+      run: |
+        # Ensure PIN codes are handled securely in logs
+        if grep -r "pin.*:.*{" custom_components/smart_lock_manager/ --include="*.py" | grep -v "\*\*\*"; then
+          echo "❌ Found potential PIN code logging without masking"
+          exit 1
+        else
+          echo "✅ PIN code handling appears secure"
+        fi
+
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Validate zero sensor pollution architecture  
+      run: |
+        # Check that we're not creating multiple sensors per lock
+        sensor_creations=$(grep -r "SensorEntity\|async_add_entities" custom_components/smart_lock_manager/ --include="*.py" | grep -v "sensor.py" | wc -l)
+        if [ $sensor_creations -gt 0 ]; then
+          echo "⚠️  Found sensor creation outside sensor.py - verify zero sensor pollution compliance"
+          grep -r "SensorEntity\|async_add_entities" custom_components/smart_lock_manager/ --include="*.py" | grep -v "sensor.py"
+        else
+          echo "✅ Zero sensor pollution architecture maintained"
+        fi
+        
+    - name: Check service modularity
+      run: |
+        # Ensure services are properly modularized
+        if [ ! -d "custom_components/smart_lock_manager/services" ]; then
+          echo "❌ Services directory missing"
+          exit 1
+        fi
+        
+        required_service_files=(
+          "lock_services.py"
+          "slot_services.py"
+          "zwave_services.py"
+          "management_services.py"
+          "system_services.py"
+        )
+        
+        for file in "${required_service_files[@]}"; do
+          if [ ! -f "custom_components/smart_lock_manager/services/$file" ]; then
+            echo "❌ Missing service file: $file"
+            exit 1
+          fi
+        done
+        
+        echo "✅ Service modularity maintained"

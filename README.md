@@ -1,13 +1,46 @@
-# Smart Lock Manager
+# Smart Lock Manager for Home Assistant
 
-A revolutionary Home Assistant custom component for advanced Z-Wave lock management with zero sensor pollution, time-based access control, and professional UI.
+**Advanced Z-Wave lock management with revolutionary object-oriented architecture, time-based access control, and zero sensor pollution.**
 
-## 🌟 Key Features
+[![License: MIT](https://img.shields.io/badge/License-MIT%20with%20Commercial%20Restriction-blue.svg)](LICENSE)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Custom%20Component-41BDF5.svg)](https://www.home-assistant.io/)
 
-- **🚫 Zero Sensor Pollution**: Single summary sensor per lock vs 40+ sensors in traditional components
-- **🎯 Backend-Driven UI**: All display logic calculated in backend, frontend purely presentational  
-- **⏰ Advanced Scheduling**: Time-based access control with hour/day restrictions and date ranges
-- **📊 Usage Tracking**: Smart counters with automatic disabling after max uses
+---
+
+## 🚀 **Support This Project**
+
+If Smart Lock Manager saves you time and makes your smart home better, consider supporting its development:
+
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?logo=paypal)](https://paypal.me/jsugamele)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/jsugamele)
+
+*Your support helps maintain and improve Smart Lock Manager for the entire community!*
+
+---
+
+## ✨ **Revolutionary Features**
+
+### 🔧 **Zero Sensor Pollution Architecture**
+- **ONE** summary sensor per lock (vs 40+ in traditional components)
+- All data stored in Python objects, not cluttering your entity list
+- Rich attributes accessible for advanced automations
+
+### 🏗️ **Advanced Object-Oriented Design**
+- `SmartLockManagerLock` and `CodeSlot` dataclasses
+- Backend-driven UI with zero frontend logic
+- Professional custom panel with Material Design
+
+### ⏰ **Time-Based Access Control**
+- **Allowed Hours:** Restrict access to specific times (e.g., 9 AM - 5 PM)
+- **Allowed Days:** Weekend/weekday restrictions (Monday=0, Sunday=6)
+- **Date Ranges:** Start and end dates for temporary access
+- **Usage Limits:** Auto-disable after X uses
+- **Smart Validation:** Real-time checking with automatic disabling
+
+### 🏢 **Lock Hierarchy Management**
+- **Parent-Child Relationships:** Main locks control multiple child locks
+- **Automatic Synchronization:** Changes to parent sync to all children
+- **Centralized Management:** Manage entire lock groups from one interface
 - **🔗 Lock Hierarchy**: Parent-child lock relationships with automatic synchronization
 - **🎨 Professional Custom Panel**: Material design interface with real-time updates
 - **🏗️ Object-Oriented Architecture**: Clean dataclasses with rich methods and validation

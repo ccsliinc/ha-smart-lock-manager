@@ -153,15 +153,35 @@ class ManagementServices:
         entity_id = service_call.data[ATTR_ENTITY_ID]
         friendly_name = service_call.data.get("friendly_name")
         slot_count = service_call.data.get("slot_count")
+        is_main_lock = service_call.data.get("is_main_lock")
+        parent_lock_id = service_call.data.get("parent_lock_id")
+
+        _LOGGER.info("=== BACKEND DEBUGGING: update_lock_settings called ===")
+        _LOGGER.info(f"🔧 Backend Debug - Service call data: {service_call.data}")
+        _LOGGER.info(f"🔧 Backend Debug - Entity ID: {entity_id}")
+        _LOGGER.info(f"🔧 Backend Debug - Friendly name: '{friendly_name}'")
+        _LOGGER.info(f"🔧 Backend Debug - Slot count: {slot_count}")
+        _LOGGER.info(f"🔧 Backend Debug - Is main lock: {is_main_lock}")
+        _LOGGER.info(f"🔧 Backend Debug - Parent lock ID: {parent_lock_id}")
 
         for entry_id, entry_data in hass.data[DOMAIN].items():
             if isinstance(entry_data, dict):  # Skip global_settings
                 lock = entry_data.get(PRIMARY_LOCK)
+                _LOGGER.info(f"🔍 Backend Debug - Checking entry {entry_id}: lock={lock}, entity_id={lock.lock_entity_id if lock else 'None'}")
+                
                 if lock and lock.lock_entity_id == entity_id:
+                    _LOGGER.info(f"🎯 Backend Debug - Found matching lock: {lock.lock_name}")
+                    _LOGGER.info(f"🔍 Backend Debug - Current lock state:")
+                    _LOGGER.info(f"  - Current friendly name: '{lock.settings.friendly_name}'")
+                    _LOGGER.info(f"  - Current slot count: {lock.slots}")
+                    _LOGGER.info(f"  - Current is_main_lock: {lock.is_main_lock}")
+                    _LOGGER.info(f"  - Current parent_lock_id: {lock.parent_lock_id}")
+                    
                     updated = False
 
                     # Update friendly name if provided
                     if friendly_name and friendly_name != lock.settings.friendly_name:
+                        _LOGGER.info(f"✅ Backend Debug - Friendly name will be updated from '{lock.settings.friendly_name}' to '{friendly_name}'")
                         lock.settings.friendly_name = friendly_name
                         updated = True
                         _LOGGER.info(
@@ -169,6 +189,12 @@ class ManagementServices:
                             lock.lock_name,
                             friendly_name,
                         )
+                    else:
+                        _LOGGER.info(f"❌ Backend Debug - Friendly name NOT updated:")
+                        _LOGGER.info(f"  - Provided friendly_name: '{friendly_name}' (truthy: {bool(friendly_name)})")
+                        _LOGGER.info(f"  - Current friendly_name: '{lock.settings.friendly_name}'")
+                        _LOGGER.info(f"  - Are they equal? {friendly_name == lock.settings.friendly_name}")
+                        _LOGGER.info(f"  - Condition result: friendly_name={bool(friendly_name)}, different={friendly_name != lock.settings.friendly_name}")
 
                     # Update slot count if provided
                     if slot_count and slot_count != lock.slots:
@@ -192,11 +218,47 @@ class ManagementServices:
                                 "Invalid slot count %s (must be 1-50)", slot_count
                             )
 
+                    # Update parent/child lock settings if provided
+                    if is_main_lock is not None and is_main_lock != lock.is_main_lock:
+                        lock.is_main_lock = is_main_lock
+                        updated = True
+                        _LOGGER.info(
+                            "Updated lock %s type to: %s",
+                            lock.lock_name,
+                            "Parent Lock" if is_main_lock else "Child Lock",
+                        )
+
+                        # If converting to child lock, clear child lock IDs
+                        if not is_main_lock:
+                            lock.child_lock_ids = []
+
+                    # Update parent lock ID if provided (for child locks)
+                    if parent_lock_id is not None and parent_lock_id != lock.parent_lock_id:
+                        old_parent = lock.parent_lock_id
+                        lock.parent_lock_id = parent_lock_id if parent_lock_id else None
+                        updated = True
+                        
+                        # Update child lock lists on old and new parent locks
+                        await ManagementServices._update_parent_child_relationships(
+                            hass, entity_id, old_parent, parent_lock_id
+                        )
+                        
+                        _LOGGER.info(
+                            "Updated parent lock for %s from %s to %s",
+                            lock.lock_name,
+                            old_parent or "None",
+                            parent_lock_id or "None",
+                        )
+
                     # Save changes if any updates were made
                     if updated:
+                        _LOGGER.info(f"💾 Backend Debug - Saving changes to storage")
                         store = entry_data.get("store")
                         if store:
-                            await store.async_save(lock.to_dict())
+                            lock_dict = lock.to_dict()
+                            _LOGGER.info(f"💾 Backend Debug - Saving lock data: friendly_name='{lock_dict.get('settings', {}).get('friendly_name')}'")
+                            await store.async_save(lock_dict)
+                            _LOGGER.info(f"💾 Backend Debug - Storage save completed")
 
                         # Fire event to notify about settings change
                         hass.bus.async_fire(
@@ -208,6 +270,46 @@ class ManagementServices:
                                 "slot_count": lock.slots,
                             },
                         )
+                        _LOGGER.info(f"🔥 Backend Debug - Fired settings_updated event for {lock.lock_name}")
+                        
+                        # Trigger coordinator refresh to update sensor attributes
+                        coordinator = entry_data.get("coordinator")
+                        if coordinator:
+                            await coordinator.async_request_refresh()
+                            _LOGGER.debug("Triggered coordinator refresh after settings update")
+                            
+                        # Update all sensor entities that reference this lock by triggering coordinator refresh
+                        # This ensures all sensors using this lock get the updated object reference
+                        
+                        # Force immediate coordinator update (this will refresh all sensors using this lock)
+                        coordinator = entry_data.get("coordinator")
+                        if coordinator:
+                            # Force immediate refresh
+                            await coordinator.async_request_refresh()
+                            # Wait a moment for the refresh to complete, then force state update
+                            import asyncio
+                            await asyncio.sleep(0.1)
+                            
+                        # Force coordinator refresh which should update all sensors
+                        coordinator = entry_data.get("coordinator")
+                        if coordinator:
+                            # Force multiple refreshes to ensure state propagation
+                            await coordinator.async_request_refresh()
+                            await asyncio.sleep(0.2)
+                            await coordinator.async_refresh()
+                            _LOGGER.info(f"Forced coordinator refresh for friendly name update")
+                            
+                        # Fire event to notify frontend about the change
+                        hass.bus.async_fire(
+                            "smart_lock_manager_friendly_name_updated",
+                            {
+                                "entity_id": entity_id,
+                                "lock_name": lock.lock_name,
+                                "friendly_name": lock.settings.friendly_name,
+                            },
+                        )
+                        
+                        _LOGGER.info(f"Updated lock settings for {lock.lock_name}, friendly_name: {lock.settings.friendly_name}")
                     else:
                         _LOGGER.info(
                             "No changes made to lock %s settings", lock.lock_name
@@ -216,3 +318,112 @@ class ManagementServices:
                     return
 
         _LOGGER.error("No lock found for entity_id: %s", entity_id)
+
+    @staticmethod
+    async def _update_parent_child_relationships(
+        hass: HomeAssistant, child_entity_id: str, old_parent_id: Optional[str], new_parent_id: Optional[str]
+    ) -> None:
+        """Update parent-child lock relationships when parent changes."""
+        
+        # Remove child from old parent's child list
+        if old_parent_id:
+            for entry_id, entry_data in hass.data[DOMAIN].items():
+                if isinstance(entry_data, dict):
+                    old_parent_lock = entry_data.get(PRIMARY_LOCK)
+                    if old_parent_lock and old_parent_lock.lock_entity_id == old_parent_id:
+                        if child_entity_id in old_parent_lock.child_lock_ids:
+                            old_parent_lock.child_lock_ids.remove(child_entity_id)
+                            
+                        # Save old parent lock
+                        store = entry_data.get("store")
+                        if store:
+                            await store.async_save(old_parent_lock.to_dict())
+                        break
+
+        # Add child to new parent's child list
+        if new_parent_id:
+            for entry_id, entry_data in hass.data[DOMAIN].items():
+                if isinstance(entry_data, dict):
+                    new_parent_lock = entry_data.get(PRIMARY_LOCK)
+                    if new_parent_lock and new_parent_lock.lock_entity_id == new_parent_id:
+                        if child_entity_id not in new_parent_lock.child_lock_ids:
+                            new_parent_lock.child_lock_ids.append(child_entity_id)
+                            
+                        # Save new parent lock
+                        store = entry_data.get("store")
+                        if store:
+                            await store.async_save(new_parent_lock.to_dict())
+                        break
+
+    @staticmethod
+    async def remove_child_lock(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Remove a child lock and convert it back to a main lock."""
+        child_entity_id = service_call.data[ATTR_ENTITY_ID]
+        
+        _LOGGER.info(f"Removing child lock: {child_entity_id}")
+        
+        # Find the child lock
+        child_lock = None
+        child_entry_data = None
+        for entry_id, entry_data in hass.data[DOMAIN].items():
+            if isinstance(entry_data, dict):
+                lock = entry_data.get(PRIMARY_LOCK)
+                if lock and lock.lock_entity_id == child_entity_id:
+                    child_lock = lock
+                    child_entry_data = entry_data
+                    break
+        
+        if not child_lock:
+            _LOGGER.error(f"Child lock not found: {child_entity_id}")
+            return
+            
+        # Get the current parent
+        old_parent_id = child_lock.parent_lock_id
+        
+        if not old_parent_id:
+            _LOGGER.warning(f"Lock {child_entity_id} is not a child lock")
+            return
+        
+        # Convert child back to main lock
+        child_lock.is_main_lock = True
+        child_lock.parent_lock_id = None
+        child_lock.child_lock_ids = []
+        
+        # Remove child from parent's child list
+        if old_parent_id:
+            for entry_id, entry_data in hass.data[DOMAIN].items():
+                if isinstance(entry_data, dict):
+                    parent_lock = entry_data.get(PRIMARY_LOCK)
+                    if parent_lock and parent_lock.lock_entity_id == old_parent_id:
+                        if child_entity_id in parent_lock.child_lock_ids:
+                            parent_lock.child_lock_ids.remove(child_entity_id)
+                            _LOGGER.info(f"Removed {child_entity_id} from parent {old_parent_id} child list")
+                        
+                        # Save parent lock
+                        parent_store = entry_data.get("store")
+                        if parent_store:
+                            await parent_store.async_save(parent_lock.to_dict())
+                        break
+        
+        # Save the now-independent child lock
+        child_store = child_entry_data.get("store")
+        if child_store:
+            await child_store.async_save(child_lock.to_dict())
+        
+        # Fire event to notify about the change
+        hass.bus.async_fire(
+            "smart_lock_manager_child_removed",
+            {
+                "entity_id": child_entity_id,
+                "former_parent": old_parent_id,
+                "lock_name": child_lock.lock_name,
+            },
+        )
+        
+        # Trigger coordinator refresh for both locks
+        if child_entry_data:
+            coordinator = child_entry_data.get("coordinator")
+            if coordinator:
+                await coordinator.async_request_refresh()
+        
+        _LOGGER.info(f"Successfully removed child lock {child_entity_id} from parent {old_parent_id}")

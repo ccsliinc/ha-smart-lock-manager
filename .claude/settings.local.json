@@ -34,7 +34,17 @@
       "Bash(./scripts/start_ha_clean.sh:*)",
       "Bash(http://localhost:8123/api/services/smart_lock_manager/clear_code)",
       "Bash(tree:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(black:*)",
+      "Bash(python:*)",
+      "Bash(./venv/bin/python -m pytest tests/test_services_zwave.py::TestZWaveServices::test_pin_validation_edge_cases -v)",
+      "Bash(./venv/bin/python -m pytest tests/test_services_zwave.py -v)",
+      "Bash(lsof:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "Bash(./scripts/start_ha.sh:*)",
+      "Bash(grep:*)",
+      "Bash(./venv/bin/python -m homeassistant:*)"
     ],
     "deny": [],
     "ask": [],

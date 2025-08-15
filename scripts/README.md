@@ -6,8 +6,8 @@
 # Test everything works
 ./scripts/test_component.sh
 
-# Start Home Assistant with clean logging
-./scripts/start_ha_clean.sh
+# Start Home Assistant for development
+./scripts/start_ha.sh
 ```
 
 ## 📋 Available Scripts
@@ -26,8 +26,8 @@
 - Validates manifest.json structure
 - Catches basic issues before HA startup
 
-### `start_ha_clean.sh` ⭐ **Recommended for development**
-**Start Home Assistant with optimized logging**
+### `start_ha.sh` ⭐ **Recommended for development**
+**Start Home Assistant with optimized logging and automatic cleanup**
 - Uses Home Assistant's native logger configuration
 - Shows Smart Lock Manager logs at DEBUG level
 - Quiets noisy components (HTTP, websockets, etc.)
@@ -38,7 +38,7 @@
 
 1. **First time setup**: `./scripts/setup_dev.sh`
 2. **Before each session**: `./scripts/test_component.sh` 
-3. **Start development**: `./scripts/start_ha_clean.sh`
+3. **Start development**: `./scripts/start_ha.sh`
 4. **Make changes** to component code
 5. **Restart HA** to see changes (Ctrl+C, then rerun script)
 
