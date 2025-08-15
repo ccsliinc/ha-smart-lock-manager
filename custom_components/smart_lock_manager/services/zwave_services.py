@@ -47,7 +47,9 @@ class ZWaveServices:
                 return
 
             # Get device info and Z-Wave node
-            device_registry = await hass.helpers.device_registry.async_get_registry()
+            from homeassistant.helpers import device_registry as dr
+
+            device_registry = dr.async_get(hass)
             device = device_registry.async_get(device_id)
 
             if not device:
@@ -167,6 +169,14 @@ class ZWaveServices:
 
         try:
             if action == "enable" and slot.is_active and slot.pin_code:
+                # Validate PIN code before sending to Z-Wave
+                if not slot.pin_code.isdigit():
+                    raise ValueError(f"PIN code must be numeric only: {slot.pin_code}")
+                if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
+                    raise ValueError(
+                        f"PIN code must be 4-8 digits: {slot.pin_code} (length: {len(slot.pin_code)})"
+                    )
+
                 # Add/update code in Z-Wave lock
                 await hass.services.async_call(
                     "zwave_js",
@@ -197,6 +207,57 @@ class ZWaveServices:
             elif action == "auto":
                 # Automatically determine action based on slot state
                 if slot.is_active and slot.pin_code:
+                    # Validate PIN code before sending to Z-Wave
+                    if not slot.pin_code.isdigit():
+                        raise ValueError(
+                            f"PIN code must be numeric only: {slot.pin_code}"
+                        )
+                    if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
+                        raise ValueError(
+                            f"PIN code must be 4-8 digits: {slot.pin_code} (length: {len(slot.pin_code)})"
+                        )
+
+                    # Get current Z-Wave code to check if we need to clear first
+                    from homeassistant.components.zwave_js.helpers import (
+                        async_get_node_from_entity_id,
+                    )
+                    from zwave_js_server.util.lock import get_usercode_from_node
+
+                    try:
+                        node = await async_get_node_from_entity_id(hass, entity_id)
+                        if node:
+                            current_code_info = get_usercode_from_node(
+                                node, slot_number
+                            )
+                            current_code = (
+                                current_code_info.get("code")
+                                if current_code_info
+                                else None
+                            )
+
+                            # If there's a different code in the slot, clear it first
+                            if current_code and str(current_code) != slot.pin_code:
+                                _LOGGER.info(
+                                    "Clearing existing code before setting new one in slot %s (old: %s, new: %s)",
+                                    slot_number,
+                                    current_code,
+                                    slot.pin_code,
+                                )
+                                await hass.services.async_call(
+                                    "zwave_js",
+                                    "clear_lock_usercode",
+                                    {"entity_id": entity_id, "code_slot": slot_number},
+                                    blocking=True,
+                                )
+                                # Small delay to let the clear complete
+                                import asyncio
+
+                                await asyncio.sleep(1)
+                    except Exception as e:
+                        _LOGGER.debug(
+                            "Could not check existing code, proceeding with set: %s", e
+                        )
+
                     # Should be in lock - add it
                     await hass.services.async_call(
                         "zwave_js",
