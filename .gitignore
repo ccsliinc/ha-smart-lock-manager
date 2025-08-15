@@ -12,12 +12,27 @@ venv/
 .idea/
 *.iml
 
-# Home Assistant
-config/.storage/
-config/home-assistant.log*
-config/deps/
-config/tts/
-config/known_devices.yaml
+# Claude settings
+.claude/
+
+# Home Assistant Development Environment
+config/
+*.db
+*.db-shm
+*.db-wal
+.cloud/
+.storage/
+
+# Home Assistant specific files
+home-assistant.log*
+*.log
+deps/
+tts/
+known_devices.yaml
+secrets.yaml
+ip_bans.yaml
+.HA_VERSION
+.uuid
 
 # OS files
 .DS_Store

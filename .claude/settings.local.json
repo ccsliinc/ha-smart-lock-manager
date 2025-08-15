@@ -17,9 +17,27 @@
       "Bash(curl:*)",
       "Bash(mv:*)",
       "Bash(../../venv/bin/python -m py_compile:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(cp:*)",
+      "Bash(find:*)",
+      "Bash(./venv/bin/python -m pytest tests/test_models_lock.py -v)",
+      "mcp__browser-mcp__browser_navigate",
+      "mcp__browser-mcp__browser_click",
+      "mcp__browser-mcp__browser_get_console_logs",
+      "mcp__browser-mcp__browser_type",
+      "mcp__browser-mcp__browser_press_key",
+      "mcp__browser-mcp__browser_wait",
+      "mcp__browser-mcp__browser_snapshot",
+      "Bash(pkill:*)",
+      "Bash(true)",
+      "Bash(./scripts/restart_ha.sh:*)",
+      "Bash(./scripts/start_ha_clean.sh:*)",
+      "Bash(http://localhost:8123/api/services/smart_lock_manager/clear_code)",
+      "Bash(tree:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "defaultMode": "acceptEdits"
   }
 }

@@ -20,7 +20,10 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     _LOGGER.debug("Registering Smart Lock Manager panel")
 
     # Check if panel is already registered (for multiple lock instances)
-    if hasattr(hass.data, 'frontend_panels') and 'smart-lock-manager' in hass.data.frontend_panels:
+    if (
+        hasattr(hass.data, "frontend_panels")
+        and "smart-lock-manager" in hass.data.frontend_panels
+    ):
         _LOGGER.debug("Smart Lock Manager panel already registered, skipping")
         return
 
@@ -44,10 +47,12 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         )
 
         _LOGGER.info("Smart Lock Manager panel registered successfully")
-        
+
     except ValueError as e:
         if "Overwriting panel" in str(e):
-            _LOGGER.debug("Panel already exists, this is expected with multiple lock instances")
+            _LOGGER.debug(
+                "Panel already exists, this is expected with multiple lock instances"
+            )
         else:
             _LOGGER.error("Error registering panel: %s", e)
             raise
