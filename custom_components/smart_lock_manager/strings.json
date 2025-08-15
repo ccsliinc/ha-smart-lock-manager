@@ -3,25 +3,19 @@
     "error": {
       "invalid_path": "Path must be a relative path, not absolute",
       "same_name": "Name already in use",
-      "invalid_child_locks_file": "Problem with child locks file, refer to logs for more information"
+      "invalid_child_locks_file": "Problem with child locks file, refer to logs for more information",
+      "name_required": "Lock name is required",
+      "entity_required": "Please select a lock entity"
     },
     "step": {
       "user": {
         "data": {
-          "alarm_level_or_user_code_entity_id": "Alarm Level/User Code Sensor (from lock)",
-          "alarm_type_or_access_control_entity_id": "Alarm Type/Access Control Sensor (from lock)",
+          "lock_name": "Lock Name",
           "lock_entity_id": "Select your lock",
-          "slots": "Code Slots",
-          "start_from": "Start from code slot #",
-          "sensorname": "Door Sensor",
-          "lockname": "Lock Name (ie: frontdoor)",
-          "packages_path": "Path to packages directory",
-          "using_ozw": "Using OZW?",
-          "child_locks_file": "Path to child locks file",
-          "hide_pins": "Hide PINs in UI?"
+          "slots": "Number of code slots"
         },
-        "description": "Select the lock to setup and code slots to create.\n\nPaths are relative to your Home Assistant config folder (e.g. `/config/packages/keymaster` should be entered as `packages/keymaster`)",
-        "title": "KeyMaster"
+        "description": "Configure your Smart Lock Manager instance.\n\nSelect the lock entity you want to manage and specify how many code slots you need.",
+        "title": "Smart Lock Manager"
       },
       "config_2": {
         "data": {
@@ -53,8 +47,8 @@
           "child_locks_file": "Path to child locks file",
           "hide_pins": "Hide PINs in UI?"
         },
-        "description": "Select the lock to setup and code slots to create.\n\nPaths are relative to your Home Assistant config folder (e.g. `/config/packages/keymaster` should be entered as `packages/keymaster`)",
-        "title": "KeyMaster"
+        "description": "Select the lock to setup and code slots to create.\n\nAdvanced Smart Lock Manager with object-oriented architecture for Z-Wave lock management, time-based access control, and lock hierarchy.",
+        "title": "Smart Lock Manager"
       },
       "options_2": {
         "data": {

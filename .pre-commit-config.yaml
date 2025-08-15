@@ -1,4 +1,15 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: check-added-large-files
+
   - repo: https://github.com/psf/black
     rev: 25.1.0
     hooks:
@@ -32,3 +43,63 @@ repos:
         args:
           - --ignore-missing-imports
         files: ^custom_components/.+\.py$
+
+  - repo: local
+    hooks:
+      - id: check-todo-comments
+        name: Check for TODO comments in production code
+        entry: bash
+        language: system
+        args:
+          - -c
+          - |
+            if grep -r "TODO" custom_components/smart_lock_manager/ --include="*.py" --exclude-dir=tests --exclude-dir=scripts; then
+              echo "❌ Found TODO comments in production code. Please create GitHub issues instead."
+              exit 1
+            fi
+        pass_filenames: false
+
+      - id: check-keymaster-references
+        name: Check for keymaster references
+        entry: bash
+        language: system
+        args:
+          - -c
+          - |
+            if grep -ri "keymaster\|key.master\|key_master" custom_components/smart_lock_manager/ --exclude-dir=.git; then
+              echo "❌ Found keymaster references that should be removed"
+              exit 1
+            fi
+        pass_filenames: false
+
+      - id: check-pin-logging
+        name: Check PIN code logging security
+        entry: bash
+        language: system
+        args:
+          - -c
+          - |
+            if grep -r "pin.*:.*{" custom_components/smart_lock_manager/ --include="*.py" | grep -v "\*\*\*"; then
+              echo "❌ Found potential PIN code logging without masking"
+              exit 1
+            fi
+        pass_filenames: false
+
+      - id: validate-manifest
+        name: Validate manifest.json
+        entry: python3
+        language: system
+        args:
+          - -c
+          - |
+            import json
+            with open('custom_components/smart_lock_manager/manifest.json') as f:
+                manifest = json.load(f)
+            required_keys = ['domain', 'name', 'version', 'codeowners', 'documentation', 'issue_tracker']
+            missing = [k for k in required_keys if k not in manifest]
+            if missing:
+                print(f'❌ Missing required keys in manifest: {missing}')
+                exit(1)
+            print('✅ Manifest validation passed')
+        pass_filenames: false
+        files: custom_components/smart_lock_manager/manifest.json

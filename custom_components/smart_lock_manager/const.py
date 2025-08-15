@@ -5,7 +5,7 @@ from homeassistant.components.lock import LockState
 DOMAIN = "smart_lock_manager"
 VERSION = "1.0.0"
 ISSUE_URL = "https://github.com/jsugamele/smart_lock_manager"
-PLATFORMS = ["binary_sensor", "sensor"]
+PLATFORMS = ["sensor"]
 ZWAVE_NETWORK = "zwave_network"
 MANAGER = "manager"
 
@@ -82,6 +82,7 @@ SERVICE_GET_USAGE_STATS = "get_usage_stats"
 SERVICE_READ_ZWAVE_CODES = "read_zwave_codes"
 SERVICE_REFRESH_CODES = "refresh_codes"
 SERVICE_RESET_SLOT_USAGE = "reset_slot_usage"
+SERVICE_REMOVE_CHILD_LOCK = "remove_child_lock"
 SERVICE_RESIZE_SLOTS = "resize_slots"
 SERVICE_SET_CODE = "set_code"
 SERVICE_SET_CODE_ADVANCED = "set_code_advanced"
