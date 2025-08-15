@@ -20,8 +20,8 @@
           "child_locks_file": "Path to child locks file",
           "hide_pins": "Hide PINs in UI?"
         },
-        "description": "Select the lock to setup and code slots to create.\n\nPaths are relative to your Home Assistant config folder (e.g. `/config/packages/keymaster` should be entered as `packages/keymaster`)",
-        "title": "KeyMaster"
+        "description": "Select the lock to setup and code slots to create.\n\nPaths are relative to your Home Assistant config folder (e.g. `/config/packages/smart_lock_manager` should be entered as `packages/smart_lock_manager`)",
+        "title": "Smart Lock Manager"
       },
       "config_2": {
         "data": {
@@ -53,8 +53,8 @@
           "child_locks_file": "Path to child locks file",
           "hide_pins": "Hide PINs in UI?"
         },
-        "description": "Select the lock to setup and code slots to create.\n\nPaths are relative to your Home Assistant config folder (e.g. `/config/packages/keymaster` should be entered as `packages/keymaster`)",
-        "title": "KeyMaster"
+        "description": "Select the lock to setup and code slots to create.\n\nPaths are relative to your Home Assistant config folder (e.g. `/config/packages/smart_lock_manager` should be entered as `packages/smart_lock_manager`)",
+        "title": "Smart Lock Manager"
       },
       "options_2": {
         "data": {
