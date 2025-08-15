@@ -28,10 +28,24 @@ ATTR_ACTION_TEXT = "action_text"
 ATTR_CODE_SLOT_NAME = "code_slot_name"
 
 # Attributes
+ATTR_ALLOWED_DAYS = "allowed_days"
+ATTR_ALLOWED_HOURS = "allowed_hours"
 ATTR_CODE_SLOT = "code_slot"
+ATTR_END_DATE = "end_date"
+ATTR_MAX_USES = "max_uses"
 ATTR_NAME = "lockname"
 ATTR_NODE_ID = "node_id"
+ATTR_NOTIFY_ON_USE = "notify_on_use"
+ATTR_SLOT_COUNT = "slot_count"
+ATTR_START_DATE = "start_date"
 ATTR_USER_CODE = "usercode"
+ATTR_ENTITY_ID = "entity_id"
+
+# Global settings attributes
+ATTR_COORDINATOR_INTERVAL = "coordinator_interval"
+ATTR_AUTO_DISABLE_EXPIRED = "auto_disable_expired"
+ATTR_SYNC_ON_LOCK_EVENTS = "sync_on_lock_events"
+ATTR_DEBUG_LOGGING = "debug_logging"
 
 # Configuration Properties
 CONF_ALARM_LEVEL = "alarm_level"
@@ -61,9 +75,19 @@ DEFAULT_START = 1
 
 # Services
 SERVICE_CLEAR_CODE = "clear_code"
-SERVICE_REFRESH_CODES = "refresh_codes"
-SERVICE_SET_CODE = "set_code"
+SERVICE_DISABLE_SLOT = "disable_slot"
+SERVICE_ENABLE_SLOT = "enable_slot"
 SERVICE_GENERATE_PACKAGE = "generate_package"
+SERVICE_GET_USAGE_STATS = "get_usage_stats"
+SERVICE_READ_ZWAVE_CODES = "read_zwave_codes"
+SERVICE_REFRESH_CODES = "refresh_codes"
+SERVICE_RESET_SLOT_USAGE = "reset_slot_usage"
+SERVICE_RESIZE_SLOTS = "resize_slots"
+SERVICE_SET_CODE = "set_code"
+SERVICE_SET_CODE_ADVANCED = "set_code_advanced"
+SERVICE_SYNC_CHILD_LOCKS = "sync_child_locks"
+SERVICE_UPDATE_GLOBAL_SETTINGS = "update_global_settings"
+SERVICE_UPDATE_LOCK_SETTINGS = "update_lock_settings"
 
 # Misc
 LOCK_STATE = [LockState.LOCKED, LockState.UNLOCKED]

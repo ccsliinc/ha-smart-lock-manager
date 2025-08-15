@@ -1,0 +1,3 @@
+# This would be a PNG file, but since we can't create binary files, 
+# the 404s are expected and harmless for custom integrations.
+# The mdi:lock-smart icon in the manifest is used instead.
