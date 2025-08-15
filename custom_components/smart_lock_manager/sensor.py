@@ -81,7 +81,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                         f"Found updated lock for {self._lock.lock_entity_id}: friendly_name={lock.settings.friendly_name}"
                     )
                     break
-        
+
         if found_lock:
             return found_lock
         else:
@@ -95,12 +95,15 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         """Return the attributes of the sensor with ALL object data for automation access."""
         # Always get the latest lock object
         lock_to_use = self._get_current_lock()
-        
+
         # Debug log what friendly name we're about to return
-        _LOGGER.info(f"🔍 Sensor Debug - extra_state_attributes for {lock_to_use.lock_entity_id}:")
-        _LOGGER.info(f"  - Lock object friendly_name: '{lock_to_use.settings.friendly_name}'")
+        _LOGGER.info(
+            f"🔍 Sensor Debug - extra_state_attributes for {lock_to_use.lock_entity_id}:"
+        )
+        _LOGGER.info(
+            f"  - Lock object friendly_name: '{lock_to_use.settings.friendly_name}'"
+        )
         _LOGGER.info(f"  - Lock object lock_name: '{lock_to_use.lock_name}'")
-        
 
         # Get all active slots with their details
         active_slots = lock_to_use.get_all_active_slots()
@@ -158,7 +161,9 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
 
         # Debug log the final friendly_name that will be returned
         final_friendly_name = lock_to_use.settings.friendly_name
-        _LOGGER.info(f"📤 Sensor Debug - Returning friendly_name: '{final_friendly_name}' for {lock_to_use.lock_entity_id}")
+        _LOGGER.info(
+            f"📤 Sensor Debug - Returning friendly_name: '{final_friendly_name}' for {lock_to_use.lock_entity_id}"
+        )
 
         return {
             # Basic lock info
@@ -166,7 +171,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "lock_entity_id": lock_to_use.lock_entity_id,
             "total_slots": lock_to_use.slots,
             "start_from": lock_to_use.start_from,
-            # Lock settings and hierarchy  
+            # Lock settings and hierarchy
             "custom_friendly_name": final_friendly_name,
             "auto_lock_time": (
                 lock_to_use.settings.auto_lock_time.isoformat()
@@ -187,7 +192,9 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "is_connected": lock_to_use.is_connected,
             "connection_status": lock_to_use.connection_status,
             "last_updated": (
-                lock_to_use.last_updated.isoformat() if lock_to_use.last_updated else None
+                lock_to_use.last_updated.isoformat()
+                if lock_to_use.last_updated
+                else None
             ),
             # Slot information (for easy template access)
             "active_slots": active_slot_numbers,

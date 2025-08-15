@@ -1,10 +1,22 @@
 #!/bin/bash
-# Start Home Assistant with clean output (uses logger config for filtering)
+# Start Home Assistant with development setup and clean logging
 
 set -e
 
-echo "🏠 Starting Home Assistant (Clean Logging)"
+echo "🏠 Starting Home Assistant Development"
 echo "========================================="
+
+# Kill any existing Home Assistant processes first
+echo "🧹 Cleaning up any existing Home Assistant processes..."
+pkill -f "homeassistant" 2>/dev/null && echo "  ✓ Stopped existing homeassistant process" || echo "  No homeassistant processes found"
+pkill -f "hass" 2>/dev/null && echo "  ✓ Stopped existing hass process" || echo "  No hass processes found"
+
+# Wait a moment for processes to fully terminate
+echo "  Waiting for processes to terminate..."
+sleep 2
+
+echo "✅ Cleanup complete"
+echo ""
 
 # Check virtual environment
 if [ ! -d "venv" ]; then

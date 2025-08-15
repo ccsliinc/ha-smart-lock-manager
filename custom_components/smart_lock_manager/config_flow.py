@@ -5,15 +5,15 @@ from typing import Any, Dict, Optional
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 
 from .const import DOMAIN
 
 
-class SmartLockManagerConfigFlow(config_entries.ConfigFlow):
+class SmartLockManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Smart Lock Manager."""
 
     VERSION = 1
-    DOMAIN = DOMAIN
 
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -24,15 +24,23 @@ class SmartLockManagerConfigFlow(config_entries.ConfigFlow):
         if user_input is not None:
             # Validate input
             lock_name = user_input.get("lock_name", "").strip()
+            lock_entity_id = user_input.get("lock_entity_id", "").strip()
+            
             if not lock_name:
                 errors["lock_name"] = "name_required"
+            elif not lock_entity_id:
+                errors["lock_entity_id"] = "entity_required"
             else:
+                # Check if this entity is already configured
+                await self.async_set_unique_id(lock_entity_id)
+                self._abort_if_unique_id_configured()
+                
                 # Create the config entry
                 return self.async_create_entry(
                     title=lock_name,
                     data={
                         "lock_name": lock_name,
-                        "lock_entity_id": user_input.get("lock_entity_id", ""),
+                        "lock_entity_id": lock_entity_id,
                         "slots": user_input.get("slots", 10),
                     },
                 )
@@ -41,7 +49,11 @@ class SmartLockManagerConfigFlow(config_entries.ConfigFlow):
         data_schema = vol.Schema(
             {
                 vol.Required("lock_name", default="Smart Lock"): str,
-                vol.Optional("lock_entity_id", default=""): str,
+                vol.Required("lock_entity_id"): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="lock",
+                    )
+                ),
                 vol.Optional("slots", default=10): vol.All(
                     int, vol.Range(min=1, max=50)
                 ),

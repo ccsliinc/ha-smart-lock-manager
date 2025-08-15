@@ -47,6 +47,7 @@ from .const import (
     SERVICE_GET_USAGE_STATS,
     SERVICE_READ_ZWAVE_CODES,
     SERVICE_REFRESH_CODES,
+    SERVICE_REMOVE_CHILD_LOCK,
     SERVICE_RESET_SLOT_USAGE,
     SERVICE_RESIZE_SLOTS,
     SERVICE_SET_CODE,
@@ -68,38 +69,18 @@ from .services.zwave_services import ZWaveServices
 async def _save_lock_data(
     hass: HomeAssistant, lock: SmartLockManagerLock, entry_id: str
 ) -> None:
-    """Save lock slot data to persistent storage."""
+    """Save complete lock data to persistent storage using lock's to_dict method."""
     try:
         store = hass.data[DOMAIN][entry_id]["store"]
-
-        # Convert slot data to serializable format
-        slot_data = {}
-        for slot_num, slot in lock.code_slots.items():
-            slot_data[str(slot_num)] = {
-                "slot_number": slot.slot_number,
-                "pin_code": slot.pin_code,
-                "user_name": slot.user_name,
-                "is_active": slot.is_active,
-                "start_date": slot.start_date.isoformat() if slot.start_date else None,
-                "end_date": slot.end_date.isoformat() if slot.end_date else None,
-                "allowed_hours": slot.allowed_hours,
-                "allowed_days": slot.allowed_days,
-                "max_uses": slot.max_uses,
-                "use_count": slot.use_count,
-                "notify_on_use": slot.notify_on_use,
-            }
-
-        data_to_save = {
-            "code_slots": slot_data,
-            "lock_name": lock.lock_name,
-            "lock_entity_id": lock.lock_entity_id,
-        }
-
+        
+        # Use the lock's to_dict method to ensure all data including settings is saved
+        data_to_save = lock.to_dict()
+        
         await store.async_save(data_to_save)
-        _LOGGER.debug("Saved slot data for %s", lock.lock_name)
+        _LOGGER.debug("Saved complete lock data for %s (including settings)", lock.lock_name)
 
     except Exception as e:
-        _LOGGER.error("Failed to save slot data for %s: %s", lock.lock_name, e)
+        _LOGGER.error("Failed to save lock data for %s: %s", lock.lock_name, e)
 
 
 # Service schemas
@@ -164,11 +145,15 @@ SYNC_CHILD_LOCKS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id
 
 GET_USAGE_STATS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
 
+REMOVE_CHILD_LOCK_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
+
 UPDATE_LOCK_SETTINGS_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_ENTITY_ID): cv.entity_id,
         vol.Optional("friendly_name"): str,
         vol.Optional("slot_count"): vol.All(int, vol.Range(min=1, max=50)),
+        vol.Optional("is_main_lock"): bool,
+        vol.Optional("parent_lock_id"): vol.Any(cv.entity_id, None, ""),
     }
 )
 
@@ -276,6 +261,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 notify_on_use=slot_data.get("notify_on_use", False),
             )
             lock.code_slots[slot_num] = slot
+
+    # Restore lock settings from storage
+    if stored_data.get("settings"):
+        settings_data = stored_data["settings"]
+        if settings_data.get("friendly_name"):
+            lock.settings.friendly_name = settings_data["friendly_name"]
+            _LOGGER.info(
+                "Restored friendly name for %s: %s", 
+                lock_name, 
+                settings_data["friendly_name"]
+            )
+        if settings_data.get("timezone"):
+            lock.settings.timezone = settings_data["timezone"]
+        if settings_data.get("auto_lock_time"):
+            from datetime import time
+            lock.settings.auto_lock_time = time.fromisoformat(settings_data["auto_lock_time"])
+        if settings_data.get("auto_unlock_time"):
+            from datetime import time
+            lock.settings.auto_unlock_time = time.fromisoformat(settings_data["auto_unlock_time"])
+    else:
+        # Initialize with default friendly name from lock name if no settings exist
+        lock.settings.friendly_name = lock_name
+        _LOGGER.info("Initialized default friendly name for %s: %s", lock_name, lock_name)
+
+    # Restore parent/child lock relationships from storage
+    if stored_data.get("is_main_lock") is not None:
+        lock.is_main_lock = stored_data["is_main_lock"]
+    if stored_data.get("parent_lock_id"):
+        lock.parent_lock_id = stored_data["parent_lock_id"]
+    if stored_data.get("child_lock_ids"):
+        lock.child_lock_ids = stored_data["child_lock_ids"]
 
     # Create coordinator for data updates
     coordinator = SmartLockManagerDataUpdateCoordinator(hass, entry)
@@ -424,6 +440,9 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     async def update_lock_settings_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.update_lock_settings(hass, service_call)
 
+    async def remove_child_lock_wrapper(service_call: ServiceCall) -> None:
+        return await ManagementServices.remove_child_lock(hass, service_call)
+
     async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
 
@@ -502,6 +521,12 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         SERVICE_UPDATE_LOCK_SETTINGS,
         update_lock_settings_wrapper,
         schema=UPDATE_LOCK_SETTINGS_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REMOVE_CHILD_LOCK,
+        remove_child_lock_wrapper,
+        schema=REMOVE_CHILD_LOCK_SCHEMA,
     )
     _LOGGER.info("Registered management services")
 
@@ -721,6 +746,58 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                 "attempts": slot.sync_attempts,
                             },
                         )
+
+                # Step 6: Auto-sync codes to child locks if this is a main lock
+                if lock.is_main_lock and lock.child_lock_ids:
+                    _LOGGER.debug(
+                        "Main lock %s checking for child lock sync, children: %s",
+                        lock.lock_name,
+                        lock.child_lock_ids,
+                    )
+                    
+                    # Find child locks
+                    child_locks = []
+                    for entry_id, entry_data in self.hass.data[DOMAIN].items():
+                        if isinstance(entry_data, dict):  # Skip global_settings
+                            child_lock = entry_data.get(PRIMARY_LOCK)
+                            if child_lock and child_lock.lock_entity_id in lock.child_lock_ids:
+                                child_locks.append(child_lock)
+                    
+                    if child_locks:
+                        # Check if main lock codes have changed since last sync
+                        main_lock_changed = False
+                        for slot_num, slot in lock.code_slots.items():
+                            if slot.is_active and (
+                                slot_num in sync_actions.get("add", [])
+                                or slot_num in sync_actions.get("remove", [])
+                            ):
+                                main_lock_changed = True
+                                break
+                        
+                        # Sync to child locks if main lock changed
+                        if main_lock_changed:
+                            _LOGGER.info(
+                                "Main lock %s codes changed, syncing to %d child locks",
+                                lock.lock_name,
+                                len(child_locks),
+                            )
+                            
+                            try:
+                                await self.hass.services.async_call(
+                                    DOMAIN,
+                                    SERVICE_SYNC_CHILD_LOCKS,
+                                    {ATTR_ENTITY_ID: lock.lock_entity_id},
+                                )
+                                _LOGGER.debug(
+                                    "Auto-triggered child lock sync for %s",
+                                    lock.lock_name,
+                                )
+                            except Exception as e:
+                                _LOGGER.error(
+                                    "Failed to auto-sync child locks for %s: %s",
+                                    lock.lock_name,
+                                    e,
+                                )
 
             return {
                 "user_codes": {},
