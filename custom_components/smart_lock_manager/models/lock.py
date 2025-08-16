@@ -3,7 +3,6 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, time
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
 _LOGGER = logging.getLogger(__name__)
