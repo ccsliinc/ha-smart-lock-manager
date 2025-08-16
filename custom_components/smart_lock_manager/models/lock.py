@@ -230,6 +230,14 @@ class SmartLockManagerLock:
         _LOGGER.debug("Active slots for %s: %s", self.lock_name, active_slots)
         return len(active_slots)
 
+    def get_configured_codes_count(self) -> int:
+        """Get count of configured code slots (with PIN codes, regardless of active status)."""
+        configured_slots = [
+            slot_num for slot_num, slot in self.code_slots.items() if slot.pin_code
+        ]
+        _LOGGER.debug("Configured slots for %s: %s", self.lock_name, configured_slots)
+        return len(configured_slots)
+
     def get_slot_info(self, slot_number: int) -> Optional[CodeSlot]:
         """Get information about a specific slot."""
         return self.code_slots.get(slot_number)
@@ -367,8 +375,22 @@ class SmartLockManagerLock:
                         zwave_code or "None",
                     )
             elif not slot.is_active or not slot.pin_code:
-                # Slot should be empty
-                slot.is_synced = not bool(zwave_code)
+                # Slot should be empty - mark as synced only if lock is also empty
+                if not zwave_code:
+                    slot.is_synced = True
+                    slot.sync_attempts = 0
+                    slot.sync_error = None
+                    _LOGGER.debug(
+                        "✅ Slot %s cleared successfully: disabled and removed from lock",
+                        slot_number,
+                    )
+                else:
+                    slot.is_synced = False
+                    _LOGGER.debug(
+                        "🔄 Slot %s needs clearing: disabled but still in lock (%s)",
+                        slot_number,
+                        zwave_code,
+                    )
             else:
                 slot.is_synced = False
 
@@ -433,7 +455,7 @@ class SmartLockManagerLock:
         return False
 
     def disable_slot(self, slot_number: int) -> bool:
-        """Disable a slot (make it inactive)."""
+        """Disable a slot (make it inactive and mark as needing removal from lock)."""
         if slot_number not in self.code_slots:
             return False
 
@@ -447,13 +469,18 @@ class SmartLockManagerLock:
         )
 
         slot.is_active = False
+        # Mark as unsynced so it gets removed from the physical lock
+        slot.is_synced = False
+        # Reset sync attempts to trigger removal process
+        slot.sync_attempts = 0
 
         _LOGGER.info(
-            "🔄 DISABLE_SLOT MODEL DEBUG - AFTER disable slot %s: is_active=%s, pin_code=%s, user_name=%s",
+            "🔄 DISABLE_SLOT MODEL DEBUG - AFTER disable slot %s: is_active=%s, pin_code=%s, user_name=%s, is_synced=%s",
             slot_number,
             slot.is_active,
             bool(slot.pin_code),
             slot.user_name,
+            slot.is_synced,
         )
         return True
 
@@ -540,14 +567,24 @@ class SmartLockManagerLock:
             "child_lock_ids": self.child_lock_ids,
             "settings": {
                 "friendly_name": self.settings.friendly_name,
-                "auto_lock_time": self.settings.auto_lock_time.isoformat() if self.settings.auto_lock_time else None,
-                "auto_unlock_time": self.settings.auto_unlock_time.isoformat() if self.settings.auto_unlock_time else None,
+                "auto_lock_time": (
+                    self.settings.auto_lock_time.isoformat()
+                    if self.settings.auto_lock_time
+                    else None
+                ),
+                "auto_unlock_time": (
+                    self.settings.auto_unlock_time.isoformat()
+                    if self.settings.auto_unlock_time
+                    else None
+                ),
                 "timezone": self.settings.timezone,
             },
             "code_slots": slot_data,
             "is_connected": self.is_connected,
             "connection_status": self.connection_status,
-            "last_updated": self.last_updated.isoformat() if self.last_updated else None,
+            "last_updated": (
+                self.last_updated.isoformat() if self.last_updated else None
+            ),
         }
 
 
