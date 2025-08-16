@@ -188,6 +188,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "child_lock_ids": lock_to_use.child_lock_ids,
             # Status and counts (perfect for automations!)
             "active_codes_count": lock_to_use.get_active_codes_count(),
+            "configured_codes_count": lock_to_use.get_configured_codes_count(),
             "valid_codes_count": len(valid_slots_now),
             "is_connected": lock_to_use.is_connected,
             "connection_status": lock_to_use.connection_status,
@@ -221,7 +222,11 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         if not slot.pin_code:
             return "Click to configure"
 
-        # Priority 1: Disabled - manually disabled (highest priority)
+        # Priority 1: Disabling - disabled but still in physical lock
+        if not slot.is_active and slot.pin_code and not slot.is_synced:
+            return "Disabling"
+
+        # Priority 2: Disabled - manually disabled and cleared from lock
         if not slot.is_active:
             return "Disabled"
 
@@ -238,6 +243,9 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
 
         # Priority 4: Active and should be valid, check sync status
         if slot.is_active and is_valid_now:
+            # Check for amber/syncing state first
+            if slot.sync_attempts > 0:
+                return f"{slot.use_count} uses • Synchronizing"
             if not slot.is_synced:
                 return f"{slot.use_count} uses • Sync Error"
             return f"{slot.use_count} uses • Synchronized"
@@ -250,7 +258,11 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         if not slot.pin_code:
             return "#9e9e9e"  # Grey
 
-        # Priority 1: Grey - disabled (manually or auto-disabled)
+        # Priority 1: Amber - disabling (disabled but still clearing from lock)
+        if not slot.is_active and slot.pin_code and not slot.is_synced:
+            return "#ff9800"  # Amber
+
+        # Priority 2: Grey - disabled (manually or auto-disabled and cleared)
         if not slot.is_active or slot.should_disable():
             return "#9e9e9e"  # Grey
 
@@ -258,13 +270,13 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         if slot.is_active and not is_valid_now:
             return "#2196f3"  # Blue
 
-        # Priority 3: Red - sync error (should be in lock but isn't)
-        if slot.is_active and is_valid_now and not slot.is_synced:
-            return "#f44336"  # Red
-
-        # Priority 4: Amber - awaiting Z-Wave update (syncing)
+        # Priority 3: Amber - awaiting Z-Wave update (syncing)
         if slot.is_active and is_valid_now and slot.sync_attempts > 0:
             return "#ff9800"  # Amber
+
+        # Priority 4: Red - sync error (should be in lock but isn't)
+        if slot.is_active and is_valid_now and not slot.is_synced:
+            return "#f44336"  # Red
 
         # Priority 5: Green - active and properly synced
         if slot.is_active and is_valid_now and slot.is_synced:
@@ -274,6 +286,8 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
 
     def _get_slot_status_reason(self, slot: CodeSlot, is_valid_now: bool) -> str:
         """Provide detailed status explanation for debugging."""
+        if not slot.is_active and slot.pin_code and not slot.is_synced:
+            return "Clearing code from physical lock"
         if not slot.is_active or not slot.pin_code:
             return "No PIN code configured"
 
