@@ -928,9 +928,16 @@ class SmartLockManagerPanel extends HTMLElement {
           gap: 8px;
         }
 
+        .refresh-container {
+          display: flex;
+          align-items: center;
+          margin-right: 16px;
+        }
+
         .refresh-link {
           display: flex;
           align-items: center;
+          gap: 2px;
           color: var(--primary-text-color);
           cursor: pointer;
           font-size: 14px;
@@ -942,10 +949,37 @@ class SmartLockManagerPanel extends HTMLElement {
           opacity: 1;
         }
 
+        .lock-title-section {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          width: 100%;
+        }
+
+        .lock-status-column {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          min-width: 24px;
+          flex-shrink: 0;
+        }
+
+        .lock-header-column {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .lock-title-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
         .lock-connection-status {
           display: flex;
           align-items: center;
-          margin-right: 8px;
+          justify-content: center;
         }
 
         .header ha-icon {
@@ -1549,9 +1583,11 @@ class SmartLockManagerPanel extends HTMLElement {
           <ha-icon icon="mdi:lock-smart"></ha-icon>
           <h1>Smart Lock Manager</h1>
         </div>
-        <div class="refresh-link" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
-          <ha-icon icon="mdi:refresh" style="width: 14px; height: 14px; margin-right: 4px;"></ha-icon>
-          <span>Refresh All</span>
+        <div class="refresh-container">
+          <div class="refresh-link" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
+            <ha-icon icon="mdi:refresh" style="margin-right: 3px;"></ha-icon>
+            <span>Refresh All</span>
+          </div>
         </div>
       </div>
 
@@ -1592,17 +1628,21 @@ class SmartLockManagerPanel extends HTMLElement {
               <div class="lock-card">
                 <div class="lock-header">
                   <div class="lock-title-section">
-                    <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="lock-status-column">
                       <div class="lock-connection-status" title="${lockEntityId in this._hass.states ? 'Connected' : 'Disconnected'}">
-                        <ha-icon icon="mdi:${lockEntityId in this._hass.states ? 'circle' : 'circle-outline'}" style="width: 8px; height: 8px; color: ${lockEntityId in this._hass.states ? '#4caf50' : '#f44336'};"></ha-icon>
-                      </div>
-                      <h3 class="lock-title">${attributes.friendly_name || attributes.lock_name || 'Smart Lock'}</h3>
-                      <div class="saving-spinner" id="saving-spinner-${lockEntityId.replace(/\./g, '_')}" style="display: none;">
-                        <div class="spinner"></div>
-                        <span>Saving...</span>
+                        <ha-icon icon="mdi:${lockEntityId in this._hass.states ? 'link' : 'link-off'}" style="width: 16px; height: 16px; color: ${lockEntityId in this._hass.states ? '#4caf50' : '#f44336'};"></ha-icon>
                       </div>
                     </div>
-                    <div class="lock-entity-name" style="font-size: 11px; color: var(--secondary-text-color); font-weight: 300; margin-top: 2px; opacity: 0.7;">Entity: ${lockEntityId}</div>
+                    <div class="lock-header-column">
+                      <div class="lock-title-row">
+                        <h3 class="lock-title">${attributes.friendly_name || attributes.lock_name || 'Smart Lock'}</h3>
+                        <div class="saving-spinner" id="saving-spinner-${lockEntityId.replace(/\./g, '_')}" style="display: none;">
+                          <div class="spinner"></div>
+                          <span>Saving...</span>
+                        </div>
+                      </div>
+                      <div class="lock-entity-name" style="font-size: 11px; color: var(--secondary-text-color); font-weight: 300; margin-top: 2px; opacity: 0.7;">Entity: ${lockEntityId}</div>
+                    </div>
                   </div>
                   <div class="lock-header-right">
                     <div class="header-buttons" style="display: flex; gap: 6px; align-items: center;">
