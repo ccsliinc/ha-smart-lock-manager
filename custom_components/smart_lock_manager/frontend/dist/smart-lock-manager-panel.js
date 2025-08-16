@@ -1266,6 +1266,20 @@ class SmartLockManagerPanel extends HTMLElement {
           background: var(--secondary-color);
         }
 
+        .btn.refresh-all-btn {
+          background: #4285f4;
+          color: white;
+          font-size: 14px;
+          padding: 8px 16px;
+          display: flex;
+          align-items: center;
+          font-weight: 500;
+        }
+
+        .btn.refresh-all-btn:hover {
+          background: #3367d6;
+        }
+
         .modal {
           position: fixed;
           top: 0;
@@ -1527,8 +1541,9 @@ class SmartLockManagerPanel extends HTMLElement {
           <ha-icon icon="mdi:lock-smart"></ha-icon>
           <h1>Smart Lock Manager</h1>
         </div>
-        <button class="btn secondary" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
-          🔄 Refresh All
+        <button class="btn refresh-all-btn" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
+          <ha-icon icon="mdi:refresh" style="width: 16px; height: 16px; margin-right: 6px;"></ha-icon>
+          Refresh All
         </button>
       </div>
 
