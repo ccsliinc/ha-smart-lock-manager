@@ -214,7 +214,7 @@ class SmartLockManagerPanel extends HTMLElement {
       if (userNameField) userNameField.value = slotDetails.user_name || '';
       if (pinCodeField) pinCodeField.value = slotDetails.pin_code || '';
       if (maxUsesField) maxUsesField.value = slotDetails.max_uses || -1;
-      if (isActiveField) isActiveField.checked = slotDetails.pin_code ? true : (slotDetails.is_active !== false);
+      if (isActiveField) isActiveField.checked = slotDetails.pin_code ? true : true; // Default to enabled for new slots
       if (notifyField) notifyField.checked = slotDetails.notify_on_use || false;
 
       // Handle multiselect for allowed hours
@@ -539,9 +539,9 @@ class SmartLockManagerPanel extends HTMLElement {
     }
   }
 
-  async callService(service, serviceData) {
+  async callService(service, serviceData, domain = 'smart_lock_manager') {
     try {
-      const result = await this._hass.callService('smart_lock_manager', service, serviceData);
+      const result = await this._hass.callService(domain, service, serviceData);
 
       // Immediately force refresh of Home Assistant entities
       if (this._hass.callService) {
@@ -733,8 +733,8 @@ class SmartLockManagerPanel extends HTMLElement {
   async resetSlotUsage(slotNumber) {
     const confirmed = await this.showCustomConfirm(`Reset usage counter for slot ${slotNumber}?`);
     if (confirmed) {
-      // Show card spinner during reset operation
-      this.showCardSpinner(this._currentLockEntityId);
+      // Show slot-specific loading overlay
+      this.showSlotSpinner(slotNumber);
 
       try {
         await this.callService('reset_slot_usage', {
@@ -742,9 +742,9 @@ class SmartLockManagerPanel extends HTMLElement {
           code_slot: parseInt(slotNumber)
         });
       } finally {
-        // Hide card spinner when operation completes
-        this.hideCardSpinner(this._currentLockEntityId);
-        
+        // Hide slot spinner when operation completes
+        this.hideSlotSpinner(slotNumber);
+
         // Force a refresh to update the UI
         setTimeout(() => {
           this.loadLockData();
@@ -981,7 +981,7 @@ class SmartLockManagerPanel extends HTMLElement {
           border-radius: 4px;
           font-size: 12px;
           font-weight: 500;
-          background: #4caf50;
+          background: #6b8e6b;
           color: white;
         }
 
@@ -1561,6 +1561,10 @@ class SmartLockManagerPanel extends HTMLElement {
               return '';
             }
 
+            // Get the actual lock entity state for the lock/unlock button
+            const actualLockEntity = this._hass.states[lockEntityId];
+            const actualLockState = actualLockEntity?.state || 'unknown';
+
             return `
               <div class="lock-card">
                 <div class="lock-header">
@@ -1572,13 +1576,30 @@ class SmartLockManagerPanel extends HTMLElement {
                         <span>Saving...</span>
                       </div>
                     </div>
-                    ${(attributes.friendly_name && attributes.friendly_name !== attributes.lock_name) ? `<div class="lock-entity-name" style="font-size: 11px; color: var(--secondary-text-color); font-weight: 300; margin-top: 2px; opacity: 0.7;">Entity: ${attributes.lock_name}</div>` : ''}
+                    <div class="lock-entity-name" style="font-size: 11px; color: var(--secondary-text-color); font-weight: 300; margin-top: 2px; opacity: 0.7;">Entity: ${lockEntityId}</div>
                   </div>
                   <div class="lock-header-right">
                     <div class="lock-status">${typeof lock.state === 'string' ? lock.state : 'Connected'}</div>
-                    <button class="settings-btn" onclick="SmartLockManagerPanel.openSettings('${lockEntityId}')" title="Lock Settings">
-                      <ha-icon icon="mdi:cog"></ha-icon>
-                    </button>
+                    <div class="header-buttons" style="display: flex; gap: 6px; align-items: center;">
+                      <button class="lock-toggle-btn"
+                              onclick="SmartLockManagerPanel.toggleLock('${lockEntityId}', '${actualLockState}')"
+                              title="${actualLockState === 'locked' ? 'Click to unlock' : 'Click to lock'}"
+                              style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: ${actualLockState === 'locked' ? '#4a7c2a' : '#cc3333'};">
+                        <ha-icon icon="mdi:${actualLockState === 'locked' ? 'lock' : 'lock-open'}" style="width: 20px; height: 20px;"></ha-icon>
+                      </button>
+                      <button class="clear-all-btn"
+                              onclick="SmartLockManagerPanel.clearAllSlots('${lockEntityId}')"
+                              title="Clear all slots"
+                              style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: #daa520;">
+                        <ha-icon icon="mdi:broom" style="width: 20px; height: 20px;"></ha-icon>
+                      </button>
+                      <button class="settings-btn"
+                              onclick="SmartLockManagerPanel.openSettings('${lockEntityId}')"
+                              title="Lock settings"
+                              style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: #708090;">
+                        <ha-icon icon="mdi:cog" style="width: 20px; height: 20px;"></ha-icon>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -2132,6 +2153,141 @@ class SmartLockManagerPanel extends HTMLElement {
       spinner.style.display = 'none';
     } else {
     }
+  }
+
+  showSlotSpinner(slotNumber) {
+    // Find the slot row element
+    const slotRows = this.shadowRoot.querySelectorAll('.slot-row');
+    const slotRow = Array.from(slotRows).find(row => {
+      const slotText = row.querySelector('.slot-name');
+      return slotText && slotText.textContent.includes(`Slot ${slotNumber}:`);
+    });
+
+    if (slotRow) {
+      // Create overlay if it doesn't exist
+      let overlay = slotRow.querySelector('.slot-loading-overlay');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'slot-loading-overlay';
+        overlay.style.cssText = `
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.3);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          border-radius: 4px;
+        `;
+
+        // Create animated spinner
+        const spinner = document.createElement('div');
+        spinner.style.cssText = `
+          width: 24px;
+          height: 24px;
+          border: 2px solid rgba(255, 255, 255, 0.3);
+          border-top: 2px solid white;
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        `;
+
+        overlay.appendChild(spinner);
+
+        // Make sure slot row has relative positioning
+        slotRow.style.position = 'relative';
+        slotRow.appendChild(overlay);
+      }
+
+      overlay.style.display = 'flex';
+    }
+  }
+
+  hideSlotSpinner(slotNumber) {
+    // Find the slot row element
+    const slotRows = this.shadowRoot.querySelectorAll('.slot-row');
+    const slotRow = Array.from(slotRows).find(row => {
+      const slotText = row.querySelector('.slot-name');
+      return slotText && slotText.textContent.includes(`Slot ${slotNumber}:`);
+    });
+
+    if (slotRow) {
+      const overlay = slotRow.querySelector('.slot-loading-overlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+      }
+    }
+  }
+
+  static clearAllSlots(lockEntityId) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) {
+      return;
+    }
+
+    // Confirm before clearing all slots
+    if (confirm('Are you sure you want to clear ALL slots? This will remove all user codes from this lock.')) {
+      // Find the current lock to get slot count
+      const currentLock = panel._locks?.find(l => l.attributes.lock_entity_id === lockEntityId);
+      const totalSlots = currentLock?.attributes?.total_slots || 10;
+      const startFrom = currentLock?.attributes?.start_from || 1;
+
+      // Show staggered slot spinners with personality
+      for (let i = 0; i < totalSlots; i++) {
+        const slotNumber = startFrom + i;
+        const delay = i * 150; // 150ms delay between each slot
+
+        setTimeout(() => {
+          panel.showSlotSpinner(slotNumber);
+        }, delay);
+      }
+
+      // Call the clear service
+      panel.callService('clear_all_slots', {
+        entity_id: lockEntityId
+      }).then(() => {
+        // Hide all slot spinners after a brief moment
+        setTimeout(() => {
+          for (let i = 0; i < totalSlots; i++) {
+            const slotNumber = startFrom + i;
+            panel.hideSlotSpinner(slotNumber);
+          }
+
+          // Refresh the data after clearing
+          setTimeout(() => {
+            panel.loadLockData();
+          }, 250);
+        }, 800); // Keep spinners visible for a moment to show completion
+      }).catch(() => {
+        // Hide spinners on error too
+        for (let i = 0; i < totalSlots; i++) {
+          const slotNumber = startFrom + i;
+          panel.hideSlotSpinner(slotNumber);
+        }
+      });
+    }
+  }
+
+  static toggleLock(lockEntityId, currentState) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) {
+      return;
+    }
+
+    // Determine the action based on current state
+    const action = currentState === 'locked' ? 'unlock' : 'lock';
+
+    // Call the Home Assistant lock service
+    panel.callService(action, {
+      entity_id: lockEntityId
+    }, 'lock').then(() => {
+      // Refresh the data after lock/unlock
+      setTimeout(() => {
+        panel.loadLockData();
+      }, 500);
+    });
   }
 
 
