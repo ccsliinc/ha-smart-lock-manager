@@ -490,6 +490,7 @@ class SmartLockManagerLock:
         slot = self.code_slots[slot_number]
         if slot.pin_code:  # Only enable if has a PIN code
             slot.is_active = True
+            slot.is_synced = False  # Mark as needing sync to lock
             return True
         return False
 

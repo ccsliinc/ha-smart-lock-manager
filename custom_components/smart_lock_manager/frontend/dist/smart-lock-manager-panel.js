@@ -744,6 +744,11 @@ class SmartLockManagerPanel extends HTMLElement {
       } finally {
         // Hide card spinner when operation completes
         this.hideCardSpinner(this._currentLockEntityId);
+        
+        // Force a refresh to update the UI
+        setTimeout(() => {
+          this.loadLockData();
+        }, 250);
       }
     }
   }
