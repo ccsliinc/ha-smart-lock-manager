@@ -925,6 +925,33 @@ class SmartLockManagerPanel extends HTMLElement {
         .header-left {
           display: flex;
           align-items: center;
+          gap: 12px;
+        }
+
+        .connection-status {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .header-titles {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .refresh-link {
+          display: flex;
+          align-items: center;
+          color: var(--primary-text-color);
+          cursor: pointer;
+          font-size: 14px;
+          opacity: 0.7;
+          transition: opacity 0.2s;
+        }
+
+        .refresh-link:hover {
+          opacity: 1;
         }
 
         .header ha-icon {
@@ -1266,19 +1293,6 @@ class SmartLockManagerPanel extends HTMLElement {
           background: var(--secondary-color);
         }
 
-        .btn.refresh-all-btn {
-          background: #4285f4;
-          color: white;
-          font-size: 14px;
-          padding: 8px 16px;
-          display: flex;
-          align-items: center;
-          font-weight: 500;
-        }
-
-        .btn.refresh-all-btn:hover {
-          background: #3367d6;
-        }
 
         .modal {
           position: fixed;
@@ -1538,13 +1552,18 @@ class SmartLockManagerPanel extends HTMLElement {
 
       <div class="header">
         <div class="header-left">
-          <ha-icon icon="mdi:lock-smart"></ha-icon>
-          <h1>Smart Lock Manager</h1>
+          <div class="connection-status" title="Connected to Home Assistant">
+            <ha-icon icon="mdi:wifi" style="width: 20px; height: 20px; color: #4caf50;"></ha-icon>
+          </div>
+          <div class="header-titles">
+            <ha-icon icon="mdi:lock-smart"></ha-icon>
+            <h1>Smart Lock Manager</h1>
+          </div>
         </div>
-        <button class="btn refresh-all-btn" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
-          <ha-icon icon="mdi:refresh" style="width: 16px; height: 16px; margin-right: 6px;"></ha-icon>
-          Refresh All
-        </button>
+        <div class="refresh-link" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
+          <ha-icon icon="mdi:refresh" style="width: 14px; height: 14px; margin-right: 4px;"></ha-icon>
+          <span>Refresh All</span>
+        </div>
       </div>
 
       ${locks.length === 0 ? `
@@ -1594,7 +1613,6 @@ class SmartLockManagerPanel extends HTMLElement {
                     <div class="lock-entity-name" style="font-size: 11px; color: var(--secondary-text-color); font-weight: 300; margin-top: 2px; opacity: 0.7;">Entity: ${lockEntityId}</div>
                   </div>
                   <div class="lock-header-right">
-                    <div class="lock-status">${typeof lock.state === 'string' ? lock.state : 'Connected'}</div>
                     <div class="header-buttons" style="display: flex; gap: 6px; align-items: center;">
                       <button class="lock-toggle-btn"
                               onclick="SmartLockManagerPanel.toggleLock('${lockEntityId}', '${actualLockState}')"
