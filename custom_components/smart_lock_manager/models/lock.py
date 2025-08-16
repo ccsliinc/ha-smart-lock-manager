@@ -3,9 +3,56 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, time
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class SlotStatus:
+    """Represents a slot status with label, color, and description."""
+
+    def __init__(self, name: str, label: str, color: str, description: str = ""):
+        self.name = name
+        self.label = label  # Display text for UI
+        self.color = color  # Hex color code
+        self.description = description  # Detailed reason/explanation
+
+    def to_dict(self) -> Dict[str, str]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "name": self.name,
+            "label": self.label,
+            "color": self.color,
+            "description": self.description,
+        }
+
+
+# Define all possible slot statuses
+SLOT_STATUSES = {
+    "EMPTY": SlotStatus(
+        "EMPTY", "Click to configure", "#9e9e9e", "No PIN code configured"
+    ),
+    "DISABLING": SlotStatus(
+        "DISABLING", "Disabling", "#ff9800", "Clearing code from physical lock"
+    ),
+    "DISABLED": SlotStatus(
+        "DISABLED", "Disabled", "#9e9e9e", "Slot is disabled and cleared from lock"
+    ),
+    "OUTSIDE_HOURS": SlotStatus(
+        "OUTSIDE_HOURS", "Outside Hours", "#2196f3", "Time restrictions active"
+    ),
+    "SYNCHRONIZING": SlotStatus(
+        "SYNCHRONIZING", "Synchronizing", "#ff9800", "Syncing with physical lock"
+    ),
+    "SYNC_ERROR": SlotStatus(
+        "SYNC_ERROR", "Sync Error", "#f44336", "Code not found in physical lock"
+    ),
+    "SYNCHRONIZED": SlotStatus(
+        "SYNCHRONIZED", "Synchronized", "#4caf50", "Code active and synced with lock"
+    ),
+    "UNKNOWN": SlotStatus("UNKNOWN", "Unknown Status", "#9e9e9e", "Status unclear"),
+}
 
 
 @dataclass
@@ -85,6 +132,43 @@ class CodeSlot:
             return True
 
         return False
+
+    def get_status(self, is_valid_now: bool) -> SlotStatus:
+        """Get the current status of this slot."""
+        # Empty slot - no PIN code configured
+        if not self.pin_code:
+            return SLOT_STATUSES["EMPTY"]
+
+        # Priority 1: Disabling - disabled but still needs to be cleared from physical lock
+        # Show "DISABLING" (amber) when disabled but not yet synced (cleared from lock)
+        if not self.is_active and self.pin_code and not self.is_synced:
+            return SLOT_STATUSES["DISABLING"]
+
+        # Priority 2: Check if slot should be auto-disabled due to expiration/usage
+        if self.should_disable():
+            return SLOT_STATUSES["DISABLED"]
+
+        # Priority 3: Disabled - manually disabled and confirmed cleared from lock
+        if not self.is_active:
+            return SLOT_STATUSES["DISABLED"]
+
+        # Priority 4: Outside allowed hours/days (time-restricted)
+        if self.is_active and not is_valid_now:
+            return SLOT_STATUSES["OUTSIDE_HOURS"]
+
+        # Priority 5: Active and should be valid, check sync status
+        if self.is_active and is_valid_now:
+            # Check for synchronizing state (has sync attempts means actively syncing)
+            if self.sync_attempts > 0:
+                return SLOT_STATUSES["SYNCHRONIZING"]
+            # If not synced but no active attempts, it's an error
+            if not self.is_synced:
+                return SLOT_STATUSES["SYNC_ERROR"]
+            # All good - active, valid, and synced
+            return SLOT_STATUSES["SYNCHRONIZED"]
+
+        # Fallback for any unexpected state
+        return SLOT_STATUSES["UNKNOWN"]
 
 
 @dataclass
@@ -175,14 +259,6 @@ class SmartLockManagerLock:
         slot.is_synced = False  # Mark as unsynced until Z-Wave confirms
         slot.created_at = datetime.now()
 
-        _LOGGER.debug(
-            "Set code for %s slot %s: active=%s, pin_code=%s",
-            self.lock_name,
-            slot_number,
-            slot.is_active,
-            bool(pin_code),
-        )
-
         # Set scheduling parameters
         slot.start_date = start_date
         slot.end_date = end_date
@@ -227,7 +303,6 @@ class SmartLockManagerLock:
         active_slots = [
             slot_num for slot_num, slot in self.code_slots.items() if slot.is_active
         ]
-        _LOGGER.debug("Active slots for %s: %s", self.lock_name, active_slots)
         return len(active_slots)
 
     def get_configured_codes_count(self) -> int:
@@ -235,7 +310,6 @@ class SmartLockManagerLock:
         configured_slots = [
             slot_num for slot_num, slot in self.code_slots.items() if slot.pin_code
         ]
-        _LOGGER.debug("Configured slots for %s: %s", self.lock_name, configured_slots)
         return len(configured_slots)
 
     def get_slot_info(self, slot_number: int) -> Optional[CodeSlot]:
@@ -309,24 +383,11 @@ class SmartLockManagerLock:
             if slot.is_active and slot.pin_code and slot.is_valid_now():
                 # Check if code matches what's in the lock
                 if not zwave_code or zwave_code != slot.pin_code:
-                    _LOGGER.debug(
-                        "🔄 Slot %s needs sync: HA=%s, ZWave=%s",
-                        slot_number,
-                        slot.pin_code,
-                        zwave_code or "None",
-                    )
                     if slot.sync_attempts < 10:
                         add_slots.append(slot_number)
                     else:
                         retry_slots.append(slot_number)
                         slot.sync_error = f"Failed to sync after 10 attempts"
-                else:
-                    _LOGGER.debug(
-                        "✅ Slot %s already in sync: HA=%s, ZWave=%s",
-                        slot_number,
-                        slot.pin_code,
-                        zwave_code,
-                    )
 
             # Smart Lock Manager wants this slot disabled/removed
             elif not slot.is_active or not slot.pin_code or not slot.is_valid_now():
@@ -360,37 +421,16 @@ class SmartLockManagerLock:
                     slot.is_synced = True
                     slot.sync_attempts = 0  # Reset on success
                     slot.sync_error = None
-                    _LOGGER.debug(
-                        "✅ Slot %s sync OK: HA=%s, ZWave=%s",
-                        slot_number,
-                        slot.pin_code,
-                        zwave_code,
-                    )
                 else:
                     slot.is_synced = False
-                    _LOGGER.info(
-                        "❌ Slot %s sync MISMATCH: HA=%s, ZWave=%s",
-                        slot_number,
-                        slot.pin_code,
-                        zwave_code or "None",
-                    )
             elif not slot.is_active or not slot.pin_code:
                 # Slot should be empty - mark as synced only if lock is also empty
                 if not zwave_code:
                     slot.is_synced = True
                     slot.sync_attempts = 0
                     slot.sync_error = None
-                    _LOGGER.debug(
-                        "✅ Slot %s cleared successfully: disabled and removed from lock",
-                        slot_number,
-                    )
                 else:
                     slot.is_synced = False
-                    _LOGGER.debug(
-                        "🔄 Slot %s needs clearing: disabled but still in lock (%s)",
-                        slot_number,
-                        zwave_code,
-                    )
             else:
                 slot.is_synced = False
 
@@ -460,28 +500,12 @@ class SmartLockManagerLock:
             return False
 
         slot = self.code_slots[slot_number]
-        _LOGGER.info(
-            "🔄 DISABLE_SLOT MODEL DEBUG - BEFORE disable slot %s: is_active=%s, pin_code=%s, user_name=%s",
-            slot_number,
-            slot.is_active,
-            bool(slot.pin_code),
-            slot.user_name,
-        )
-
         slot.is_active = False
         # Mark as unsynced so it gets removed from the physical lock
         slot.is_synced = False
-        # Reset sync attempts to trigger removal process
+        # Reset sync attempts - the "DISABLING" status relies on is_active=False + pin_code + not is_synced
         slot.sync_attempts = 0
 
-        _LOGGER.info(
-            "🔄 DISABLE_SLOT MODEL DEBUG - AFTER disable slot %s: is_active=%s, pin_code=%s, user_name=%s, is_synced=%s",
-            slot_number,
-            slot.is_active,
-            bool(slot.pin_code),
-            slot.user_name,
-            slot.is_synced,
-        )
         return True
 
     def sync_to_child_locks(self, child_locks: List["SmartLockManagerLock"]) -> None:

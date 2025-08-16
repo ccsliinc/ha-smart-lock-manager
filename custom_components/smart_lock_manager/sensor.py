@@ -77,33 +77,17 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 lock = entry_data[PRIMARY_LOCK]
                 if lock.lock_entity_id == self._lock.lock_entity_id:
                     found_lock = lock
-                    _LOGGER.debug(
-                        f"Found updated lock for {self._lock.lock_entity_id}: friendly_name={lock.settings.friendly_name}"
-                    )
                     break
 
         if found_lock:
             return found_lock
-        else:
-            _LOGGER.debug(
-                f"Using original lock for {self._lock.lock_entity_id}: friendly_name={self._lock.settings.friendly_name}"
-            )
-            return self._lock
+        return self._lock
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return the attributes of the sensor with ALL object data for automation access."""
         # Always get the latest lock object
         lock_to_use = self._get_current_lock()
-
-        # Debug log what friendly name we're about to return
-        _LOGGER.info(
-            f"🔍 Sensor Debug - extra_state_attributes for {lock_to_use.lock_entity_id}:"
-        )
-        _LOGGER.info(
-            f"  - Lock object friendly_name: '{lock_to_use.settings.friendly_name}'"
-        )
-        _LOGGER.info(f"  - Lock object lock_name: '{lock_to_use.lock_name}'")
 
         # Get all active slots with their details
         active_slots = lock_to_use.get_all_active_slots()
@@ -121,6 +105,10 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
 
         # Build comprehensive slot details for ALL slots (including empty ones)
         for slot_num, slot in all_slots.items():
+            # Get the unified status object
+            is_valid_now = slot_num in valid_slots_now
+            status = slot.get_status(is_valid_now)
+
             slot_details[f"slot_{slot_num}"] = {
                 # Basic slot info
                 "slot_number": slot_num,
@@ -128,7 +116,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 "pin_code": slot.pin_code,  # Required for frontend color logic
                 "is_active": slot.is_active,
                 "is_synced": slot.is_synced,
-                "is_valid_now": slot_num in valid_slots_now,
+                "is_valid_now": is_valid_now,
                 "use_count": slot.use_count,  # Always show usage, even for disabled slots
                 # Timestamps
                 "created_at": slot.created_at.isoformat() if slot.created_at else None,
@@ -142,28 +130,19 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 "max_uses": slot.max_uses,
                 "notify_on_use": slot.notify_on_use,
                 "should_disable": slot.should_disable(),
-                # Backend-calculated display fields (NO FRONTEND LOGIC!)
+                # NEW: Unified status system
+                "status": status.to_dict(),
+                # Legacy fields for backward compatibility (until frontend is updated)
                 "display_title": self._get_slot_display_title(slot_num, slot),
-                "slot_status": self._get_slot_status_text(
-                    slot, slot_num in valid_slots_now
-                ),
-                "status_color": self._get_slot_status_color(
-                    slot, slot_num in valid_slots_now
-                ),
-                "status_reason": self._get_slot_status_reason(
-                    slot, slot_num in valid_slots_now
-                ),
+                "slot_status": status.label,
+                "status_color": status.color,
+                "status_reason": status.description,
             }
 
         # Get usage statistics and lock hierarchy info
         usage_stats = lock_to_use.get_usage_statistics()
         valid_slot_numbers = list(valid_slots_now.keys())
-
-        # Debug log the final friendly_name that will be returned
         final_friendly_name = lock_to_use.settings.friendly_name
-        _LOGGER.info(
-            f"📤 Sensor Debug - Returning friendly_name: '{final_friendly_name}' for {lock_to_use.lock_entity_id}"
-        )
 
         return {
             # Basic lock info
@@ -285,7 +264,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         return "#9e9e9e"  # Default grey
 
     def _get_slot_status_reason(self, slot: CodeSlot, is_valid_now: bool) -> str:
-        """Provide detailed status explanation for debugging."""
+        """Provide detailed status explanation."""
         if not slot.is_active and slot.pin_code and not slot.is_synced:
             return "Clearing code from physical lock"
         if not slot.is_active or not slot.pin_code:
