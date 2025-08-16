@@ -48,6 +48,7 @@ htmlcov/
 build/
 develop-eggs/
 dist/
+!custom_components/*/frontend/dist/
 downloads/
 eggs/
 .eggs/
@@ -67,5 +68,19 @@ MANIFEST
 # Temporary files
 *.tmp
 *.bak
+*.backup
 *.swp
 *.log
+_temp/
+temp/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local

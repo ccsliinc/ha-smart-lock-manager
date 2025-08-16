@@ -174,7 +174,7 @@ class ZWaveServices:
                     raise ValueError(f"PIN code must be numeric only: {slot.pin_code}")
                 if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
                     raise ValueError(
-                        f"PIN code must be 4-8 digits: {slot.pin_code} (length: {len(slot.pin_code)})"
+                        f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
                     )
 
                 # Add/update code in Z-Wave lock
@@ -214,7 +214,7 @@ class ZWaveServices:
                         )
                     if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
                         raise ValueError(
-                            f"PIN code must be 4-8 digits: {slot.pin_code} (length: {len(slot.pin_code)})"
+                            f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
                         )
 
                     # Get current Z-Wave code to check if we need to clear first
