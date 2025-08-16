@@ -925,18 +925,6 @@ class SmartLockManagerPanel extends HTMLElement {
         .header-left {
           display: flex;
           align-items: center;
-          gap: 12px;
-        }
-
-        .connection-status {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .header-titles {
-          display: flex;
-          align-items: center;
           gap: 8px;
         }
 
@@ -952,6 +940,12 @@ class SmartLockManagerPanel extends HTMLElement {
 
         .refresh-link:hover {
           opacity: 1;
+        }
+
+        .lock-connection-status {
+          display: flex;
+          align-items: center;
+          margin-right: 8px;
         }
 
         .header ha-icon {
@@ -1552,13 +1546,8 @@ class SmartLockManagerPanel extends HTMLElement {
 
       <div class="header">
         <div class="header-left">
-          <div class="connection-status" title="Connected to Home Assistant">
-            <ha-icon icon="mdi:wifi" style="width: 20px; height: 20px; color: #4caf50;"></ha-icon>
-          </div>
-          <div class="header-titles">
-            <ha-icon icon="mdi:lock-smart"></ha-icon>
-            <h1>Smart Lock Manager</h1>
-          </div>
+          <ha-icon icon="mdi:lock-smart"></ha-icon>
+          <h1>Smart Lock Manager</h1>
         </div>
         <div class="refresh-link" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
           <ha-icon icon="mdi:refresh" style="width: 14px; height: 14px; margin-right: 4px;"></ha-icon>
@@ -1604,6 +1593,9 @@ class SmartLockManagerPanel extends HTMLElement {
                 <div class="lock-header">
                   <div class="lock-title-section">
                     <div style="display: flex; align-items: center; gap: 8px;">
+                      <div class="lock-connection-status" title="${lockEntityId in this._hass.states ? 'Connected' : 'Disconnected'}">
+                        <ha-icon icon="mdi:${lockEntityId in this._hass.states ? 'circle' : 'circle-outline'}" style="width: 8px; height: 8px; color: ${lockEntityId in this._hass.states ? '#4caf50' : '#f44336'};"></ha-icon>
+                      </div>
                       <h3 class="lock-title">${attributes.friendly_name || attributes.lock_name || 'Smart Lock'}</h3>
                       <div class="saving-spinner" id="saving-spinner-${lockEntityId.replace(/\./g, '_')}" style="display: none;">
                         <div class="spinner"></div>
