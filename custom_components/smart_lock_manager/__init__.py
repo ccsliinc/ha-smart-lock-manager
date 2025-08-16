@@ -40,6 +40,7 @@ from .const import (
     ISSUE_URL,
     PLATFORMS,
     PRIMARY_LOCK,
+    SERVICE_CLEAR_ALL_SLOTS,
     SERVICE_CLEAR_CODE,
     SERVICE_DISABLE_SLOT,
     SERVICE_ENABLE_SLOT,
@@ -72,12 +73,14 @@ async def _save_lock_data(
     """Save complete lock data to persistent storage using lock's to_dict method."""
     try:
         store = hass.data[DOMAIN][entry_id]["store"]
-        
+
         # Use the lock's to_dict method to ensure all data including settings is saved
         data_to_save = lock.to_dict()
-        
+
         await store.async_save(data_to_save)
-        _LOGGER.debug("Saved complete lock data for %s (including settings)", lock.lock_name)
+        _LOGGER.debug(
+            "Saved complete lock data for %s (including settings)", lock.lock_name
+        )
 
     except Exception as e:
         _LOGGER.error("Failed to save lock data for %s: %s", lock.lock_name, e)
@@ -146,6 +149,8 @@ SYNC_CHILD_LOCKS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id
 GET_USAGE_STATS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
 
 REMOVE_CHILD_LOCK_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
+
+CLEAR_ALL_SLOTS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
 
 UPDATE_LOCK_SETTINGS_SCHEMA = vol.Schema(
     {
@@ -268,22 +273,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if settings_data.get("friendly_name"):
             lock.settings.friendly_name = settings_data["friendly_name"]
             _LOGGER.info(
-                "Restored friendly name for %s: %s", 
-                lock_name, 
-                settings_data["friendly_name"]
+                "Restored friendly name for %s: %s",
+                lock_name,
+                settings_data["friendly_name"],
             )
         if settings_data.get("timezone"):
             lock.settings.timezone = settings_data["timezone"]
         if settings_data.get("auto_lock_time"):
             from datetime import time
-            lock.settings.auto_lock_time = time.fromisoformat(settings_data["auto_lock_time"])
+
+            lock.settings.auto_lock_time = time.fromisoformat(
+                settings_data["auto_lock_time"]
+            )
         if settings_data.get("auto_unlock_time"):
             from datetime import time
-            lock.settings.auto_unlock_time = time.fromisoformat(settings_data["auto_unlock_time"])
+
+            lock.settings.auto_unlock_time = time.fromisoformat(
+                settings_data["auto_unlock_time"]
+            )
     else:
         # Initialize with default friendly name from lock name if no settings exist
         lock.settings.friendly_name = lock_name
-        _LOGGER.info("Initialized default friendly name for %s: %s", lock_name, lock_name)
+        _LOGGER.info(
+            "Initialized default friendly name for %s: %s", lock_name, lock_name
+        )
 
     # Restore parent/child lock relationships from storage
     if stored_data.get("is_main_lock") is not None:
@@ -366,7 +379,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_SYNC_CHILD_LOCKS)
             hass.services.async_remove(DOMAIN, SERVICE_GET_USAGE_STATS)
 
-    return unload_ok
+    return bool(unload_ok)
 
 
 async def _register_services(hass: HomeAssistant) -> None:
@@ -442,6 +455,9 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     async def remove_child_lock_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.remove_child_lock(hass, service_call)
+
+    async def clear_all_slots_wrapper(service_call: ServiceCall) -> None:
+        return await ManagementServices.clear_all_slots(hass, service_call)
 
     async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
@@ -527,6 +543,12 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         SERVICE_REMOVE_CHILD_LOCK,
         remove_child_lock_wrapper,
         schema=REMOVE_CHILD_LOCK_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_ALL_SLOTS,
+        clear_all_slots_wrapper,
+        schema=CLEAR_ALL_SLOTS_SCHEMA,
     )
     _LOGGER.info("Registered management services")
 
@@ -754,15 +776,18 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                         lock.lock_name,
                         lock.child_lock_ids,
                     )
-                    
+
                     # Find child locks
                     child_locks = []
                     for entry_id, entry_data in self.hass.data[DOMAIN].items():
                         if isinstance(entry_data, dict):  # Skip global_settings
                             child_lock = entry_data.get(PRIMARY_LOCK)
-                            if child_lock and child_lock.lock_entity_id in lock.child_lock_ids:
+                            if (
+                                child_lock
+                                and child_lock.lock_entity_id in lock.child_lock_ids
+                            ):
                                 child_locks.append(child_lock)
-                    
+
                     if child_locks:
                         # Check if main lock codes have changed since last sync
                         main_lock_changed = False
@@ -773,7 +798,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             ):
                                 main_lock_changed = True
                                 break
-                        
+
                         # Sync to child locks if main lock changed
                         if main_lock_changed:
                             _LOGGER.info(
@@ -781,7 +806,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                 lock.lock_name,
                                 len(child_locks),
                             )
-                            
+
                             try:
                                 await self.hass.services.async_call(
                                     DOMAIN,

@@ -74,6 +74,7 @@ DEFAULT_PATH = "/packages/smart_lock_manager/"
 DEFAULT_START = 1
 
 # Services
+SERVICE_CLEAR_ALL_SLOTS = "clear_all_slots"
 SERVICE_CLEAR_CODE = "clear_code"
 SERVICE_DISABLE_SLOT = "disable_slot"
 SERVICE_ENABLE_SLOT = "enable_slot"
