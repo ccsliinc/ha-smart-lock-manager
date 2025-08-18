@@ -1,7 +1,6 @@
 """Smart Lock Manager Custom Panel."""
 
 import logging
-from typing import Any, Dict
 
 from homeassistant.components import frontend
 from homeassistant.core import HomeAssistant
@@ -16,7 +15,6 @@ PANEL_CONFIG_PANEL_DOMAIN = "smart_lock_manager_panel"
 
 async def async_register_panel(hass: HomeAssistant) -> None:
     """Register the Smart Lock Manager panel."""
-
     _LOGGER.debug("Registering Smart Lock Manager panel")
 
     # Check if panel is already registered (for multiple lock instances)
@@ -40,7 +38,9 @@ async def async_register_panel(hass: HomeAssistant) -> None:
                     "name": "smart-lock-manager-panel",
                     "embed_iframe": False,
                     "trust": False,
-                    "js_url": f"/api/smart_lock_manager/frontend/smart-lock-manager-panel.js?v=1.0.0",
+                    "js_url": f"/api/smart_lock_manager/frontend/"
+                    f"smart-lock-manager-panel.js?v=1.4.5&t="
+                    f"{int(__import__('time').time())}",
                 }
             },
             require_admin=False,
@@ -51,7 +51,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     except ValueError as e:
         if "Overwriting panel" in str(e):
             _LOGGER.debug(
-                "Panel already exists, this is expected with multiple lock instances"
+                "Panel already exists, this is expected with multiple " "lock instances"
             )
         else:
             _LOGGER.error("Error registering panel: %s", e)
@@ -60,7 +60,6 @@ async def async_register_panel(hass: HomeAssistant) -> None:
 
 async def async_unregister_panel(hass: HomeAssistant) -> None:
     """Unregister the Smart Lock Manager panel."""
-
     _LOGGER.debug("Unregistering Smart Lock Manager panel")
 
     # Remove the panel (this is done automatically by HA during unload)

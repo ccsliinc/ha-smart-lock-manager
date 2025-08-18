@@ -943,6 +943,14 @@ class SmartLockManagerPanel extends HTMLElement {
           font-size: 14px;
           opacity: 0.7;
           transition: opacity 0.2s;
+          height: 20px;
+        }
+
+        .refresh-link span {
+          height: 20px;
+          line-height: 20px;
+          display: flex;
+          align-items: center;
         }
 
         .refresh-link:hover {
@@ -1081,6 +1089,78 @@ class SmartLockManagerPanel extends HTMLElement {
         @keyframes spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+
+        /* ha-icon hover animations - properly target the SVG inside */
+        @keyframes gearRotate {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        @keyframes broomSweep {
+          0% { transform: rotate(-15deg); }
+          50% { transform: rotate(15deg); }
+          100% { transform: rotate(-15deg); }
+        }
+
+        @keyframes lockBounce {
+          0% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+          50% { transform: scale(1.2) rotate(90deg); filter: hue-rotate(-60deg); }
+          100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+        }
+
+        @keyframes lockBounceReverse {
+          0% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+          50% { transform: scale(1.2) rotate(-90deg); filter: hue-rotate(-60deg); }
+          100% { transform: scale(1) rotate(0deg); filter: hue-rotate(0deg); }
+        }
+
+        @keyframes refreshSpin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        /* Target ha-icon elements directly for animations */
+        .settings-btn:hover ha-icon {
+          animation: gearRotate 3s linear infinite !important;
+          transform-origin: center center !important;
+        }
+
+        .clear-all-btn:hover ha-icon {
+          animation: broomSweep 0.8s ease-in-out infinite !important;
+          transform-origin: center center !important;
+        }
+
+        .lock-toggle-btn:hover ha-icon[icon="mdi:lock"] {
+          animation: lockBounce 1.2s ease-in-out infinite !important;
+          transform-origin: center center !important;
+        }
+
+        .lock-toggle-btn:hover ha-icon[icon="mdi:lock-open"] {
+          animation: lockBounceReverse 1.2s ease-in-out infinite !important;
+          transform-origin: center center !important;
+        }
+
+        .refresh-btn:hover {
+          opacity: 1 !important;
+        }
+
+        .refresh-btn:hover ha-icon {
+          animation: refreshSpin 2s linear infinite !important;
+          transform-origin: center center !important;
+        }
+
+        /* Override header ha-icon styles for buttons */
+        .refresh-btn ha-icon {
+          margin-right: 0 !important;
+          font-size: inherit !important;
+          color: inherit !important;
+        }
+
+        /* Ensure ha-icon elements can be transformed and centered */
+        ha-icon {
+          display: inline-block !important;
+          transform-origin: center center !important;
         }
 
         /* Child Locks Section */
@@ -1583,11 +1663,14 @@ class SmartLockManagerPanel extends HTMLElement {
           <ha-icon icon="mdi:lock-smart"></ha-icon>
           <h1>Smart Lock Manager</h1>
         </div>
-        <div class="refresh-container">
-          <div class="refresh-link" onclick="SmartLockManagerPanel.forceRefresh()" title="Refresh all lock data from Home Assistant">
-            <ha-icon icon="mdi:refresh" style="margin-right: 3px;"></ha-icon>
-            <span>Refresh All</span>
-          </div>
+        <div class="refresh-container" style="margin-right: 5px;">
+          <button class="refresh-btn"
+                  onclick="SmartLockManagerPanel.forceRefresh()"
+                  title="Refresh all lock data from Home Assistant"
+                  style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: var(--primary-text-color); opacity: 0.7; transition: opacity 0.2s;">
+            <ha-icon icon="mdi:sync" style="margin-right: 3px; width: 25px; height: 25px;"></ha-icon>
+            <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 6px;">Refresh All</span>
+          </button>
         </div>
       </div>
 
@@ -1650,19 +1733,19 @@ class SmartLockManagerPanel extends HTMLElement {
                               onclick="SmartLockManagerPanel.toggleLock('${lockEntityId}', '${actualLockState}')"
                               title="${actualLockState === 'locked' ? 'Click to unlock' : 'Click to lock'}"
                               style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: ${actualLockState === 'locked' ? '#4a7c2a' : '#cc3333'};">
-                        <ha-icon icon="mdi:${actualLockState === 'locked' ? 'lock' : 'lock-open'}" style="width: 20px; height: 20px;"></ha-icon>
+                        <ha-icon icon="mdi:${actualLockState === 'locked' ? 'lock' : 'lock-open'}" style="width: 25px; height: 25px;"></ha-icon>
                       </button>
                       <button class="clear-all-btn"
                               onclick="SmartLockManagerPanel.clearAllSlots('${lockEntityId}')"
                               title="Clear all slots"
                               style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: #daa520;">
-                        <ha-icon icon="mdi:broom" style="width: 20px; height: 20px;"></ha-icon>
+                        <ha-icon icon="mdi:broom" style="width: 25px; height: 25px;"></ha-icon>
                       </button>
                       <button class="settings-btn"
                               onclick="SmartLockManagerPanel.openSettings('${lockEntityId}')"
                               title="Lock settings"
                               style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: #708090;">
-                        <ha-icon icon="mdi:cog" style="width: 20px; height: 20px;"></ha-icon>
+                        <ha-icon icon="mdi:cog" style="width: 25px; height: 25px;"></ha-icon>
                       </button>
                     </div>
                   </div>
