@@ -61,6 +61,35 @@ class LockServices:
                         await _save_lock_data(hass, lock, entry_id)
                         _LOGGER.info("🔄 SET_CODE DEBUG - Saved slot data to storage")
 
+                        # Trigger immediate child sync if this is a main lock with children
+                        if lock.is_main_lock and lock.child_lock_ids:
+                            _LOGGER.info(
+                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s code set, triggering immediate child sync to %s children",
+                                lock.lock_name,
+                                code_slot,
+                                len(lock.child_lock_ids),
+                            )
+
+                            try:
+                                from ..const import SERVICE_SYNC_CHILD_LOCKS
+
+                                await hass.services.async_call(
+                                    DOMAIN,
+                                    SERVICE_SYNC_CHILD_LOCKS,
+                                    {ATTR_ENTITY_ID: lock.lock_entity_id},
+                                )
+                                _LOGGER.info(
+                                    "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s code set",
+                                    lock.lock_name,
+                                    code_slot,
+                                )
+                            except Exception as e:
+                                _LOGGER.error(
+                                    "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                    lock.lock_name,
+                                    e,
+                                )
+
                     else:
                         _LOGGER.error(
                             "🔄 SET_CODE DEBUG - Failed to set code for slot %s in lock %s",
@@ -78,8 +107,32 @@ class LockServices:
         code_slot = service_call.data[ATTR_CODE_SLOT]
         user_code = service_call.data[ATTR_USER_CODE]
         user_name = service_call.data.get("code_slot_name")
-        start_date = service_call.data.get("start_date")
-        end_date = service_call.data.get("end_date")
+        # Handle date string parsing from frontend
+        start_date_raw = service_call.data.get("start_date")
+        end_date_raw = service_call.data.get("end_date")
+
+        # Parse datetime strings from frontend (ISO format)
+        start_date = None
+        if start_date_raw:
+            try:
+                # Handle datetime-local format from frontend (YYYY-MM-DDTHH:MM)
+                start_date = datetime.fromisoformat(str(start_date_raw))
+                _LOGGER.info("Parsed start_date: %s", start_date)
+            except (ValueError, TypeError) as e:
+                _LOGGER.warning(
+                    "Invalid start_date format: %s, error: %s", start_date_raw, e
+                )
+
+        end_date = None
+        if end_date_raw:
+            try:
+                # Handle datetime-local format from frontend (YYYY-MM-DDTHH:MM)
+                end_date = datetime.fromisoformat(str(end_date_raw))
+                _LOGGER.info("Parsed end_date: %s", end_date)
+            except (ValueError, TypeError) as e:
+                _LOGGER.warning(
+                    "Invalid end_date format: %s, error: %s", end_date_raw, e
+                )
         allowed_hours = service_call.data.get("allowed_hours")
         allowed_days = service_call.data.get("allowed_days")
         max_uses = service_call.data.get("max_uses", -1)
@@ -117,6 +170,35 @@ class LockServices:
                     from ..storage.lock_storage import save_lock_data
 
                     await save_lock_data(hass, lock, entry_id)
+
+                    # Trigger immediate child sync if this is a main lock with children
+                    if lock.is_main_lock and lock.child_lock_ids:
+                        _LOGGER.info(
+                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s advanced code set, triggering immediate child sync to %s children",
+                            lock.lock_name,
+                            code_slot,
+                            len(lock.child_lock_ids),
+                        )
+
+                        try:
+                            from ..const import SERVICE_SYNC_CHILD_LOCKS
+
+                            await hass.services.async_call(
+                                DOMAIN,
+                                SERVICE_SYNC_CHILD_LOCKS,
+                                {ATTR_ENTITY_ID: lock.lock_entity_id},
+                            )
+                            _LOGGER.info(
+                                "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s advanced code set",
+                                lock.lock_name,
+                                code_slot,
+                            )
+                        except Exception as e:
+                            _LOGGER.error(
+                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                lock.lock_name,
+                                e,
+                            )
                 else:
                     _LOGGER.error(
                         "Failed to set advanced code for slot %s in lock %s",
@@ -172,6 +254,35 @@ class LockServices:
                     from ..storage.lock_storage import save_lock_data
 
                     await save_lock_data(hass, lock, entry_id)
+
+                    # Trigger immediate child sync if this is a main lock with children
+                    if lock.is_main_lock and lock.child_lock_ids:
+                        _LOGGER.info(
+                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s code cleared, triggering immediate child sync to %s children",
+                            lock.lock_name,
+                            code_slot,
+                            len(lock.child_lock_ids),
+                        )
+
+                        try:
+                            from ..const import SERVICE_SYNC_CHILD_LOCKS
+
+                            await hass.services.async_call(
+                                DOMAIN,
+                                SERVICE_SYNC_CHILD_LOCKS,
+                                {ATTR_ENTITY_ID: lock.lock_entity_id},
+                            )
+                            _LOGGER.info(
+                                "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s code clear",
+                                lock.lock_name,
+                                code_slot,
+                            )
+                        except Exception as e:
+                            _LOGGER.error(
+                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                lock.lock_name,
+                                e,
+                            )
 
                 else:
                     _LOGGER.error(

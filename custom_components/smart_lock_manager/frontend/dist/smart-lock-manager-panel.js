@@ -1,6 +1,9 @@
 // Smart Lock Manager Advanced Panel v2.0.2
 // Enhanced panel with slot management grid, advanced code management, and usage analytics
 
+// Prevent redefinition if already loaded
+if (!window.SmartLockManagerPanel) {
+
 class SmartLockManagerPanel extends HTMLElement {
   constructor() {
     super();
@@ -11,6 +14,7 @@ class SmartLockManagerPanel extends HTMLElement {
     this._editingSlot = null;
     this._currentLockEntityId = null;
     this._settingsModalOpen = false;
+    this._debugMode = false; // Toggle for debug interface
     this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
     this.setupEventListeners();
   }
@@ -238,6 +242,24 @@ class SmartLockManagerPanel extends HTMLElement {
           if (option) option.selected = true;
         });
       }
+
+      // Handle date range fields
+      const accessFromField = form.querySelector('#access_from');
+      const accessToField = form.querySelector('#access_to');
+      if (accessFromField && slotDetails.start_date) {
+        // Convert backend datetime to local datetime-local format
+        const startDate = new Date(slotDetails.start_date);
+        if (!isNaN(startDate.getTime())) {
+          accessFromField.value = startDate.toISOString().slice(0, 16);
+        }
+      }
+      if (accessToField && slotDetails.end_date) {
+        // Convert backend datetime to local datetime-local format
+        const endDate = new Date(slotDetails.end_date);
+        if (!isNaN(endDate.getTime())) {
+          accessToField.value = endDate.toISOString().slice(0, 16);
+        }
+      }
     } else {
       // Clear form for new slot
       if (userNameField) userNameField.value = '';
@@ -344,7 +366,7 @@ class SmartLockManagerPanel extends HTMLElement {
 
     return parentLocks.map(lock => {
       const attributes = lock.attributes || {};
-      const lockName = attributes.lock_name || attributes.friendly_name || lock.entity_id;
+      const lockName = attributes.friendly_name || attributes.lock_name || attributes.lock_entity_id || lock.entity_id;
       const entityId = attributes.lock_entity_id || lock.entity_id;
       return `<option value="${entityId}">${lockName}</option>`;
     }).join('');
@@ -388,7 +410,7 @@ class SmartLockManagerPanel extends HTMLElement {
                 </div>
                 <div class="child-lock-actions">
                   <button class="child-remove-btn" onclick="window.smartLockManagerPanel.callService('remove_child_lock', {entity_id: '${childEntityId}'})" title="Remove Child Lock">
-                    <ha-icon icon="mdi:link-off"></ha-icon>
+                    <ha-icon icon="mdi:delete-outline"></ha-icon>
                   </button>
                   <button class="child-settings-btn" onclick="SmartLockManagerPanel.openSettings('${childEntityId}')" title="Child Lock Settings">
                     <ha-icon icon="mdi:cog"></ha-icon>
@@ -410,17 +432,112 @@ class SmartLockManagerPanel extends HTMLElement {
       return { color: 'red', message: 'Child lock offline' };
     }
 
-    // Check if codes are synchronized (simplified for now)
-    const childActiveCount = attributes.active_codes_count || 0;
+    // Get parent lock for comparison
     const parentLock = this._locks?.find(l =>
       (l.attributes?.lock_entity_id || l.entity_id) === parentLockEntityId
     );
-    const parentActiveCount = parentLock?.attributes?.active_codes_count || 0;
 
-    if (childActiveCount === parentActiveCount) {
-      return { color: 'green', message: 'Synchronized' };
+    if (!parentLock) {
+      return { color: 'red', message: 'Parent lock not found' };
+    }
+
+    // Get slot details from both locks
+    const childSlots = attributes.slot_details || {};
+    const parentSlots = parentLock.attributes?.slot_details || {};
+
+    const totalSlots = parentLock.attributes?.total_slots || 10;
+    const startFrom = parentLock.attributes?.start_from || 1;
+
+    let syncedCount = 0;
+    let errorCount = 0;
+    let syncingCount = 0;
+    let missingFromChild = 0;
+
+    // Check each slot for sync status
+    for (let i = 0; i < totalSlots; i++) {
+      const slotNumber = startFrom + i;
+      const slotKey = `slot_${slotNumber}`;
+
+      const parentSlot = parentSlots[slotKey];
+      const childSlot = childSlots[slotKey];
+
+      // If parent slot is empty, child should be empty too
+      if (!parentSlot || !parentSlot.is_active) {
+        if (!childSlot || !childSlot.is_active) {
+          syncedCount++; // Both empty = synced
+        } else {
+          errorCount++; // Child has data but parent doesn't = error
+        }
+        continue;
+      }
+
+      // Parent slot is active, check child
+      if (!childSlot || !childSlot.is_active) {
+        // Parent has active slot but child doesn't - this indicates syncing needed
+        missingFromChild++;
+        continue;
+      }
+
+      // Compare slot data
+      const parentPin = parentSlot.usercode;
+      const childPin = childSlot.usercode;
+      const parentUser = parentSlot.user_name;
+      const childUser = childSlot.user_name;
+      const parentActive = parentSlot.is_active;
+      const childActive = childSlot.is_active;
+
+      if (parentPin === childPin &&
+          parentUser === childUser &&
+          parentActive === childActive) {
+        syncedCount++; // Perfect match = synced
+      } else if (childSlot.is_syncing ||
+                 parentSlot.sync_status === 'syncing' ||
+                 childSlot.slot_status === 'Synchronizing' ||
+                 childSlot.status?.name === 'SYNCHRONIZING' ||
+                 parentSlot.slot_status === 'Synchronizing' ||
+                 parentSlot.status?.name === 'SYNCHRONIZING') {
+        syncingCount++; // Currently syncing
+      } else {
+        errorCount++; // Data mismatch = error
+      }
+    }
+
+    // Determine overall status - treat missing slots as syncing if recently updated
+    const childLastUpdate = new Date(attributes.last_updated || attributes.last_update || 0);
+    const parentLastUpdate = new Date(parentLock.attributes?.last_updated || parentLock.attributes?.last_update || 0);
+    const now = new Date();
+    const childTimeSinceUpdate = now - childLastUpdate;
+    const parentTimeSinceUpdate = now - parentLastUpdate;
+    const recentlyUpdated = childTimeSinceUpdate < 120000 || parentTimeSinceUpdate < 120000; // Within last 2 minutes
+
+    if (missingFromChild > 0 && recentlyUpdated) {
+      // Parent was recently updated and child is missing slots - likely syncing
+      return {
+        color: 'yellow',
+        message: `${missingFromChild} slot${missingFromChild > 1 ? 's' : ''} syncing to child...`
+      };
+    } else if (syncingCount > 0) {
+      return {
+        color: 'yellow',
+        message: `${syncingCount} slot${syncingCount > 1 ? 's' : ''} syncing...`
+      };
+    } else if (missingFromChild > 0 && errorCount === 0) {
+      // Only missing slots, no errors - treat as syncing (more optimistic)
+      return {
+        color: 'yellow',
+        message: `${missingFromChild} slot${missingFromChild > 1 ? 's' : ''} syncing to child...`
+      };
+    } else if (errorCount > 0 || missingFromChild > 0) {
+      const totalIssues = errorCount + missingFromChild;
+      return {
+        color: 'red',
+        message: `${totalIssues} slot${totalIssues > 1 ? 's' : ''} out of sync`
+      };
     } else {
-      return { color: 'red', message: 'Out of sync' };
+      return {
+        color: 'green',
+        message: `All ${syncedCount} slots synchronized`
+      };
     }
   }
 
@@ -515,7 +632,7 @@ class SmartLockManagerPanel extends HTMLElement {
         this.closeSettingsModal();
 
         // Show card spinner for the background operation
-        this.showCardSpinner(entityIdForSpinner);
+        this.showCardSpinner(entityIdForSpinner, 'Updating...');
 
         // Now make the service call in background
         const result = await this.callService('update_lock_settings', updateData);
@@ -630,7 +747,7 @@ class SmartLockManagerPanel extends HTMLElement {
 
     // Close modal immediately and show card spinner
     this.closeModal();
-    this.showCardSpinner(entityIdForSpinner);
+    this.showCardSpinner(entityIdForSpinner, 'Saving...');
 
     try {
       if (!isActive && pinCode) {
@@ -683,6 +800,16 @@ class SmartLockManagerPanel extends HTMLElement {
       }
     }
 
+    // Get date range values
+    const accessFromField = form.querySelector('#access_from');
+    const accessToField = form.querySelector('#access_to');
+    if (accessFromField && accessFromField.value) {
+      serviceData.start_date = accessFromField.value;
+    }
+    if (accessToField && accessToField.value) {
+      serviceData.end_date = accessToField.value;
+    }
+
     await this.callService('set_code_advanced', serviceData);
 
     // Automatically sync the code to the physical Z-Wave lock
@@ -716,7 +843,7 @@ class SmartLockManagerPanel extends HTMLElement {
   async clearSlot(slotNumber) {
     if (confirm(`Clear slot ${slotNumber} completely? This will remove the user and code from both Smart Lock Manager and the physical lock.`)) {
       // Show card spinner during clear operation
-      this.showCardSpinner(this._currentLockEntityId);
+      this.showCardSpinner(this._currentLockEntityId, 'Clearing...');
 
       try {
         await this.callService('clear_code', {
@@ -750,6 +877,140 @@ class SmartLockManagerPanel extends HTMLElement {
           this.loadLockData();
         }, 250);
       }
+    }
+  }
+
+  validatePinCodeInput(input) {
+    const pinValue = input.value;
+    const messageElement = document.getElementById('pin-validation-message');
+
+    if (!messageElement) return;
+
+    // Clear previous validation styles
+    input.classList.remove('pin-error', 'pin-valid');
+
+    if (!pinValue) {
+      // Empty field - hide message
+      messageElement.style.opacity = '0';
+      messageElement.textContent = '';
+      return;
+    }
+
+    // Check if PIN contains only digits
+    if (!/^\d*$/.test(pinValue)) {
+      input.classList.add('pin-error');
+      messageElement.textContent = 'PIN must contain only digits';
+      messageElement.className = 'pin-validation-message error';
+      messageElement.style.opacity = '1';
+      return;
+    }
+
+    // Check PIN length
+    if (pinValue.length < 4) {
+      input.classList.add('pin-error');
+      messageElement.textContent = 'PIN must be at least 4 digits';
+      messageElement.className = 'pin-validation-message error';
+      messageElement.style.opacity = '1';
+    } else if (pinValue.length > 8) {
+      input.classList.add('pin-error');
+      messageElement.textContent = 'PIN must be 8 digits or less';
+      messageElement.className = 'pin-validation-message error';
+      messageElement.style.opacity = '1';
+    } else {
+      // Valid PIN
+      input.classList.add('pin-valid');
+      messageElement.textContent = 'Valid PIN code';
+      messageElement.className = 'pin-validation-message success';
+      messageElement.style.opacity = '1';
+    }
+  }
+
+  validateDateRange() {
+    const startInput = document.getElementById('access_from');
+    const endInput = document.getElementById('access_to');
+
+    if (!startInput || !endInput) return;
+
+    const startValue = startInput.value;
+    const endValue = endInput.value;
+
+    // Clear previous validation styles
+    startInput.classList.remove('date-error', 'date-valid', 'date-warning');
+    endInput.classList.remove('date-error', 'date-valid', 'date-warning');
+
+    // If both are empty, that's valid (unlimited access)
+    if (!startValue && !endValue) {
+      this.hideDateRangeError();
+      return;
+    }
+
+    // If only one is filled, that's also valid
+    if (!startValue || !endValue) {
+      if (startValue) startInput.classList.add('date-valid');
+      if (endValue) endInput.classList.add('date-valid');
+      this.hideDateRangeError();
+      return;
+    }
+
+    // Both are filled - validate range
+    const startDate = new Date(startValue);
+    const endDate = new Date(endValue);
+    const now = new Date();
+
+    // Check if end date is after start date
+    if (endDate <= startDate) {
+      startInput.classList.add('date-error');
+      endInput.classList.add('date-error');
+      this.showDateRangeError('End date must be after start date');
+      return;
+    }
+
+    // Warn if start date is in the past (but allow it)
+    if (startDate < now) {
+      startInput.classList.add('date-warning');
+    } else {
+      startInput.classList.add('date-valid');
+    }
+
+    // Warn if end date is in the past
+    if (endDate < now) {
+      endInput.classList.add('date-error');
+      this.showDateRangeError('End date cannot be in the past');
+      return;
+    } else {
+      endInput.classList.add('date-valid');
+    }
+
+    this.hideDateRangeError();
+  }
+
+  showDateRangeError(message) {
+    let errorElement = document.getElementById('date-range-error');
+    if (!errorElement) {
+      errorElement = document.createElement('div');
+      errorElement.id = 'date-range-error';
+      errorElement.className = 'date-range-error';
+      errorElement.style.cssText = `
+        color: var(--error-color, #f44336);
+        font-size: 12px;
+        margin-top: 4px;
+        padding: 4px 0;
+        font-weight: 500;
+      `;
+
+      const dateSection = document.querySelector('.date-range-section');
+      if (dateSection) {
+        dateSection.appendChild(errorElement);
+      }
+    }
+    errorElement.textContent = message;
+    errorElement.style.display = 'block';
+  }
+
+  hideDateRangeError() {
+    const errorElement = document.getElementById('date-range-error');
+    if (errorElement) {
+      errorElement.style.display = 'none';
     }
   }
 
@@ -879,7 +1140,8 @@ class SmartLockManagerPanel extends HTMLElement {
 
     // No confirmation needed - just toggle immediately
     // Show card spinner during enable/disable operation
-    this.showCardSpinner(this._currentLockEntityId);
+    const message = isCurrentlyActive ? 'Disabling...' : 'Enabling...';
+    this.showCardSpinner(this._currentLockEntityId, message);
 
     try {
       await this.callService(action, {
@@ -1610,6 +1872,82 @@ class SmartLockManagerPanel extends HTMLElement {
           background: var(--card-background-color);
           color: var(--primary-text-color);
           font-size: 14px;
+          box-sizing: border-box;
+        }
+
+        /* PIN validation styles */
+        .form-group input.pin-error {
+          border-color: #f44336;
+          background: rgba(244, 67, 54, 0.1);
+        }
+
+        .form-group input.pin-valid {
+          border-color: #4caf50;
+          background: rgba(76, 175, 80, 0.1);
+        }
+
+        .pin-validation-message {
+          font-size: 12px;
+          margin-top: 4px;
+          display: block;
+          transition: opacity 0.2s;
+        }
+
+        .pin-validation-message.error {
+          color: #f44336;
+        }
+
+        .pin-validation-message.success {
+          color: #4caf50;
+        }
+
+        /* Date validation styles */
+        .form-group input.date-error {
+          border-color: #f44336;
+          background: rgba(244, 67, 54, 0.1);
+        }
+        .form-group input.date-valid {
+          border-color: #4caf50;
+          background: rgba(76, 175, 80, 0.1);
+        }
+        .form-group input.date-warning {
+          border-color: #ff9800;
+          background: rgba(255, 152, 0, 0.1);
+        }
+
+        /* Date range input styling */
+        .form-group input[type="datetime-local"] {
+          font-family: inherit;
+          cursor: pointer;
+          min-width: 200px;
+        }
+
+        .form-group input[type="datetime-local"]:focus {
+          outline: 2px solid var(--primary-color);
+          outline-offset: 1px;
+        }
+
+        /* Date range section styling */
+        .date-range-section {
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          padding: 16px;
+          margin: 12px 0;
+          background: var(--card-background-color);
+        }
+
+        .date-range-header {
+          font-weight: 500;
+          margin-bottom: 8px;
+          color: var(--primary-text-color);
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .date-range-header::before {
+          content: "📅";
+          font-size: 16px;
         }
 
         /* Removed - using container-based width control now */
@@ -1656,6 +1994,105 @@ class SmartLockManagerPanel extends HTMLElement {
           padding: 40px;
           color: var(--secondary-text-color);
         }
+
+        /* Debug Interface Styles */
+        .debug-panel {
+          background: var(--card-background-color);
+          border: 2px solid var(--warning-color);
+          border-radius: 12px;
+          padding: 20px;
+          margin: 20px 0;
+          box-shadow: var(--ha-card-box-shadow);
+        }
+
+        .debug-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 16px;
+          color: var(--warning-color);
+        }
+
+        .debug-section {
+          margin-bottom: 20px;
+          padding: 16px;
+          background: var(--primary-background-color);
+          border-radius: 8px;
+          border: 1px solid var(--divider-color);
+        }
+
+        .debug-section h4 {
+          margin: 0 0 12px 0;
+          color: var(--primary-text-color);
+          font-size: 16px;
+        }
+
+        .debug-info {
+          font-family: 'Courier New', monospace;
+          background: var(--code-editor-background-color, #f8f8f8);
+          padding: 12px;
+          border-radius: 4px;
+          border: 1px solid var(--divider-color);
+          white-space: pre-wrap;
+          font-size: 12px;
+          line-height: 1.4;
+          overflow-x: auto;
+        }
+
+        .debug-controls {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+        }
+
+        .debug-btn-small {
+          background: var(--primary-color);
+          color: var(--text-primary-color);
+          border: none;
+          padding: 6px 12px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 12px;
+          transition: background-color 0.2s;
+        }
+
+        .debug-btn-small:hover {
+          background: var(--primary-color-dark);
+        }
+
+        .debug-btn-small.danger {
+          background: var(--error-color);
+        }
+
+        .debug-btn-small.danger:hover {
+          background: var(--error-color-dark);
+        }
+
+        .debug-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          font-weight: 500;
+        }
+
+        .debug-status.green {
+          background: rgba(76, 175, 80, 0.1);
+          color: #4CAF50;
+        }
+
+        .debug-status.yellow {
+          background: rgba(255, 193, 7, 0.1);
+          color: #FFC107;
+        }
+
+        .debug-status.red {
+          background: rgba(244, 67, 54, 0.1);
+          color: #F44336;
+        }
       </style>
 
       <div class="header">
@@ -1663,7 +2100,14 @@ class SmartLockManagerPanel extends HTMLElement {
           <ha-icon icon="mdi:lock-smart"></ha-icon>
           <h1>Smart Lock Manager</h1>
         </div>
-        <div class="refresh-container" style="margin-right: 5px;">
+        <div class="header-controls" style="display: flex; gap: 8px;">
+          <button class="debug-btn"
+                  onclick="SmartLockManagerPanel.toggleDebugMode()"
+                  title="Toggle debugging interface"
+                  style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: var(--primary-text-color); opacity: 0.7; transition: opacity 0.2s;">
+            <ha-icon icon="mdi:bug" style="margin-right: 3px; width: 25px; height: 25px;"></ha-icon>
+            <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 6px;">Debug</span>
+          </button>
           <button class="refresh-btn"
                   onclick="SmartLockManagerPanel.forceRefresh()"
                   title="Refresh all lock data from Home Assistant"
@@ -1673,6 +2117,8 @@ class SmartLockManagerPanel extends HTMLElement {
           </button>
         </div>
       </div>
+
+      ${this._debugMode ? this.renderDebugInterface() : ''}
 
       ${locks.length === 0 ? `
         <div class="no-locks">
@@ -1834,7 +2280,28 @@ class SmartLockManagerPanel extends HTMLElement {
 
             <div class="form-group">
               <label for="pin_code">PIN Code</label>
-              <input type="text" id="pin_code" name="pin_code" placeholder="Enter PIN code" required onkeypress="if(event.key==='Enter') SmartLockManagerPanel.saveSlot()">
+              <input type="text" id="pin_code" name="pin_code" placeholder="Enter PIN code (4-8 digits)" required
+                     oninput="SmartLockManagerPanel.validatePinCode(this)"
+                     onkeypress="if(event.key==='Enter') SmartLockManagerPanel.saveSlot()">
+              <span id="pin-validation-message" class="pin-validation-message" style="opacity: 0;"></span>
+            </div>
+
+            <!-- Date Range Access Control -->
+            <div class="date-range-section">
+              <div class="date-range-header">Access Date Range</div>
+              <small style="color: var(--secondary-text-color); margin-bottom: 16px; display: block;">Leave fields empty for unlimited access</small>
+
+              <div class="form-group">
+                <label for="access_from">Start Date & Time</label>
+                <input type="datetime-local" id="access_from" name="access_from" onchange="SmartLockManagerPanel.validateDateRange()">
+                <small>When access begins (leave empty for immediate access)</small>
+              </div>
+
+              <div class="form-group">
+                <label for="access_to">End Date & Time</label>
+                <input type="datetime-local" id="access_to" name="access_to" onchange="SmartLockManagerPanel.validateDateRange()">
+                <small>When access expires (leave empty for permanent access)</small>
+              </div>
             </div>
 
             <div class="form-group">
@@ -2023,6 +2490,141 @@ class SmartLockManagerPanel extends HTMLElement {
   }
 
 
+
+  // Debug Interface Methods
+  toggleDebugMode() {
+    this._debugMode = !this._debugMode;
+    this.requestUpdate();
+  }
+
+  static toggleDebugMode() {
+    const panel = window.smartLockManagerPanel;
+    if (panel) {
+      panel.toggleDebugMode();
+    }
+  }
+
+  renderDebugInterface() {
+    if (!this._locks || this._locks.length === 0) {
+      return `<div class="debug-panel">
+        <div class="debug-header">
+          <ha-icon icon="mdi:bug"></ha-icon>
+          <h3>Debug Mode - No locks found</h3>
+        </div>
+      </div>`;
+    }
+
+    return `
+      <div class="debug-panel">
+        <div class="debug-header">
+          <ha-icon icon="mdi:bug"></ha-icon>
+          <h3>Smart Lock Manager Debug Interface</h3>
+        </div>
+        ${this._locks.map(lock => this.renderLockDebugInfo(lock)).join('')}
+      </div>
+    `;
+  }
+
+  renderLockDebugInfo(lock) {
+    const attributes = lock.attributes || {};
+    const lockEntityId = attributes.lock_entity_id || lock.entity_id;
+    const lockName = attributes.friendly_name || attributes.lock_name || lockEntityId;
+    const slotDetails = attributes.slot_details || {};
+    const totalSlots = attributes.total_slots || 10;
+    const isMainLock = attributes.is_main_lock !== false;
+    const parentLockId = attributes.parent_lock_id;
+    const childLockIds = attributes.child_lock_ids || [];
+
+    // Get parent-child relationship info
+    let parentLock = null;
+    let childLocks = [];
+    if (parentLockId) {
+      parentLock = this._locks.find(l => (l.attributes?.lock_entity_id || l.entity_id) === parentLockId);
+    }
+    if (childLockIds.length > 0) {
+      childLocks = this._locks.filter(l => childLockIds.includes(l.attributes?.lock_entity_id || l.entity_id));
+    }
+
+    // Analyze sync status if this is a child lock
+    let syncAnalysis = '';
+    if (parentLock) {
+      const syncStatus = this.getChildSyncStatus(lock, parentLockId);
+      const parentSlots = parentLock.attributes?.slot_details || {};
+
+      syncAnalysis = `
+        <div class="debug-section">
+          <h4>🔄 Child Lock Sync Analysis</h4>
+          <div class="debug-status ${syncStatus.color}">
+            Status: ${syncStatus.message}
+          </div>
+          <div class="debug-info">Parent: ${parentLock.attributes?.friendly_name || parentLock.attributes?.lock_name || parentLockId}
+Parent Slots: ${Object.keys(parentSlots).filter(key => parentSlots[key]?.is_active).length} active
+Child Slots: ${Object.keys(slotDetails).filter(key => slotDetails[key]?.is_active).length} active
+
+Slot Comparison:
+${Array.from({length: totalSlots}, (_, i) => {
+  const slotNum = i + 1;
+  const slotKey = `slot_${slotNum}`;
+  const parentSlot = parentSlots[slotKey];
+  const childSlot = slotDetails[slotKey];
+
+  const parentActive = parentSlot?.is_active ? '✓' : '✗';
+  const childActive = childSlot?.is_active ? '✓' : '✗';
+  const parentUser = parentSlot?.user_name || 'Empty';
+  const childUser = childSlot?.user_name || 'Empty';
+  const match = (!parentSlot?.is_active && !childSlot?.is_active) ||
+               (parentSlot?.usercode === childSlot?.usercode &&
+                parentSlot?.user_name === childSlot?.user_name &&
+                parentSlot?.is_active === childSlot?.is_active) ? '✓' : '✗';
+
+  return `Slot ${slotNum}: P[${parentActive} ${parentUser}] C[${childActive} ${childUser}] Match[${match}]`;
+}).join('\n')}</div>
+          <div class="debug-controls">
+            <button class="debug-btn-small" onclick="SmartLockManagerPanel.debugSyncSlot('${lockEntityId}', '${parentLockId}', 2)">Force Sync Slot 2</button>
+            <button class="debug-btn-small" onclick="SmartLockManagerPanel.debugSyncAllSlots('${lockEntityId}', '${parentLockId}')">Sync All Slots</button>
+            <button class="debug-btn-small danger" onclick="SmartLockManagerPanel.debugClearChildSlot('${lockEntityId}', 2)">Clear Child Slot 2</button>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="debug-section">
+        <h4>🔐 ${lockName} (${isMainLock ? 'Parent' : 'Child'} Lock)</h4>
+        <div class="debug-info">Entity ID: ${lockEntityId}
+Type: ${isMainLock ? 'Parent Lock' : 'Child Lock'}
+Total Slots: ${totalSlots}
+Active Slots: ${Object.keys(slotDetails).filter(key => slotDetails[key]?.is_active).length}
+Connected: ${attributes.is_connected !== false ? 'Yes' : 'No'}
+Last Update: ${attributes.last_update ? new Date(attributes.last_update).toLocaleString() : 'Unknown'}
+${parentLock ? `Parent: ${parentLock.attributes?.friendly_name || parentLock.attributes?.lock_name}` : ''}
+${childLocks.length > 0 ? `Children: ${childLocks.map(c => c.attributes?.friendly_name || c.attributes?.lock_name).join(', ')}` : ''}
+
+Active Slots Detail:
+${Object.keys(slotDetails)
+  .filter(key => slotDetails[key]?.is_active)
+  .sort((a, b) => {
+    const numA = parseInt(a.replace('slot_', ''));
+    const numB = parseInt(b.replace('slot_', ''));
+    return numA - numB;
+  })
+  .map(key => {
+    const slot = slotDetails[key];
+    const slotNum = key.replace('slot_', '');
+    return `Slot ${slotNum}: ${slot.user_name} (PIN: ${slot.usercode ? '***' : 'None'})`;
+  })
+  .join('\n') || 'No active slots'}</div>
+        <div class="debug-controls">
+          <button class="debug-btn-small" onclick="SmartLockManagerPanel.debugAddSlot('${lockEntityId}', 'Test User')">Add Test Slot</button>
+          <button class="debug-btn-small" onclick="SmartLockManagerPanel.debugToggleSlot('${lockEntityId}', 1)">Toggle Slot 1</button>
+          <button class="debug-btn-small danger" onclick="SmartLockManagerPanel.debugClearSlot('${lockEntityId}', 2)">Clear Slot 2</button>
+          <button class="debug-btn-small" onclick="SmartLockManagerPanel.forceRefresh()">Refresh Data</button>
+        </div>
+      </div>
+      ${syncAnalysis}
+    `;
+  }
+
   // Static methods for event handling
   static selectLock(entityId) {
     const panel = window.smartLockManagerPanel;
@@ -2063,6 +2665,14 @@ class SmartLockManagerPanel extends HTMLElement {
     panel.saveSlotSettings();
   }
 
+  static validatePinCode(input) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) {
+      return;
+    }
+    panel.validatePinCodeInput(input);
+  }
+
   static toggleSlot(lockEntityId, slotNumber) {
     const panel = window.smartLockManagerPanel;
     if (!panel) {
@@ -2097,7 +2707,7 @@ class SmartLockManagerPanel extends HTMLElement {
     }
 
     // Show card spinner during refresh and sync
-    panel.showCardSpinner(lockEntityId);
+    panel.showCardSpinner(lockEntityId, 'Syncing...');
 
     try {
       // Force sync with Z-Wave and refresh data
@@ -2173,6 +2783,7 @@ class SmartLockManagerPanel extends HTMLElement {
     }
 
     const isMainLockSelect = panel.shadowRoot.querySelector('#is_main_lock');
+    const parentLockSelect = panel.shadowRoot.querySelector('#parent_lock_id');
     const parentLockSection = panel.shadowRoot.querySelector('.parent-lock-section');
     const mainLockSettings = panel.shadowRoot.querySelector('.main-lock-settings');
 
@@ -2180,16 +2791,52 @@ class SmartLockManagerPanel extends HTMLElement {
       return;
     }
 
-    const isMainLock = isMainLockSelect.value === 'true';
+    // Check if this lock is currently a child lock
+    const currentLock = panel._locks?.find(l => l.attributes.lock_entity_id === panel._currentLockEntityId);
+    const isCurrentlyChildLock = currentLock?.attributes?.parent_lock_id;
 
-    if (isMainLock) {
-      // Show main lock settings, hide parent selection
-      parentLockSection.style.display = 'none';
-      mainLockSettings.style.display = 'block';
-    } else {
-      // Show parent selection, hide main lock settings
+    if (isCurrentlyChildLock) {
+      // Lock is already a child - disable both dropdowns and show informational message
+      isMainLockSelect.disabled = true;
+      if (parentLockSelect) {
+        parentLockSelect.disabled = true;
+      }
       parentLockSection.style.display = 'block';
       mainLockSettings.style.display = 'none';
+
+      // Add or update info message
+      let infoMessage = parentLockSection.querySelector('.child-lock-info-message');
+      if (!infoMessage) {
+        infoMessage = document.createElement('small');
+        infoMessage.className = 'child-lock-info-message';
+        infoMessage.style.cssText = 'color: var(--warning-color); font-style: italic; display: block; margin-top: 8px;';
+        parentLockSection.appendChild(infoMessage);
+      }
+      infoMessage.textContent = 'This lock is currently a child lock. Use the "Unlink" button on the main panel to change its status.';
+    } else {
+      // Lock is not currently a child - enable dropdowns and use normal logic
+      isMainLockSelect.disabled = false;
+      if (parentLockSelect) {
+        parentLockSelect.disabled = false;
+      }
+
+      // Remove info message if it exists
+      const infoMessage = parentLockSection.querySelector('.child-lock-info-message');
+      if (infoMessage) {
+        infoMessage.remove();
+      }
+
+      const isMainLock = isMainLockSelect.value === 'true';
+
+      if (isMainLock) {
+        // Show main lock settings, hide parent selection
+        parentLockSection.style.display = 'none';
+        mainLockSettings.style.display = 'block';
+      } else {
+        // Show parent selection, hide main lock settings
+        parentLockSection.style.display = 'block';
+        mainLockSettings.style.display = 'none';
+      }
     }
   }
 
@@ -2201,7 +2848,7 @@ class SmartLockManagerPanel extends HTMLElement {
 
     // Show spinners on all lock cards
     const lockEntityIds = panel._locks?.map(lock => lock.attributes.lock_entity_id) || [];
-    lockEntityIds.forEach(entityId => panel.showCardSpinner(entityId));
+    lockEntityIds.forEach(entityId => panel.showCardSpinner(entityId, 'Refreshing...'));
 
     try {
       // Force sync with Z-Wave for all locks
@@ -2275,7 +2922,7 @@ class SmartLockManagerPanel extends HTMLElement {
     }
   }
 
-  showCardSpinner(lockEntityId) {
+  showCardSpinner(lockEntityId, message = 'Saving...') {
     if (!lockEntityId) {
       return;
     }
@@ -2284,6 +2931,11 @@ class SmartLockManagerPanel extends HTMLElement {
     const spinner = this.shadowRoot.getElementById(spinnerId);
 
     if (spinner) {
+      // Update the message
+      const messageSpan = spinner.querySelector('span');
+      if (messageSpan) {
+        messageSpan.textContent = message;
+      }
       spinner.style.display = 'inline-flex';
     } else {
     }
@@ -2418,14 +3070,126 @@ class SmartLockManagerPanel extends HTMLElement {
     }
   }
 
+  // Debug Action Methods
+  static debugAddSlot(lockEntityId, userName) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) return;
+
+    // Find first available slot
+    const lock = panel._locks.find(l => (l.attributes?.lock_entity_id || l.entity_id) === lockEntityId);
+    if (!lock) return;
+
+    const slotDetails = lock.attributes?.slot_details || {};
+    let availableSlot = null;
+    for (let i = 1; i <= 10; i++) {
+      if (!slotDetails[`slot_${i}`]?.is_active) {
+        availableSlot = i;
+        break;
+      }
+    }
+
+    if (!availableSlot) {
+      alert('No available slots');
+      return;
+    }
+
+    const randomPin = Math.floor(1000 + Math.random() * 9000).toString();
+    panel.callService('set_code_advanced', {
+      entity_id: lockEntityId,
+      code_slot: availableSlot,
+      usercode: randomPin,
+      code_slot_name: `${userName} ${availableSlot}`
+    });
+  }
+
+  static debugToggleSlot(lockEntityId, slotNumber) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) return;
+
+    const lock = panel._locks.find(l => (l.attributes?.lock_entity_id || l.entity_id) === lockEntityId);
+    if (!lock) return;
+
+    const slotDetails = lock.attributes?.slot_details || {};
+    const slot = slotDetails[`slot_${slotNumber}`];
+    const isActive = slot?.is_active;
+
+    if (isActive) {
+      panel.callService('disable_slot', {
+        entity_id: lockEntityId,
+        code_slot: slotNumber
+      });
+    } else if (slot) {
+      panel.callService('enable_slot', {
+        entity_id: lockEntityId,
+        code_slot: slotNumber
+      });
+    } else {
+      alert(`Slot ${slotNumber} doesn't exist. Use Add Test Slot first.`);
+    }
+  }
+
+  static debugClearSlot(lockEntityId, slotNumber) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) return;
+
+    panel.callService('clear_code', {
+      entity_id: lockEntityId,
+      code_slot: slotNumber
+    });
+  }
+
+  static debugSyncSlot(childEntityId, parentEntityId, slotNumber) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) return;
+
+    const parentLock = panel._locks.find(l => (l.attributes?.lock_entity_id || l.entity_id) === parentEntityId);
+    if (!parentLock) {
+      alert('Parent lock not found');
+      return;
+    }
+
+    const parentSlots = parentLock.attributes?.slot_details || {};
+    const parentSlot = parentSlots[`slot_${slotNumber}`];
+
+    if (!parentSlot?.is_active) {
+      alert(`Parent slot ${slotNumber} is not active`);
+      return;
+    }
+
+    // Copy the slot from parent to child
+    panel.callService('set_code_advanced', {
+      entity_id: childEntityId,
+      code_slot: slotNumber,
+      usercode: parentSlot.usercode,
+      code_slot_name: parentSlot.user_name
+    });
+  }
+
+  static debugSyncAllSlots(childEntityId, parentEntityId) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel) return;
+
+    panel.callService('sync_child_locks', {
+      entity_id: parentEntityId
+    });
+  }
+
+  static debugClearChildSlot(childEntityId, slotNumber) {
+    this.debugClearSlot(childEntityId, slotNumber);
+  }
+
   static toggleLock(lockEntityId, currentState) {
     const panel = window.smartLockManagerPanel;
     if (!panel) {
       return;
     }
 
-    // Determine the action based on current state
+    // Determine the action and message based on current state
     const action = currentState === 'locked' ? 'unlock' : 'lock';
+    const message = currentState === 'locked' ? 'Unlocking...' : 'Locking...';
+
+    // Show spinner with appropriate message
+    panel.showCardSpinner(lockEntityId, message);
 
     // Call the Home Assistant lock service
     panel.callService(action, {
@@ -2435,14 +3199,24 @@ class SmartLockManagerPanel extends HTMLElement {
       setTimeout(() => {
         panel.loadLockData();
       }, 500);
+    }).finally(() => {
+      // Hide spinner when operation completes
+      panel.hideCardSpinner(lockEntityId);
     });
   }
 
 
 }
 
-// Register the custom element
-customElements.define('smart-lock-manager-panel', SmartLockManagerPanel);
+// Set global reference
+window.SmartLockManagerPanel = SmartLockManagerPanel;
+
+// Register the custom element only if not already defined
+if (!customElements.get('smart-lock-manager-panel')) {
+  customElements.define('smart-lock-manager-panel', SmartLockManagerPanel);
+}
+
+} // End of redefinition guard
 
 // Export for Home Assistant
 window.customCards = window.customCards || [];
