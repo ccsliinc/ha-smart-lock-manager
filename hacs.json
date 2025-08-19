@@ -2,7 +2,11 @@
   "name": "Smart Lock Manager",
   "content_in_root": false,
   "render_readme": true,
-  "domains": ["lock"],
+  "domains": ["lock", "sensor"],
   "iot_class": "Local Polling",
-  "version": "1.0.0"
+  "version": "2025.1.0",
+  "hacs": "2025.1.0",
+  "homeassistant": "2024.8.0",
+  "zip_release": true,
+  "filename": "smart_lock_manager.zip"
 }

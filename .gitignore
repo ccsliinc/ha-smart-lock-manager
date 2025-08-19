@@ -14,6 +14,7 @@ venv/
 
 # Claude settings
 .claude/
+CLAUDE.md
 
 # Home Assistant Development Environment
 config/
@@ -74,13 +75,42 @@ MANIFEST
 _temp/
 temp/
 
-# Node.js (if any)
+# Node.js and Frontend Build
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
+yarn.lock
+.parcel-cache/
+.cache/
+
+# Frontend build outputs (but keep custom component dist)
+*.min.js
+*.min.css
+*.map
+.rollup.cache/
+.webpack/
+
+# Security and analysis tools
+.bandit
+.vulture
+.safety-cache/
+security-scan-results.json
 
 # Environment files
 .env
 .env.local
 .env.*.local
+
+# Development and debugging
+*.debug
+.debug/
+debug.log
+.local/
+
+# Backup and temporary editing files
+*~
+*.orig
+*.rej
+.#*

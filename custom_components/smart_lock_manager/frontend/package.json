@@ -1,0 +1,50 @@
+{
+  "name": "smart-lock-manager-frontend",
+  "version": "2025.1.0",
+  "description": "Frontend build system for Smart Lock Manager Home Assistant component",
+  "main": "dist/smart-lock-manager-panel.js",
+  "private": true,
+  "scripts": {
+    "build": "rollup -c",
+    "build:prod": "NODE_ENV=production rollup -c",
+    "dev": "rollup -c -w",
+    "clean": "rm -rf dist/*",
+    "lint": "eslint src/**/*.js",
+    "format": "prettier --write src/**/*.js"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-replace": "^5.0.5",
+    "@rollup/plugin-terser": "^0.4.4",
+    "eslint": "^8.57.0",
+    "eslint-config-standard": "^17.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-n": "^16.6.2",
+    "eslint-plugin-promise": "^6.1.1",
+    "prettier": "^3.2.5",
+    "rollup": "^4.9.6",
+    "rollup-plugin-copy": "^3.5.0"
+  },
+  "eslintConfig": {
+    "extends": ["standard"],
+    "env": {
+      "browser": true,
+      "es6": true
+    },
+    "globals": {
+      "customElements": "readonly",
+      "HTMLElement": "readonly"
+    },
+    "rules": {
+      "no-console": "warn",
+      "no-debugger": "error"
+    }
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "es5"
+  }
+}

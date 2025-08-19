@@ -44,6 +44,34 @@ repos:
           - --ignore-missing-imports
         files: ^custom_components/.+\.py$
 
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args:
+          - --configfile=pyproject.toml
+          - --severity-level=medium
+          - --confidence-level=medium
+        files: ^custom_components/.+\.py$
+
+  - repo: https://github.com/pyupio/safety
+    rev: 3.2.9
+    hooks:
+      - id: safety
+        args:
+          - check
+          - --json
+          - --ignore=70612  # Known issue with Jinja2 that's not exploitable in HA context
+
+  - repo: https://github.com/jendrikseipp/vulture
+    rev: v2.12
+    hooks:
+      - id: vulture
+        args:
+          - --min-confidence=60
+          - --exclude=tests,venv,config
+        files: ^custom_components/.+\.py$
+
   - repo: local
     hooks:
       - id: check-todo-comments
