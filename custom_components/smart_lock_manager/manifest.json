@@ -1,13 +1,14 @@
 {
   "domain": "smart_lock_manager",
   "name": "Smart Lock Manager",
-  "version": "1.0.0",
-  "documentation": "https://github.com/jsugamele/smart_lock_manager",
+  "version": "2025.1.0",
+  "documentation": "https://github.com/jsugamele/smart_lock_manager/blob/main/README.md",
   "dependencies": [],
-  "after_dependencies": [ "input_boolean", "input_datetime", "input_number", "input_select", "ozw", "zwave" ],
+  "after_dependencies": [ "input_boolean", "input_datetime", "input_number", "input_select", "ozw", "zwave", "zwave_js" ],
   "codeowners": ["@jsugamele"],
   "config_flow": true,
   "issue_tracker": "https://github.com/jsugamele/smart_lock_manager/issues",
   "requirements": [],
-  "iot_class": "Local Polling"
+  "iot_class": "Local Polling",
+  "integration_type": "device"
 }

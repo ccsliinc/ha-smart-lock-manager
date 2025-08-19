@@ -14,7 +14,6 @@ class SmartLockManagerPanel extends HTMLElement {
     this._editingSlot = null;
     this._currentLockEntityId = null;
     this._settingsModalOpen = false;
-    this._debugMode = false; // Toggle for debug interface
     this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
     this.setupEventListeners();
   }
@@ -191,15 +190,11 @@ class SmartLockManagerPanel extends HTMLElement {
     // Find the current lock
     const currentLock = this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId);
     if (!currentLock) {
-      // Debug log removed
-      // Debug log removed
       return;
     }
 
     // Get slot details
     const slotDetails = currentLock.attributes?.slot_details?.[`slot_${slotNumber}`];
-    // Debug log removed
-    // Debug log removed
 
     // Get form elements
     const form = this.shadowRoot.querySelector('#slot-form');
@@ -814,7 +809,6 @@ class SmartLockManagerPanel extends HTMLElement {
 
     // Automatically sync the code to the physical Z-Wave lock
     if (serviceData.usercode && serviceData.usercode.length >= 4) {
-      // Debug log removed
       await this.callService('sync_slot_to_zwave', {
         entity_id: serviceData.entity_id,
         code_slot: serviceData.code_slot, // Already converted to int above
@@ -1995,101 +1989,6 @@ class SmartLockManagerPanel extends HTMLElement {
           color: var(--secondary-text-color);
         }
 
-        /* Debug Interface Styles */
-        .debug-panel {
-          background: var(--card-background-color);
-          border: 2px solid var(--warning-color);
-          border-radius: 12px;
-          padding: 20px;
-          margin: 20px 0;
-          box-shadow: var(--ha-card-box-shadow);
-        }
-
-        .debug-header {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 16px;
-          color: var(--warning-color);
-        }
-
-        .debug-section {
-          margin-bottom: 20px;
-          padding: 16px;
-          background: var(--primary-background-color);
-          border-radius: 8px;
-          border: 1px solid var(--divider-color);
-        }
-
-        .debug-section h4 {
-          margin: 0 0 12px 0;
-          color: var(--primary-text-color);
-          font-size: 16px;
-        }
-
-        .debug-info {
-          font-family: 'Courier New', monospace;
-          background: var(--code-editor-background-color, #f8f8f8);
-          padding: 12px;
-          border-radius: 4px;
-          border: 1px solid var(--divider-color);
-          white-space: pre-wrap;
-          font-size: 12px;
-          line-height: 1.4;
-          overflow-x: auto;
-        }
-
-        .debug-controls {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-          margin-top: 12px;
-        }
-
-        .debug-btn-small {
-          background: var(--primary-color);
-          color: var(--text-primary-color);
-          border: none;
-          padding: 6px 12px;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 12px;
-          transition: background-color 0.2s;
-        }
-
-        .debug-btn-small:hover {
-          background: var(--primary-color-dark);
-        }
-
-        .debug-btn-small.danger {
-          background: var(--error-color);
-        }
-
-        .debug-btn-small.danger:hover {
-          background: var(--error-color-dark);
-        }
-
-        .debug-status {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: 500;
-        }
-
-        .debug-status.green {
-          background: rgba(76, 175, 80, 0.1);
-          color: #4CAF50;
-        }
-
-        .debug-status.yellow {
-          background: rgba(255, 193, 7, 0.1);
-          color: #FFC107;
-        }
-
-        .debug-status.red {
           background: rgba(244, 67, 54, 0.1);
           color: #F44336;
         }
@@ -2101,13 +2000,6 @@ class SmartLockManagerPanel extends HTMLElement {
           <h1>Smart Lock Manager</h1>
         </div>
         <div class="header-controls" style="display: flex; gap: 8px;">
-          <button class="debug-btn"
-                  onclick="SmartLockManagerPanel.toggleDebugMode()"
-                  title="Toggle debugging interface"
-                  style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: var(--primary-text-color); opacity: 0.7; transition: opacity 0.2s;">
-            <ha-icon icon="mdi:bug" style="margin-right: 3px; width: 25px; height: 25px;"></ha-icon>
-            <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 6px;">Debug</span>
-          </button>
           <button class="refresh-btn"
                   onclick="SmartLockManagerPanel.forceRefresh()"
                   title="Refresh all lock data from Home Assistant"
@@ -2118,7 +2010,6 @@ class SmartLockManagerPanel extends HTMLElement {
         </div>
       </div>
 
-      ${this._debugMode ? this.renderDebugInterface() : ''}
 
       ${locks.length === 0 ? `
         <div class="no-locks">
@@ -2643,7 +2534,6 @@ ${Object.keys(slotDetails)
     if (!panel) {
       return;
     }
-    // Debug log removed
 
     panel._currentLockEntityId = lockEntityId;
     panel.openSlotModal(slotNumber);
@@ -2729,7 +2619,6 @@ ${Object.keys(slotDetails)
     if (!panel) {
       return;
     }
-    // Debug log removed
     panel.callService('get_usage_stats', {
       entity_id: lockEntityId
     });
@@ -2740,7 +2629,6 @@ ${Object.keys(slotDetails)
     if (!panel) {
       return;
     }
-    // Debug log removed
     panel.callService('sync_child_locks', {
       entity_id: lockEntityId
     });
@@ -3226,4 +3114,3 @@ window.customCards.push({
   description: 'Advanced panel for managing smart locks with scheduling and usage tracking'
 });
 
-// Debug log removed
