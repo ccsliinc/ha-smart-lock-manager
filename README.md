@@ -271,7 +271,7 @@ automation:
 ## 📄 Documentation
 
 - **[Architecture Diagram](architecture_diagram.md)**: Complete technical architecture overview
-- **[developer documentation](developer documentation)**: Development guidance and component details
+- **[API Documentation](docs/API.md)**: Complete service and automation reference
 - **[HACS Integration](hacs.json)**: Home Assistant Community Store configuration
 
 ## 🤝 Support
