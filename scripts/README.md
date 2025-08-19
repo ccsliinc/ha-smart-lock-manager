@@ -12,7 +12,7 @@
 
 ## 📋 Available Scripts
 
-### `setup_dev.sh` 
+### `setup_dev.sh`
 **One-time setup for development environment**
 - Creates virtual environment and installs dependencies
 - Installs pre-commit hooks
@@ -37,7 +37,7 @@
 ## 🎯 Development Workflow
 
 1. **First time setup**: `./scripts/setup_dev.sh`
-2. **Before each session**: `./scripts/test_component.sh` 
+2. **Before each session**: `./scripts/test_component.sh`
 3. **Start development**: `./scripts/start_ha.sh`
 4. **Make changes** to component code
 5. **Restart HA** to see changes (Ctrl+C, then rerun script)
@@ -58,7 +58,7 @@ logger:
 
 This gives you:
 - **All Smart Lock Manager logs** at debug level
-- **Integration loading progress** 
+- **Integration loading progress**
 - **Clean, focused output** without noise
 - **Native HA logging** (no fragile shell filtering)
 

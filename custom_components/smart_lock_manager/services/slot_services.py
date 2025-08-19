@@ -39,6 +39,34 @@ class SlotServices:
 
                         await _save_lock_data(hass, lock, entry_id)
 
+                        # Trigger immediate child sync if this is a main lock with children
+                        if lock.is_main_lock and lock.child_lock_ids:
+                            _LOGGER.info(
+                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s enabled, triggering immediate child sync to %s children",
+                                lock.lock_name,
+                                code_slot,
+                                len(lock.child_lock_ids),
+                            )
+
+                            try:
+                                from ..const import SERVICE_SYNC_CHILD_LOCKS
+                                await hass.services.async_call(
+                                    DOMAIN,
+                                    SERVICE_SYNC_CHILD_LOCKS,
+                                    {ATTR_ENTITY_ID: lock.lock_entity_id},
+                                )
+                                _LOGGER.info(
+                                    "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s enable",
+                                    lock.lock_name,
+                                    code_slot,
+                                )
+                            except Exception as e:
+                                _LOGGER.error(
+                                    "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                    lock.lock_name,
+                                    e,
+                                )
+
                     else:
                         _LOGGER.error(
                             "Failed to enable slot %s in lock %s (no PIN code?)",
@@ -69,6 +97,34 @@ class SlotServices:
                         from .. import _save_lock_data
 
                         await _save_lock_data(hass, lock, entry_id)
+
+                        # Trigger immediate child sync if this is a main lock with children
+                        if lock.is_main_lock and lock.child_lock_ids:
+                            _LOGGER.info(
+                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s disabled, triggering immediate child sync to %s children",
+                                lock.lock_name,
+                                code_slot,
+                                len(lock.child_lock_ids),
+                            )
+
+                            try:
+                                from ..const import SERVICE_SYNC_CHILD_LOCKS
+                                await hass.services.async_call(
+                                    DOMAIN,
+                                    SERVICE_SYNC_CHILD_LOCKS,
+                                    {ATTR_ENTITY_ID: lock.lock_entity_id},
+                                )
+                                _LOGGER.info(
+                                    "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s disable",
+                                    lock.lock_name,
+                                    code_slot,
+                                )
+                            except Exception as e:
+                                _LOGGER.error(
+                                    "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                    lock.lock_name,
+                                    e,
+                                )
 
                     else:
                         _LOGGER.error(

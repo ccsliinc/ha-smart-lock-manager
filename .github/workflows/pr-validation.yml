@@ -11,27 +11,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-    
+
     - name: Cache dependencies
       uses: actions/cache@v3
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pre-commit
-    
+
     - name: Run pre-commit hooks
       run: pre-commit run --all-files
-      
+
     - name: Check for TODO comments in production code
       run: |
         # Allow TODO in test files and scripts, but not in production code
@@ -41,7 +41,7 @@ jobs:
         else
           echo "✅ No TODO comments found in production code"
         fi
-        
+
     - name: Validate manifest.json
       run: |
         python -c "
@@ -60,18 +60,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-asyncio
-        
+
     - name: Run tests
       run: |
         if [ -d "tests" ]; then
@@ -84,30 +84,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Check required documentation files
       run: |
         required_files=(
           "README.md"
-          "CLAUDE.md" 
+          "CLAUDE.md"
           "LICENSE"
           "PULL_REQUEST_TEMPLATE.md"
         )
-        
+
         missing_files=()
         for file in "${required_files[@]}"; do
           if [ ! -f "$file" ]; then
             missing_files+=("$file")
           fi
         done
-        
+
         if [ ${#missing_files[@]} -ne 0 ]; then
           echo "❌ Missing required documentation files: ${missing_files[*]}"
           exit 1
         else
           echo "✅ All required documentation files present"
         fi
-        
+
     - name: Check for keymaster references
       run: |
         if grep -ri "keymaster\|key.master\|key_master" custom_components/smart_lock_manager/ --exclude-dir=.git; then
@@ -118,34 +118,34 @@ jobs:
         fi
 
   security:
-    runs-on: ubuntu-latest  
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Check for hardcoded secrets
       run: |
         # Check for common secret patterns
         patterns=(
           "password.*=.*['\"].*['\"]"
           "token.*=.*['\"].*['\"]"
-          "secret.*=.*['\"].*['\"]"  
+          "secret.*=.*['\"].*['\"]"
           "api_key.*=.*['\"].*['\"]"
         )
-        
+
         found_secrets=false
         for pattern in "${patterns[@]}"; do
           if grep -r -E "$pattern" custom_components/smart_lock_manager/ --include="*.py"; then
             found_secrets=true
           fi
         done
-        
+
         if [ "$found_secrets" = true ]; then
           echo "❌ Potential hardcoded secrets found"
-          exit 1  
+          exit 1
         else
           echo "✅ No hardcoded secrets detected"
         fi
-        
+
     - name: Check PIN code handling
       run: |
         # Ensure PIN codes are handled securely in logs
@@ -160,8 +160,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Validate zero sensor pollution architecture  
+
+    - name: Validate zero sensor pollution architecture
       run: |
         # Check that we're not creating multiple sensors per lock
         sensor_creations=$(grep -r "SensorEntity\|async_add_entities" custom_components/smart_lock_manager/ --include="*.py" | grep -v "sensor.py" | wc -l)
@@ -171,7 +171,7 @@ jobs:
         else
           echo "✅ Zero sensor pollution architecture maintained"
         fi
-        
+
     - name: Check service modularity
       run: |
         # Ensure services are properly modularized
@@ -179,7 +179,7 @@ jobs:
           echo "❌ Services directory missing"
           exit 1
         fi
-        
+
         required_service_files=(
           "lock_services.py"
           "slot_services.py"
@@ -187,12 +187,12 @@ jobs:
           "management_services.py"
           "system_services.py"
         )
-        
+
         for file in "${required_service_files[@]}"; do
           if [ ! -f "custom_components/smart_lock_manager/services/$file" ]; then
             echo "❌ Missing service file: $file"
             exit 1
           fi
         done
-        
+
         echo "✅ Service modularity maintained"

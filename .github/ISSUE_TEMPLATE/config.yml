@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📚 Documentation
+    url: https://github.com/ccsliinc/ha-smart-lock-manager/blob/main/README.md
+    about: Read the comprehensive documentation and setup guide
+  - name: 🔧 API Reference
+    url: https://github.com/ccsliinc/ha-smart-lock-manager/blob/main/docs/API.md
+    about: Complete API documentation for services and automation
+  - name: 💬 Community Discussions
+    url: https://github.com/ccsliinc/ha-smart-lock-manager/discussions
+    about: Ask questions and discuss ideas with the community
+  - name: 🏠 Home Assistant Community
+    url: https://community.home-assistant.io/
+    about: General Home Assistant support and community forums

@@ -47,12 +47,12 @@ logger:
   logs:
     # Our component - full debug
     custom_components.smart_lock_manager: debug
-    
+
     # Setup and config entries - useful for debugging integration loading
     homeassistant.config_entries: info
     homeassistant.loader: info
     homeassistant.setup: info
-    
+
     # Keep these quiet unless there are issues
     homeassistant.components.http: warning
     homeassistant.components.websocket_api: warning

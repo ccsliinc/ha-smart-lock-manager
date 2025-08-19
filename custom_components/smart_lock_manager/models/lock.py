@@ -160,8 +160,11 @@ class CodeSlot:
             # Check for synchronizing state (has sync attempts means actively syncing)
             if self.sync_attempts > 0:
                 return SLOT_STATUSES["SYNCHRONIZING"]
-            # If not synced but no active attempts, it's an error
+            # If not synced, check if this is a newly created code (give grace period)
             if not self.is_synced:
+                # If created within last 30 seconds, show as syncing instead of error
+                if self.created_at and (datetime.now() - self.created_at).total_seconds() < 30:
+                    return SLOT_STATUSES["SYNCHRONIZING"]
                 return SLOT_STATUSES["SYNC_ERROR"]
             # All good - active, valid, and synced
             return SLOT_STATUSES["SYNCHRONIZED"]
