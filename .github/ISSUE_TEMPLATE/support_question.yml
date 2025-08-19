@@ -1,0 +1,120 @@
+name: ❓ Support Question
+description: Ask for help with configuration or usage
+title: "[Support]: "
+labels: ["question", "support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Need help with Smart Lock Manager? Please provide details about your setup and what you're trying to achieve.
+        
+        **Note**: For bugs, please use the Bug Report template instead.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-submission Checklist
+      description: Please verify the following before submitting
+      options:
+        - label: I have read the README.md documentation
+          required: true
+        - label: I have checked the API documentation (docs/API.md)
+          required: true
+        - label: I have searched for existing questions about this topic
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Smart Lock Manager Version
+      description: What version are you running?
+      placeholder: "e.g., 2025.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant Version
+      description: What version of Home Assistant are you running?
+      placeholder: "e.g., 2024.8.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: question_type
+    attributes:
+      label: Question Type
+      description: What type of help do you need?
+      options:
+        - Initial Setup/Configuration
+        - Lock Integration Issues
+        - Slot Management
+        - Scheduling & Access Control
+        - Automation Integration
+        - Custom Panel Usage
+        - Service Calls
+        - Performance Issues
+        - General Usage
+        - Migration from other components
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: What do you need help with? Be as specific as possible.
+      placeholder: Please describe what you're trying to do and any issues you're encountering...
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_setup
+    attributes:
+      label: Current Setup
+      description: Describe your current configuration
+      placeholder: |
+        - Lock brand/model:
+        - Number of slots configured:
+        - Any special requirements:
+        - What you've tried so far:
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What You're Trying to Achieve
+      description: What is your end goal or desired outcome?
+      placeholder: I want to be able to...
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Relevant Configuration
+      description: Share any relevant configuration (remove sensitive data like PIN codes)
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs (if any)
+      description: If you're experiencing issues, please include relevant log output
+      render: shell
+
+  - type: checkboxes
+    id: environment
+    attributes:
+      label: Environment
+      description: Select your Home Assistant environment
+      options:
+        - label: Home Assistant Core
+        - label: Home Assistant Supervised  
+        - label: Home Assistant OS
+        - label: Home Assistant Container
+
+  - type: input
+    id: lock_model
+    attributes:
+      label: Lock Brand/Model
+      description: What lock(s) are you using?
+      placeholder: "e.g., Yale YRD256, Schlage BE469"

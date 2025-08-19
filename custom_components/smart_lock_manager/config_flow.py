@@ -25,7 +25,7 @@ class SmartLockManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Validate input
             lock_name = user_input.get("lock_name", "").strip()
             lock_entity_id = user_input.get("lock_entity_id", "").strip()
-            
+
             if not lock_name:
                 errors["lock_name"] = "name_required"
             elif not lock_entity_id:
@@ -34,7 +34,7 @@ class SmartLockManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Check if this entity is already configured
                 await self.async_set_unique_id(lock_entity_id)
                 self._abort_if_unique_id_configured()
-                
+
                 # Create the config entry
                 return self.async_create_entry(
                     title=lock_name,

@@ -4,7 +4,7 @@ from homeassistant.components.lock import LockState
 
 DOMAIN = "smart_lock_manager"
 VERSION = "2025.1.0"
-ISSUE_URL = "https://github.com/jsugamele/smart_lock_manager"
+ISSUE_URL = "https://github.com/ccsliinc/ha-smart-lock-manager"
 PLATFORMS = ["sensor"]
 ZWAVE_NETWORK = "zwave_network"
 MANAGER = "manager"
