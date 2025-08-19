@@ -89,7 +89,7 @@ jobs:
       run: |
         required_files=(
           "README.md"
-          "CLAUDE.md"
+          "docs/API.md"
           "LICENSE"
           "PULL_REQUEST_TEMPLATE.md"
         )

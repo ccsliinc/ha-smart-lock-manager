@@ -80,7 +80,7 @@ def main():
     if imports_ok and structure_ok:
         print("✓ All tests passed! Environment is ready for development.")
         print("\nNext steps:")
-        print("1. Tell Claude what kind of plugin you want to create")
+        print("1. Describe what kind of plugin you want to create")
         print("2. Start Home Assistant with: python dev_start.py")
         print("3. Run tests with: ./venv/bin/pytest")
         return 0

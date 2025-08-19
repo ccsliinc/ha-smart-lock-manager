@@ -21,7 +21,7 @@ This release represents the complete transformation of Smart Lock Manager from a
 - **Clean Project Structure**: Removed IDE configs, cache files, and development artifacts
 
 #### Changed
-- **CLAUDE.md Removed**: Development instructions moved to proper documentation structure
+- **Development Documentation**: Development instructions moved to proper documentation structure
 - **File Organization**: Eliminated duplicate directories and temporary files
 
 ### 🏆 **Phase 2: HACS Preparation & Versioning**
