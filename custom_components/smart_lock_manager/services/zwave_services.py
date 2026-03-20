@@ -94,14 +94,14 @@ class ZWaveServices:
             for slot in range(1, 31):  # Test slots 1-30
                 try:
                     slots_tested += 1
-                    code_info = get_usercode_from_node(node, slot)
+                    code_info = await get_usercode_from_node(node, slot)
 
-                    if code_info and code_info.get("userIdStatus") == "occupied":
-                        code_value = code_info.get("code")
+                    if code_info and code_info.get("in_use") is True:
+                        code_value = code_info.get("usercode")
                         if code_value:
                             codes_found[slot] = {
                                 "code": str(code_value),
-                                "status": code_info.get("userIdStatus", "unknown"),
+                                "status": "occupied",
                             }
                             _LOGGER.debug("Found code in slot %s", slot)
 
@@ -226,11 +226,11 @@ class ZWaveServices:
                     try:
                         node = await async_get_node_from_entity_id(hass, entity_id)
                         if node:
-                            current_code_info = get_usercode_from_node(
+                            current_code_info = await get_usercode_from_node(
                                 node, slot_number
                             )
                             current_code = (
-                                current_code_info.get("code")
+                                current_code_info.get("usercode")
                                 if current_code_info
                                 else None
                             )

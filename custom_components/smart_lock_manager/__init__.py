@@ -605,7 +605,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     from homeassistant.helpers.entity_registry import (
                         async_get as async_get_entity_registry,
                     )
-                    from zwave_js_server.util.lock import get_usercode_from_node
+                    from zwave_js_server.util.lock import get_usercode
 
                     ent_reg = async_get_entity_registry(self.hass)
                     entity_entry = ent_reg.async_get(lock.lock_entity_id)
@@ -616,20 +616,19 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                         )
                         if node:
                             # Quick scan of first 10 slots only (performance optimization)
+                            # Use get_usercode (sync, cached ValueDB) to avoid blocking startup
                             for slot in range(1, 11):
                                 try:
-                                    code_data = await get_usercode_from_node(node, slot)
+                                    code_data = get_usercode(node, slot)
                                     if (
                                         code_data
                                         and code_data.get("usercode")
-                                        and code_data.get("in_use")
+                                        and code_data.get("in_use") is True
                                     ):
                                         zwave_codes[slot] = {
                                             "code": code_data.get("usercode"),
-                                            "in_use": code_data.get("in_use"),
-                                            "status": code_data.get(
-                                                "userIdStatus", "unknown"
-                                            ),
+                                            "in_use": True,
+                                            "status": "occupied",
                                         }
                                 except Exception:
                                     pass  # Slot empty or error
