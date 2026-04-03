@@ -264,6 +264,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 max_uses=slot_data.get("max_uses", -1),
                 use_count=slot_data.get("use_count", 0),
                 notify_on_use=slot_data.get("notify_on_use", False),
+                is_synced=slot_data.get("is_synced", False),
+                sync_attempts=slot_data.get("sync_attempts", 0),
+                sync_error=slot_data.get("sync_error"),
             )
             lock.code_slots[slot_num] = slot
 
@@ -630,8 +633,8 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                             "in_use": True,
                                             "status": "occupied",
                                         }
-                                except Exception:
-                                    pass  # Slot empty or error
+                                except Exception as e:
+                                    _LOGGER.debug("Could not read Z-Wave slot %s: %s", slot, e)
                 except Exception as e:
                     _LOGGER.debug("Z-Wave code reading failed: %s", e)
 
@@ -657,6 +660,20 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 for slot_number in sync_actions.get("add", []):
                     slot = lock.code_slots.get(slot_number)
                     if slot:
+                        # Exponential backoff: 60s, 120s, 240s, 480s, max 600s
+                        backoff_seconds = min(60 * (2 ** slot.sync_attempts), 600)
+                        if (
+                            slot.last_sync_attempt
+                            and (datetime.now() - slot.last_sync_attempt).total_seconds() < backoff_seconds
+                        ):
+                            _LOGGER.debug(
+                                "Skipping sync for slot %s (backoff %ss, attempt %s)",
+                                slot_number,
+                                backoff_seconds,
+                                slot.sync_attempts,
+                            )
+                            continue
+
                         slot.sync_attempts += 1
                         slot.last_sync_attempt = datetime.now()
 
@@ -747,26 +764,37 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             e,
                         )
 
-                # Step 5: Log sync errors that need attention
+                # Step 5: Retry sync for failed slots (throttled)
                 for slot_number in sync_actions.get("retry", []):
                     slot = lock.code_slots.get(slot_number)
                     if slot and slot.sync_error:
-                        _LOGGER.error(
-                            "Slot %s sync failed permanently: %s",
-                            slot_number,
-                            slot.sync_error,
-                        )
+                        now = datetime.now()
 
-                        # Fire event for automation/notification
-                        self.hass.bus.async_fire(
-                            "smart_lock_manager_sync_error",
-                            {
-                                "entity_id": lock.lock_entity_id,
-                                "slot_number": slot_number,
-                                "error": slot.sync_error,
-                                "attempts": slot.sync_attempts,
-                            },
-                        )
+                        # Throttle retries to once every 10 minutes
+                        if slot.last_sync_attempt and (now - slot.last_sync_attempt) < timedelta(minutes=10):
+                            continue
+
+                        slot.last_sync_attempt = now
+
+                        # Log at warning level once per hour (~120 cycles at 30s)
+                        if slot.sync_attempts % 120 == 0:
+                            _LOGGER.warning(
+                                "Slot %s sync failed permanently (attempt %s): %s",
+                                slot_number,
+                                slot.sync_attempts,
+                                slot.sync_error,
+                            )
+
+                            # Fire event only when we log (once per hour)
+                            self.hass.bus.async_fire(
+                                "smart_lock_manager_sync_error",
+                                {
+                                    "entity_id": lock.lock_entity_id,
+                                    "slot_number": slot_number,
+                                    "error": slot.sync_error,
+                                    "attempts": slot.sync_attempts,
+                                },
+                            )
 
                 # Step 6: Auto-sync codes to child locks if this is a main lock
                 if lock.is_main_lock and lock.child_lock_ids:
