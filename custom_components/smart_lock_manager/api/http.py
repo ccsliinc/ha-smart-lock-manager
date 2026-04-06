@@ -23,7 +23,7 @@ class SmartLockManagerFrontendView(HomeAssistantView):
         # Get the path to our frontend files
         self.frontend_path = Path(__file__).parent.parent / "frontend" / "dist"
 
-    async def get(self, request: web.Request, filename: str) -> web.Response:
+    async def get(self, request: web.Request, filename: str) -> web.Response:  # noqa
         """Serve frontend files."""
 
         try:

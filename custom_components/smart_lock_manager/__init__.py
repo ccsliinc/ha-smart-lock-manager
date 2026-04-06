@@ -176,7 +176,7 @@ UPDATE_GLOBAL_SETTINGS_SCHEMA = vol.Schema(
 )
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa
     """Disallow configuration via YAML."""
     return True
 
@@ -618,8 +618,9 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             self.hass, lock.lock_entity_id, ent_reg=ent_reg
                         )
                         if node:
-                            # Quick scan of first 10 slots only (performance optimization)
-                            # Use get_usercode (sync, cached ValueDB) to avoid blocking startup
+                            # Quick scan of first 10 slots only (performance
+                            # optimization). Use get_usercode (sync, cached
+                            # ValueDB) to avoid blocking startup.
                             for slot in range(1, 11):
                                 try:
                                     code_data = get_usercode(node, slot)
@@ -634,7 +635,9 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                             "status": "occupied",
                                         }
                                 except Exception as e:
-                                    _LOGGER.debug("Could not read Z-Wave slot %s: %s", slot, e)
+                                    _LOGGER.debug(
+                                        "Could not read Z-Wave slot %s: %s", slot, e
+                                    )
                 except Exception as e:
                     _LOGGER.debug("Z-Wave code reading failed: %s", e)
 
@@ -660,11 +663,29 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 for slot_number in sync_actions.get("add", []):
                     slot = lock.code_slots.get(slot_number)
                     if slot:
+                        # Check if Z-Wave cached code already matches before
+                        # attempting sync
+                        cached_zwave_code = zwave_codes.get(slot_number, {}).get("code")
+                        if cached_zwave_code and cached_zwave_code == slot.pin_code:
+                            _LOGGER.info(
+                                "Slot %s on %s already synced (code matches"
+                                " Z-Wave cache), marking synchronized",
+                                slot_number,
+                                lock.lock_entity_id,
+                            )
+                            slot.is_synced = True
+                            slot.sync_attempts = 0
+                            slot.sync_error = None
+                            continue
+
                         # Exponential backoff: 60s, 120s, 240s, 480s, max 600s
-                        backoff_seconds = min(60 * (2 ** slot.sync_attempts), 600)
+                        backoff_seconds = min(60 * (2**slot.sync_attempts), 600)
                         if (
                             slot.last_sync_attempt
-                            and (datetime.now() - slot.last_sync_attempt).total_seconds() < backoff_seconds
+                            and (
+                                datetime.now() - slot.last_sync_attempt
+                            ).total_seconds()
+                            < backoff_seconds
                         ):
                             _LOGGER.debug(
                                 "Skipping sync for slot %s (backoff %ss, attempt %s)",
@@ -705,7 +726,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 for slot_number in sync_actions.get("remove", []):
                     slot = lock.code_slots.get(slot_number)
                     try:
-                        # If this slot doesn't exist in Smart Lock Manager at all, it's a rogue code
+                        # If slot doesn't exist in Smart Lock Manager, it's a rogue code
                         if not slot:
                             await self.hass.services.async_call(
                                 DOMAIN,
@@ -716,14 +737,16 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                 },
                             )
                             _LOGGER.info(
-                                "Auto-clearing rogue code from lock %s slot %s (no Smart Lock Manager entry)",
+                                "Auto-clearing rogue code from lock %s slot %s"
+                                " (no Smart Lock Manager entry)",
                                 self.lock_name,
                                 slot_number,
                             )
                         elif not slot.is_active:
-                            # Slot exists but is disabled - remove from Z-Wave only, keep Smart Lock Manager data
+                            # Slot exists but disabled - remove from Z-Wave only
                             _LOGGER.info(
-                                "🔄 COORDINATOR DEBUG - Found disabled slot %s with code in Z-Wave, removing from lock only",
+                                "Found disabled slot %s with code in Z-Wave,"
+                                " removing from lock only",
                                 slot_number,
                             )
                             await self.hass.services.async_call(
@@ -736,12 +759,13 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                 },
                             )
                             _LOGGER.info(
-                                "🔄 COORDINATOR DEBUG - Auto-removing disabled slot %s from lock %s (keeping Smart Lock Manager data)",
+                                "Auto-removing disabled slot %s from lock %s"
+                                " (keeping Smart Lock Manager data)",
                                 slot_number,
                                 self.lock_name,
                             )
                         else:
-                            # Slot is active but needs to be removed for some other reason
+                            # Slot is active but needs removal for another reason
                             await self.hass.services.async_call(
                                 DOMAIN,
                                 "sync_slot_to_zwave",
@@ -771,7 +795,9 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                         now = datetime.now()
 
                         # Throttle retries to once every 10 minutes
-                        if slot.last_sync_attempt and (now - slot.last_sync_attempt) < timedelta(minutes=10):
+                        if slot.last_sync_attempt and (
+                            now - slot.last_sync_attempt
+                        ) < timedelta(minutes=10):
                             continue
 
                         slot.last_sync_attempt = now
