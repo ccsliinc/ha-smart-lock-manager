@@ -1,5 +1,6 @@
 """Smart Lock Manager Integration."""
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
@@ -13,14 +14,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api.http import async_register_http_views, async_unregister_http_views
 
-# Z-Wave JS imports for reading actual lock codes
-try:
-    ZWAVE_JS_AVAILABLE = True
-except (ModuleNotFoundError, ImportError):
-    ZWAVE_JS_AVAILABLE = False
+# Module-level logger so log entries appear under
+# ``custom_components.smart_lock_manager`` (not ``.const``).
+_LOGGER = logging.getLogger(__name__)
 
 from .const import (
-    _LOGGER,
     ATTR_ALLOWED_DAYS,
     ATTR_ALLOWED_HOURS,
     ATTR_AUTO_DISABLE_EXPIRED,
@@ -579,15 +577,19 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
         try:
             _LOGGER.debug("Updating Smart Lock Manager data for %s", self.lock_name)
 
-            # Get the lock object from hass data
-            lock = None
-            for entry_id, entry_data in self.hass.data[DOMAIN].items():
-                if (
-                    entry_data.get(PRIMARY_LOCK)
-                    and entry_data[PRIMARY_LOCK].lock_name == self.lock_name
-                ):
-                    lock = entry_data[PRIMARY_LOCK]
-                    break
+            # Get the lock object from hass data using config entry ID
+            entry_data = self.hass.data[DOMAIN].get(self.entry.entry_id)
+            lock = (
+                entry_data.get(PRIMARY_LOCK) if isinstance(entry_data, dict) else None
+            )
+
+            if not lock:
+                _LOGGER.warning(
+                    "Coordinator: no lock object found for entry %s (%s)",
+                    self.entry.entry_id,
+                    self.lock_name,
+                )
+                return {}
 
             if lock:
                 # Step 1: Check for slot validity changes and auto-disable expired slots
@@ -608,9 +610,39 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     ent_reg = async_get_entity_registry(self.hass)
                     entity_entry = ent_reg.async_get(lock.lock_entity_id)
 
-                    if entity_entry and entity_entry.platform == "zwave_js":
-                        node = async_get_node_from_entity_id(
-                            self.hass, lock.lock_entity_id, ent_reg=ent_reg
+                    if not entity_entry:
+                        _LOGGER.warning(
+                            "Coordinator: entity %s not in registry",
+                            lock.lock_entity_id,
+                        )
+                    elif entity_entry.platform != "zwave_js":
+                        _LOGGER.warning(
+                            "Coordinator: entity %s platform is '%s', not zwave_js",
+                            lock.lock_entity_id,
+                            entity_entry.platform,
+                        )
+                    else:
+                        try:
+                            # async_get_node_from_entity_id is @callback (sync)
+                            # -- do NOT await
+                            node = async_get_node_from_entity_id(
+                                self.hass,
+                                lock.lock_entity_id,
+                                ent_reg=ent_reg,
+                            )
+                        except Exception as exc:
+                            _LOGGER.warning(
+                                "Coordinator: failed to get Z-Wave node for %s: %s",
+                                lock.lock_entity_id,
+                                exc,
+                            )
+                            node = None
+
+                        _LOGGER.info(
+                            "Coordinator: Z-Wave node for %s: %s (type: %s)",
+                            lock.lock_entity_id,
+                            node,
+                            type(node).__name__ if node else "None",
                         )
                         if node:
                             # Quick scan of first 10 slots only (performance
@@ -634,13 +666,36 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                         "Could not read Z-Wave slot %s: %s", slot, e
                                     )
                 except Exception as e:
-                    _LOGGER.debug("Z-Wave code reading failed: %s", e)
+                    _LOGGER.warning(
+                        "Z-Wave code reading failed for %s: %s",
+                        lock.lock_entity_id,
+                        e,
+                    )
+                    import traceback
+
+                    _LOGGER.warning("Traceback: %s", traceback.format_exc())
 
                 # Step 3: Update sync status and determine needed actions
-                _LOGGER.debug(
-                    "Updating sync status, found %s Z-Wave codes", len(zwave_codes)
+                _LOGGER.info(
+                    "Coordinator: Z-Wave codes for %s: %d found (slots: %s)",
+                    lock.lock_entity_id,
+                    len(zwave_codes),
+                    list(zwave_codes.keys()) if zwave_codes else "none",
                 )
                 lock.update_sync_status(zwave_codes)
+
+                # Log sync comparison for active slots
+                for sn, sl in lock.code_slots.items():
+                    if sl.is_active and sl.pin_code:
+                        zw = zwave_codes.get(sn, {}).get("code")
+                        _LOGGER.debug(
+                            "Coordinator: slot %s sync: pin=%s vs zwave=%s -> %s",
+                            sn,
+                            sl.pin_code[:4] + "..." if sl.pin_code else None,
+                            str(zw)[:4] + "..." if zw else None,
+                            "synced" if sl.is_synced else "NOT synced",
+                        )
+
                 sync_actions = lock.get_slots_needing_sync(zwave_codes)
                 if (
                     sync_actions.get("add")
@@ -648,7 +703,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     or sync_actions.get("retry")
                 ):
                     _LOGGER.info(
-                        "Sync actions needed: add=%s, remove=%s, retry=%s",
+                        "Coordinator: sync actions needed: add=%s, remove=%s, retry=%s",
                         sync_actions.get("add", []),
                         sync_actions.get("remove", []),
                         sync_actions.get("retry", []),
@@ -871,6 +926,10 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                     lock.lock_name,
                                     e,
                                 )
+
+            # Persist updated sync status to storage
+            if lock:
+                await _save_lock_data(self.hass, lock, self.entry.entry_id)
 
             return {
                 "user_codes": {},
