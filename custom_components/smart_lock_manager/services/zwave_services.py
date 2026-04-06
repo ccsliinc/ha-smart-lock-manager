@@ -66,23 +66,9 @@ class ZWaveServices:
             if not zwave_identifier:
                 raise ValueError(f"No Z-Wave identifier found for device {device_id}")
 
-            # Get config entry for Z-Wave JS
-            config_entries = [
-                entry
-                for entry in hass.config_entries.async_entries(ZWAVE_JS_DOMAIN)
-                if entry.state.value == "loaded"
-            ]
-
-            if not config_entries:
-                raise ValueError("No loaded Z-Wave JS config entries found")
-
-            config_entry = config_entries[0]  # Use first loaded entry
-
-            if config_entry.entry_id not in hass.data.get(ZWAVE_JS_DOMAIN, {}):
-                raise ValueError(f"Device {device_id} config entry is not loaded")
-
-            # Get the Z-Wave node
-            node = await async_get_node_from_entity_id(hass, entity_id)
+            # Get the Z-Wave node (async_get_node_from_entity_id
+            # validates the config entry is loaded internally)
+            node = async_get_node_from_entity_id(hass, entity_id)
             if not node:
                 raise ValueError(f"No Z-Wave node found for entity {entity_id}")
 
@@ -186,7 +172,7 @@ class ZWaveServices:
                         get_usercode_from_node as _get_uc,
                     )
 
-                    node = await _get_node(hass, entity_id)
+                    node = _get_node(hass, entity_id)
                     if node:
                         current_code_info = await _get_uc(node, slot_number)
                         current_code = (
@@ -259,7 +245,7 @@ class ZWaveServices:
                     from zwave_js_server.util.lock import get_usercode_from_node
 
                     try:
-                        node = await async_get_node_from_entity_id(hass, entity_id)
+                        node = async_get_node_from_entity_id(hass, entity_id)
                         if node:
                             current_code_info = await get_usercode_from_node(
                                 node, slot_number
