@@ -177,6 +177,40 @@ class ZWaveServices:
                         f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
                     )
 
+                # Check if code already matches what's on the lock before writing
+                try:
+                    from homeassistant.components.zwave_js.helpers import (
+                        async_get_node_from_entity_id as _get_node,
+                    )
+                    from zwave_js_server.util.lock import (
+                        get_usercode_from_node as _get_uc,
+                    )
+
+                    node = await _get_node(hass, entity_id)
+                    if node:
+                        current_code_info = await _get_uc(node, slot_number)
+                        current_code = (
+                            current_code_info.get("usercode")
+                            if current_code_info
+                            else None
+                        )
+                        if current_code and str(current_code) == slot.pin_code:
+                            _LOGGER.info(
+                                "Slot %s already has correct code, skipping write",
+                                slot_number,
+                            )
+                            slot.is_synced = True
+                            slot.sync_error = None
+                            slot.sync_attempts = 0
+                            return
+                except Exception as e:
+                    _LOGGER.debug(
+                        "Could not pre-check code for slot %s,"
+                        " proceeding with write: %s",
+                        slot_number,
+                        e,
+                    )
+
                 # Add/update code in Z-Wave lock
                 await hass.services.async_call(
                     "zwave_js",
@@ -214,7 +248,8 @@ class ZWaveServices:
                         )
                     if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
                         raise ValueError(
-                            f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
+                            "PIN code must be 4-8 digits"
+                            f" (length: {len(slot.pin_code)})"
                         )
 
                     # Get current Z-Wave code to check if we need to clear first
@@ -235,10 +270,22 @@ class ZWaveServices:
                                 else None
                             )
 
+                            # If code already matches, skip the write entirely
+                            if current_code and str(current_code) == slot.pin_code:
+                                _LOGGER.info(
+                                    "Slot %s already has correct code, skipping write",
+                                    slot_number,
+                                )
+                                slot.is_synced = True
+                                slot.sync_error = None
+                                slot.sync_attempts = 0
+                                return
+
                             # If there's a different code in the slot, clear it first
                             if current_code and str(current_code) != slot.pin_code:
                                 _LOGGER.info(
-                                    "Clearing existing code before setting new one in slot %s (old: %s, new: %s)",
+                                    "Clearing existing code before setting new"
+                                    " one in slot %s (old: %s, new: %s)",
                                     slot_number,
                                     current_code,
                                     slot.pin_code,

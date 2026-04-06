@@ -61,9 +61,10 @@ repos:
     hooks:
       - id: vulture
         args:
-          - --min-confidence=60
+          - --min-confidence=80
           - --exclude=tests,venv,config
-        files: ^custom_components/.+\.py$
+          - custom_components/
+        pass_filenames: false
 
   - repo: local
     hooks:
