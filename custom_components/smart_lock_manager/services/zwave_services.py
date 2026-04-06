@@ -1,19 +1,32 @@
-"""Z-Wave integration services for Smart Lock Manager."""
+"""Z-Wave integration services for Smart Lock Manager.
 
+Handles reading and writing user codes to physical Z-Wave locks via the
+zwave_js integration. Uses the sync ``get_usercode`` helper (reads from
+the cached ValueDB) instead of the async ``get_usercode_from_node``
+(which queries the device over the mesh and can hang if the node is
+asleep or unreachable).
+"""
+
+import asyncio
 import logging
 
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 from ..const import ATTR_CODE_SLOT, ATTR_ENTITY_ID, DOMAIN, PRIMARY_LOCK
 
 _LOGGER = logging.getLogger(__name__)
 
+# Timeout for the entire read_zwave_codes operation (seconds)
+_READ_CODES_TIMEOUT = 30
+
 # Z-Wave JS integration support
 try:
-    from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
+    # async_get_node_from_entity_id is a @callback (sync), NOT a coroutine
     from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
-    from zwave_js_server.util.lock import get_usercode_from_node
+
+    # get_usercode is sync (reads from cached ValueDB) - safe and fast
+    # get_usercode_from_node is async (queries the device) - can hang
+    from zwave_js_server.util.lock import get_usercode
 
     ZWAVE_JS_AVAILABLE = True
 except (ModuleNotFoundError, ImportError):
@@ -25,7 +38,16 @@ class ZWaveServices:
 
     @staticmethod
     async def read_zwave_codes(hass: HomeAssistant, service_call: ServiceCall) -> None:
-        """Read user codes from the physical Z-Wave lock."""
+        """Read user codes from the physical Z-Wave lock.
+
+        Uses the sync get_usercode() which reads from the cached ValueDB
+        rather than querying the device over the mesh. This prevents hangs
+        when nodes are asleep or unreachable.
+
+        Args:
+            hass: Home Assistant instance.
+            service_call: Service call containing entity_id.
+        """
         entity_id = service_call.data[ATTR_ENTITY_ID]
 
         if not ZWAVE_JS_AVAILABLE:
@@ -33,89 +55,15 @@ class ZWaveServices:
             return
 
         try:
-            # Get the Z-Wave node from the lock entity
-            entity_registry = async_get_entity_registry(hass)
-            entity_entry = entity_registry.async_get(entity_id)
-
-            if not entity_entry:
-                _LOGGER.error("Entity %s not found in registry", entity_id)
-                return
-
-            device_id = entity_entry.device_id
-            if not device_id:
-                _LOGGER.error("No device_id found for entity %s", entity_id)
-                return
-
-            # Get device info and Z-Wave node
-            from homeassistant.helpers import device_registry as dr
-
-            device_registry = dr.async_get(hass)
-            device = device_registry.async_get(device_id)
-
-            if not device:
-                _LOGGER.error("Device not found for device_id %s", device_id)
-                return
-
-            # Extract Z-Wave node info from device identifiers
-            zwave_identifier = None
-            for identifier_domain, identifier in device.identifiers:
-                if identifier_domain == ZWAVE_JS_DOMAIN:
-                    zwave_identifier = identifier
-                    break
-
-            if not zwave_identifier:
-                raise ValueError(f"No Z-Wave identifier found for device {device_id}")
-
-            # Get the Z-Wave node (async_get_node_from_entity_id
-            # validates the config entry is loaded internally)
-            node = async_get_node_from_entity_id(hass, entity_id)
-            if not node:
-                raise ValueError(f"No Z-Wave node found for entity {entity_id}")
-
-            # Read codes from all slots (typically 1-30 for most locks)
-            codes_found = {}
-            slots_tested = 0
-            slots_with_errors = 0
-
-            for slot in range(1, 31):  # Test slots 1-30
-                try:
-                    slots_tested += 1
-                    code_info = await get_usercode_from_node(node, slot)
-
-                    if code_info and code_info.get("in_use") is True:
-                        code_value = code_info.get("usercode")
-                        if code_value:
-                            codes_found[slot] = {
-                                "code": str(code_value),
-                                "status": "occupied",
-                            }
-                            _LOGGER.debug("Found code in slot %s", slot)
-
-                except Exception as e:
-                    slots_with_errors += 1
-                    _LOGGER.debug("No code in slot %s: %s", slot, e)
-
-            # Fire event with found codes
-            hass.bus.async_fire(
-                "smart_lock_manager_codes_read",
-                {
-                    "entity_id": entity_id,
-                    "codes": codes_found,
-                    "total_found": len(codes_found),
-                    "slots_tested": slots_tested,
-                    "slots_with_errors": slots_with_errors,
-                },
-            )
-
-            _LOGGER.info(
-                "Read %s codes from Z-Wave lock %s (scanned %s slots)",
-                len(codes_found),
+            # Wrap entire operation in a timeout to prevent blocking HA startup
+            async with asyncio.timeout(_READ_CODES_TIMEOUT):
+                await _read_codes_inner(hass, entity_id)
+        except TimeoutError:
+            _LOGGER.warning(
+                "read_zwave_codes timed out after %ss for %s - skipping",
+                _READ_CODES_TIMEOUT,
                 entity_id,
-                slots_tested,
             )
-            if codes_found:
-                _LOGGER.info("Found codes in slots: %s", list(codes_found.keys()))
-
         except Exception as e:
             _LOGGER.error("Error reading Z-Wave codes from %s: %s", entity_id, e)
             import traceback
@@ -126,7 +74,12 @@ class ZWaveServices:
     async def sync_slot_to_zwave(
         hass: HomeAssistant, service_call: ServiceCall
     ) -> None:
-        """Sync a specific slot to the Z-Wave lock (add or remove code)."""
+        """Sync a specific slot to the Z-Wave lock (add or remove code).
+
+        Args:
+            hass: Home Assistant instance.
+            service_call: Service call with entity_id, code_slot, action.
+        """
         entity_id = service_call.data[ATTR_ENTITY_ID]
         slot_number = service_call.data[ATTR_CODE_SLOT]
         action = service_call.data.get("action", "auto")
@@ -163,18 +116,11 @@ class ZWaveServices:
                         f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
                     )
 
-                # Check if code already matches what's on the lock before writing
+                # Check cached code to avoid unnecessary writes
                 try:
-                    from homeassistant.components.zwave_js.helpers import (
-                        async_get_node_from_entity_id as _get_node,
-                    )
-                    from zwave_js_server.util.lock import (
-                        get_usercode_from_node as _get_uc,
-                    )
-
-                    node = _get_node(hass, entity_id)
+                    node = async_get_node_from_entity_id(hass, entity_id)
                     if node:
-                        current_code_info = await _get_uc(node, slot_number)
+                        current_code_info = get_usercode(node, slot_number)
                         current_code = (
                             current_code_info.get("usercode")
                             if current_code_info
@@ -238,18 +184,11 @@ class ZWaveServices:
                             f" (length: {len(slot.pin_code)})"
                         )
 
-                    # Get current Z-Wave code to check if we need to clear first
-                    from homeassistant.components.zwave_js.helpers import (
-                        async_get_node_from_entity_id,
-                    )
-                    from zwave_js_server.util.lock import get_usercode_from_node
-
+                    # Check cached code - use sync get_usercode (fast, no network)
                     try:
                         node = async_get_node_from_entity_id(hass, entity_id)
                         if node:
-                            current_code_info = await get_usercode_from_node(
-                                node, slot_number
-                            )
+                            current_code_info = get_usercode(node, slot_number)
                             current_code = (
                                 current_code_info.get("usercode")
                                 if current_code_info
@@ -271,20 +210,18 @@ class ZWaveServices:
                             if current_code and str(current_code) != slot.pin_code:
                                 _LOGGER.info(
                                     "Clearing existing code before setting new"
-                                    " one in slot %s (old: %s, new: %s)",
+                                    " one in slot %s",
                                     slot_number,
-                                    current_code,
-                                    slot.pin_code,
                                 )
                                 await hass.services.async_call(
                                     "zwave_js",
                                     "clear_lock_usercode",
-                                    {"entity_id": entity_id, "code_slot": slot_number},
+                                    {
+                                        "entity_id": entity_id,
+                                        "code_slot": slot_number,
+                                    },
                                     blocking=True,
                                 )
-                                # Small delay to let the clear complete
-                                import asyncio
-
                                 await asyncio.sleep(1)
                     except Exception as e:
                         _LOGGER.debug(
@@ -335,7 +272,12 @@ class ZWaveServices:
 
     @staticmethod
     async def refresh_codes(hass: HomeAssistant, service_call: ServiceCall) -> None:
-        """Legacy refresh codes service - triggers Z-Wave code reading."""
+        """Legacy refresh codes service - triggers Z-Wave code reading.
+
+        Args:
+            hass: Home Assistant instance.
+            service_call: Service call containing entity_id.
+        """
         entity_id = service_call.data[ATTR_ENTITY_ID]
 
         _LOGGER.info(
@@ -344,3 +286,62 @@ class ZWaveServices:
 
         # Call the new read_zwave_codes service
         await ZWaveServices.read_zwave_codes(hass, service_call)
+
+
+async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
+    """Inner implementation of read_zwave_codes, separated for timeout wrapping.
+
+    Uses sync get_usercode() to read from the cached ValueDB. This avoids
+    querying the Z-Wave mesh which can hang indefinitely for sleeping nodes.
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: Lock entity ID to read codes from.
+    """
+    # async_get_node_from_entity_id is a @callback (sync) - do NOT await
+    node = async_get_node_from_entity_id(hass, entity_id)
+
+    # Read codes from all slots using sync get_usercode (cached ValueDB)
+    codes_found = {}
+    slots_tested = 0
+    slots_with_errors = 0
+
+    for slot in range(1, 31):  # Test slots 1-30
+        try:
+            slots_tested += 1
+            # get_usercode is SYNC - reads from cached ValueDB, no network call
+            code_info = get_usercode(node, slot)
+
+            if code_info and code_info.get("in_use") is True:
+                code_value = code_info.get("usercode")
+                if code_value:
+                    codes_found[slot] = {
+                        "code": str(code_value),
+                        "status": "occupied",
+                    }
+                    _LOGGER.debug("Found code in slot %s", slot)
+
+        except Exception as e:
+            slots_with_errors += 1
+            _LOGGER.debug("No code in slot %s: %s", slot, e)
+
+    # Fire event with found codes
+    hass.bus.async_fire(
+        "smart_lock_manager_codes_read",
+        {
+            "entity_id": entity_id,
+            "codes": codes_found,
+            "total_found": len(codes_found),
+            "slots_tested": slots_tested,
+            "slots_with_errors": slots_with_errors,
+        },
+    )
+
+    _LOGGER.info(
+        "Read %s codes from Z-Wave lock %s (scanned %s slots)",
+        len(codes_found),
+        entity_id,
+        slots_tested,
+    )
+    if codes_found:
+        _LOGGER.info("Found codes in slots: %s", list(codes_found.keys()))

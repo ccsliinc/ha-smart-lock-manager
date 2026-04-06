@@ -329,16 +329,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     _LOGGER.info("Completed first refresh for %s coordinator", lock.lock_name)
 
-    # Force a full synchronization on startup to ensure consistency
-    _LOGGER.info("Starting initial synchronization for %s", lock.lock_name)
-    try:
-        # Force sync all active slots to ensure physical lock matches Smart Lock Manager
-        await hass.services.async_call(
-            DOMAIN, "read_zwave_codes", {ATTR_ENTITY_ID: lock.lock_entity_id}
-        )
-        _LOGGER.info("Initial Z-Wave code reading triggered for %s", lock.lock_name)
-    except Exception as e:
-        _LOGGER.warning("Failed to trigger initial sync for %s: %s", lock.lock_name, e)
+    # Schedule initial Z-Wave code reading as a background task so it
+    # does NOT block HA startup.  The coordinator's 30-second poll will
+    # pick up any codes that arrive later.
+    async def _deferred_initial_read() -> None:
+        """Run initial code read after a short delay, with timeout."""
+        import asyncio
+
+        # Give Z-Wave JS time to fully initialise nodes after HA start
+        await asyncio.sleep(60)
+        try:
+            async with asyncio.timeout(30):
+                await hass.services.async_call(
+                    DOMAIN,
+                    "read_zwave_codes",
+                    {ATTR_ENTITY_ID: lock.lock_entity_id},
+                )
+            _LOGGER.info("Initial Z-Wave code reading completed for %s", lock.lock_name)
+        except TimeoutError:
+            _LOGGER.warning(
+                "Initial Z-Wave code reading timed out for %s - "
+                "coordinator will retry on next cycle",
+                lock.lock_name,
+            )
+        except Exception as e:
+            _LOGGER.warning("Failed initial sync for %s: %s", lock.lock_name, e)
+
+    hass.async_create_background_task(
+        _deferred_initial_read(),
+        name=f"smart_lock_manager_initial_read_{lock.lock_name}",
+    )
+    _LOGGER.info(
+        "Scheduled deferred initial Z-Wave code reading for %s", lock.lock_name
+    )
 
     # Set up platforms (now empty - no sensors!)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
