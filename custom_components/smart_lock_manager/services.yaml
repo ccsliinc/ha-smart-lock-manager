@@ -1,0 +1,404 @@
+set_code:
+  name: Set Code
+  description: Set a user code on a specific slot of a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to set the code on.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to set the code in.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+    usercode:
+      name: User Code
+      description: The PIN code to set.
+      required: true
+      selector:
+        text:
+    code_slot_name:
+      name: Slot Name
+      description: Friendly name for this code slot.
+      required: false
+      selector:
+        text:
+
+clear_code:
+  name: Clear Code
+  description: Clear a user code from a specific slot of a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to clear the code from.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to clear.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
+refresh_codes:
+  name: Refresh Codes
+  description: Refresh all code slots from the lock hardware.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to refresh codes from.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+generate_package:
+  name: Generate Package
+  description: Generate a Home Assistant package YAML for a lock node.
+  fields:
+    node_id:
+      name: Node ID
+      description: The Z-Wave node ID of the lock.
+      required: true
+      selector:
+        text:
+
+set_code_advanced:
+  name: Set Code Advanced
+  description: Set a user code with advanced scheduling and usage restrictions.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to set the code on.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to set the code in.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+    usercode:
+      name: User Code
+      description: The PIN code to set.
+      required: true
+      selector:
+        text:
+    code_slot_name:
+      name: Slot Name
+      description: Friendly name for this code slot.
+      required: false
+      selector:
+        text:
+    start_date:
+      name: Start Date
+      description: Date and time when the code becomes active.
+      required: false
+      selector:
+        datetime:
+    end_date:
+      name: End Date
+      description: Date and time when the code expires.
+      required: false
+      selector:
+        datetime:
+    allowed_hours:
+      name: Allowed Hours
+      description: List of hours (0-23) when the code is allowed.
+      required: false
+      selector:
+        object:
+    allowed_days:
+      name: Allowed Days
+      description: List of days (0=Mon, 6=Sun) when the code is allowed.
+      required: false
+      selector:
+        object:
+    max_uses:
+      name: Max Uses
+      description: Maximum number of uses (-1 for unlimited).
+      required: false
+      default: -1
+      selector:
+        number:
+          min: -1
+          max: 9999
+          mode: box
+    notify_on_use:
+      name: Notify On Use
+      description: Send a notification when this code is used.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+enable_slot:
+  name: Enable Slot
+  description: Enable a code slot on a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to enable.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
+disable_slot:
+  name: Disable Slot
+  description: Disable a code slot on a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to disable.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
+reset_slot_usage:
+  name: Reset Slot Usage
+  description: Reset the usage counter for a code slot.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to reset usage for.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
+resize_slots:
+  name: Resize Slots
+  description: Change the number of available code slots for a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    slot_count:
+      name: Slot Count
+      description: The new number of code slots.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
+read_zwave_codes:
+  name: Read Z-Wave Codes
+  description: Read all code slots directly from the Z-Wave lock hardware.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to read codes from.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+sync_slot_to_zwave:
+  name: Sync Slot to Z-Wave
+  description: Sync a specific slot state to the Z-Wave lock hardware.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      name: Code Slot
+      description: The slot number to sync.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+    action:
+      name: Action
+      description: Sync action to perform (auto, enable, or disable).
+      required: false
+      default: "auto"
+      selector:
+        select:
+          options:
+            - "auto"
+            - "enable"
+            - "disable"
+
+sync_child_locks:
+  name: Sync Child Locks
+  description: Sync all code slots from a parent lock to its child locks.
+  fields:
+    entity_id:
+      name: Entity
+      description: The parent lock entity to sync from.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+get_usage_stats:
+  name: Get Usage Stats
+  description: Retrieve usage statistics for all code slots on a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+update_lock_settings:
+  name: Update Lock Settings
+  description: Update configuration settings for a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to update settings for.
+      required: true
+      selector:
+        entity:
+          domain: lock
+    friendly_name:
+      name: Friendly Name
+      description: Display name for the lock.
+      required: false
+      selector:
+        text:
+    slot_count:
+      name: Slot Count
+      description: Number of code slots (1-50).
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+    is_main_lock:
+      name: Is Main Lock
+      description: Whether this is the main/parent lock.
+      required: false
+      selector:
+        boolean:
+    parent_lock_id:
+      name: Parent Lock ID
+      description: Entity ID of the parent lock (empty to clear).
+      required: false
+      selector:
+        entity:
+          domain: lock
+
+remove_child_lock:
+  name: Remove Child Lock
+  description: Remove a child lock association from a parent lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The child lock entity to remove.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+clear_all_slots:
+  name: Clear All Slots
+  description: Clear all code slots on a lock.
+  fields:
+    entity_id:
+      name: Entity
+      description: The lock entity to clear all slots from.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+update_global_settings:
+  name: Update Global Settings
+  description: Update global Smart Lock Manager settings.
+  fields:
+    coordinator_interval:
+      name: Coordinator Interval
+      description: Data update interval in seconds (30, 60, 120, or 300).
+      required: false
+      selector:
+        select:
+          options:
+            - label: "30 seconds"
+              value: "30"
+            - label: "1 minute"
+              value: "60"
+            - label: "2 minutes"
+              value: "120"
+            - label: "5 minutes"
+              value: "300"
+    auto_disable_expired:
+      name: Auto Disable Expired
+      description: Automatically disable expired code slots.
+      required: false
+      selector:
+        boolean:
+    sync_on_lock_events:
+      name: Sync On Lock Events
+      description: Trigger sync when lock state changes.
+      required: false
+      selector:
+        boolean:
+    debug_logging:
+      name: Debug Logging
+      description: Enable debug-level logging.
+      required: false
+      selector:
+        boolean:
