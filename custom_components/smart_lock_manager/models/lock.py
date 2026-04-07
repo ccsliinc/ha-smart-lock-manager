@@ -12,6 +12,7 @@ class SlotStatus:
     """Represents a slot status with label, color, and description."""
 
     def __init__(self, name: str, label: str, color: str, description: str = ""):
+        """Initialize SlotStatus with display properties."""
         self.name = name
         self.label = label  # Display text for UI
         self.color = color  # Hex color code
@@ -56,7 +57,10 @@ SLOT_STATUSES = {
 
 @dataclass
 class CodeSlot:
-    """Represents a single code slot in a smart lock with advanced scheduling and usage tracking."""
+    """Represents a single code slot in a smart lock.
+
+    Includes advanced scheduling and usage tracking capabilities.
+    """
 
     slot_number: int
     pin_code: Optional[str] = None
@@ -138,7 +142,7 @@ class CodeSlot:
         if not self.pin_code:
             return SLOT_STATUSES["EMPTY"]
 
-        # Priority 1: Disabling - disabled but still needs to be cleared from physical lock
+        # Priority 1: Disabling - disabled but still needs to be cleared from lock
         # Show "DISABLING" (amber) when disabled but not yet synced (cleared from lock)
         if not self.is_active and self.pin_code and not self.is_synced:
             return SLOT_STATUSES["DISABLING"]
@@ -163,7 +167,10 @@ class CodeSlot:
             # If not synced, check if this is a newly created code (give grace period)
             if not self.is_synced:
                 # If created within last 30 seconds, show as syncing instead of error
-                if self.created_at and (datetime.now() - self.created_at).total_seconds() < 30:
+                if (
+                    self.created_at
+                    and (datetime.now() - self.created_at).total_seconds() < 30
+                ):
                     return SLOT_STATUSES["SYNCHRONIZING"]
                 return SLOT_STATUSES["SYNC_ERROR"]
             # All good - active, valid, and synced
@@ -237,7 +244,10 @@ class SmartLockManagerLock:
         max_uses: int = -1,
         notify_on_use: bool = False,
     ) -> bool:
-        """Set a PIN code for a slot with advanced scheduling. Returns True if successful."""
+        """Set a PIN code for a slot with advanced scheduling.
+
+        Returns True if successful.
+        """
         if slot_number not in self.code_slots:
             return False
 
@@ -308,7 +318,10 @@ class SmartLockManagerLock:
         return len(active_slots)
 
     def get_configured_codes_count(self) -> int:
-        """Get count of configured code slots (with PIN codes, regardless of active status)."""
+        """Get count of configured code slots.
+
+        Includes slots with PIN codes regardless of active status.
+        """
         configured_slots = [
             slot_num for slot_num, slot in self.code_slots.items() if slot.pin_code
         ]
@@ -329,8 +342,8 @@ class SmartLockManagerLock:
         }
 
     def check_and_update_slot_validity(self) -> List[int]:
-        """
-        Check all slots for validity changes and auto-disable expired ones.
+        """Check all slots for validity changes and auto-disable expired ones.
+
         Returns list of slot numbers that had validity changes.
         """
         changed_slots = []
@@ -367,8 +380,8 @@ class SmartLockManagerLock:
     def get_slots_needing_sync(
         self, zwave_codes: Optional[Dict[int, Dict[Any, Any]]] = None
     ) -> Dict[str, List[int]]:
-        """
-        Get slots that need Z-Wave synchronization based on actual lock state.
+        """Get slots that need Z-Wave synchronization based on actual lock state.
+
         Returns dict with 'add', 'remove', and 'retry' lists.
         """
         add_slots = []  # Codes to add to lock
@@ -389,7 +402,7 @@ class SmartLockManagerLock:
                         add_slots.append(slot_number)
                     else:
                         retry_slots.append(slot_number)
-                        slot.sync_error = f"Failed to sync after 10 attempts"
+                        slot.sync_error = "Failed to sync after 10 attempts"
 
             # Smart Lock Manager wants this slot disabled/removed
             elif not slot.is_active or not slot.pin_code or not slot.is_valid_now():
@@ -418,11 +431,16 @@ class SmartLockManagerLock:
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
 
             # Check if slot is properly synced
+            zwave_in_use = zwave_codes.get(slot_number, {}).get("in_use", False)
             if slot.is_active and slot.pin_code:
-                if zwave_code == slot.pin_code:
+                if zwave_code == slot.pin_code and zwave_in_use:
                     slot.is_synced = True
                     slot.sync_attempts = 0  # Reset on success
                     slot.sync_error = None
+                elif zwave_code == slot.pin_code and not zwave_in_use:
+                    # Code matches but userIdStatus is not Enabled
+                    slot.is_synced = False
+                    slot.sync_error = "Code present but userIdStatus not Enabled"
                 else:
                     slot.is_synced = False
             elif not slot.is_active or not slot.pin_code:
@@ -506,7 +524,7 @@ class SmartLockManagerLock:
         slot.is_active = False
         # Mark as unsynced so it gets removed from the physical lock
         slot.is_synced = False
-        # Reset sync attempts - the "DISABLING" status relies on is_active=False + pin_code + not is_synced
+        # Reset sync attempts for DISABLING status tracking
         slot.sync_attempts = 0
 
         return True
