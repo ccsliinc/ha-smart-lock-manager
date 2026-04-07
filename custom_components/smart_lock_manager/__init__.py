@@ -651,15 +651,14 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             for slot in range(1, 11):
                                 try:
                                     code_data = get_usercode(node, slot)
-                                    if (
-                                        code_data
-                                        and code_data.get("usercode")
-                                        and code_data.get("in_use") is True
-                                    ):
+                                    if code_data and code_data.get("usercode"):
+                                        in_use = code_data.get("in_use") is True
                                         zwave_codes[slot] = {
                                             "code": code_data.get("usercode"),
-                                            "in_use": True,
-                                            "status": "occupied",
+                                            "in_use": in_use,
+                                            "status": (
+                                                "occupied" if in_use else "disabled"
+                                            ),
                                         }
                                 except Exception as e:
                                     _LOGGER.debug(

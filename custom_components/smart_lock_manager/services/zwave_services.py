@@ -126,15 +126,35 @@ class ZWaveServices:
                             if current_code_info
                             else None
                         )
-                        if current_code and str(current_code) == slot.pin_code:
+                        current_in_use = (
+                            current_code_info.get("in_use") is True
+                            if current_code_info
+                            else False
+                        )
+                        if (
+                            current_code
+                            and str(current_code) == slot.pin_code
+                            and current_in_use
+                        ):
                             _LOGGER.info(
-                                "Slot %s already has correct code, skipping write",
+                                "Slot %s already has correct code and is enabled,"
+                                " skipping write",
                                 slot_number,
                             )
                             slot.is_synced = True
                             slot.sync_error = None
                             slot.sync_attempts = 0
                             return
+                        if (
+                            current_code
+                            and str(current_code) == slot.pin_code
+                            and not current_in_use
+                        ):
+                            _LOGGER.warning(
+                                "Slot %s has correct code but userIdStatus"
+                                " not Enabled - will re-set to fix",
+                                slot_number,
+                            )
                 except Exception as e:
                     _LOGGER.debug(
                         "Could not pre-check code for slot %s,"
@@ -194,17 +214,39 @@ class ZWaveServices:
                                 if current_code_info
                                 else None
                             )
+                            current_in_use = (
+                                current_code_info.get("in_use") is True
+                                if current_code_info
+                                else False
+                            )
 
-                            # If code already matches, skip the write entirely
-                            if current_code and str(current_code) == slot.pin_code:
+                            # If code matches AND is enabled, skip the write
+                            if (
+                                current_code
+                                and str(current_code) == slot.pin_code
+                                and current_in_use
+                            ):
                                 _LOGGER.info(
-                                    "Slot %s already has correct code, skipping write",
+                                    "Slot %s already has correct code and is"
+                                    " enabled, skipping write",
                                     slot_number,
                                 )
                                 slot.is_synced = True
                                 slot.sync_error = None
                                 slot.sync_attempts = 0
                                 return
+
+                            # Code matches but not enabled - log and re-set
+                            if (
+                                current_code
+                                and str(current_code) == slot.pin_code
+                                and not current_in_use
+                            ):
+                                _LOGGER.warning(
+                                    "Slot %s has correct code but userIdStatus"
+                                    " not Enabled - will re-set to fix",
+                                    slot_number,
+                                )
 
                             # If there's a different code in the slot, clear it first
                             if current_code and str(current_code) != slot.pin_code:
