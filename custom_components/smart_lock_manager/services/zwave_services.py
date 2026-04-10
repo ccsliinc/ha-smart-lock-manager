@@ -13,6 +13,11 @@ import logging
 from homeassistant.core import HomeAssistant, ServiceCall
 
 from ..const import ATTR_CODE_SLOT, ATTR_ENTITY_ID, DOMAIN, PRIMARY_LOCK
+from ..models.lock import (
+    USER_ID_STATUS_AVAILABLE,
+    USER_ID_STATUS_DISABLED,
+    USER_ID_STATUS_ENABLED,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,6 +140,7 @@ class ZWaveServices:
                             current_code
                             and str(current_code) == slot.pin_code
                             and current_in_use
+                            and slot.user_id_status == USER_ID_STATUS_ENABLED
                         ):
                             _LOGGER.info(
                                 "Slot %s already has correct code and is enabled,"
@@ -148,7 +154,10 @@ class ZWaveServices:
                         if (
                             current_code
                             and str(current_code) == slot.pin_code
-                            and not current_in_use
+                            and (
+                                not current_in_use
+                                or slot.user_id_status != USER_ID_STATUS_ENABLED
+                            )
                         ):
                             _LOGGER.warning(
                                 "Slot %s has correct code but userIdStatus"
@@ -174,6 +183,7 @@ class ZWaveServices:
                     },
                     blocking=True,
                 )
+                slot.user_id_status = USER_ID_STATUS_ENABLED
                 _LOGGER.info(
                     "Added code to Z-Wave lock %s slot %s", entity_id, slot_number
                 )
@@ -186,6 +196,7 @@ class ZWaveServices:
                     {"entity_id": entity_id, "code_slot": slot_number},
                     blocking=True,
                 )
+                slot.user_id_status = USER_ID_STATUS_AVAILABLE
                 _LOGGER.info(
                     "Removed code from Z-Wave lock %s slot %s", entity_id, slot_number
                 )
@@ -225,6 +236,7 @@ class ZWaveServices:
                                 current_code
                                 and str(current_code) == slot.pin_code
                                 and current_in_use
+                                and slot.user_id_status == USER_ID_STATUS_ENABLED
                             ):
                                 _LOGGER.info(
                                     "Slot %s already has correct code and is"
@@ -240,7 +252,10 @@ class ZWaveServices:
                             if (
                                 current_code
                                 and str(current_code) == slot.pin_code
-                                and not current_in_use
+                                and (
+                                    not current_in_use
+                                    or slot.user_id_status != USER_ID_STATUS_ENABLED
+                                )
                             ):
                                 _LOGGER.warning(
                                     "Slot %s has correct code but userIdStatus"
@@ -281,6 +296,7 @@ class ZWaveServices:
                         },
                         blocking=True,
                     )
+                    slot.user_id_status = USER_ID_STATUS_ENABLED
                     _LOGGER.info(
                         "Auto-added code to Z-Wave lock %s slot %s",
                         entity_id,
@@ -294,6 +310,7 @@ class ZWaveServices:
                         {"entity_id": entity_id, "code_slot": slot_number},
                         blocking=True,
                     )
+                    slot.user_id_status = USER_ID_STATUS_AVAILABLE
                     _LOGGER.info(
                         "Auto-removed code from Z-Wave lock %s slot %s",
                         entity_id,
@@ -311,6 +328,9 @@ class ZWaveServices:
             )
             slot.is_synced = False
             slot.sync_error = str(e)
+            # Mark as disabled if slot has a code but sync failed
+            if slot.pin_code and slot.is_active:
+                slot.user_id_status = USER_ID_STATUS_DISABLED
 
     @staticmethod
     async def refresh_codes(hass: HomeAssistant, service_call: ServiceCall) -> None:
@@ -343,29 +363,50 @@ async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
     # async_get_node_from_entity_id is a @callback (sync) - do NOT await
     node = async_get_node_from_entity_id(hass, entity_id)
 
+    # Find the lock object so we can update user_id_status on CodeSlots
+    lock_obj = None
+    for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+        if isinstance(entry_data, dict):
+            candidate = entry_data.get(PRIMARY_LOCK)
+            if candidate and candidate.lock_entity_id == entity_id:
+                lock_obj = candidate
+                break
+
     # Read codes from all slots using sync get_usercode (cached ValueDB)
     codes_found = {}
     slots_tested = 0
     slots_with_errors = 0
 
-    for slot in range(1, 31):  # Test slots 1-30
+    for slot_num in range(1, 31):  # Test slots 1-30
         try:
             slots_tested += 1
             # get_usercode is SYNC - reads from cached ValueDB, no network call
-            code_info = get_usercode(node, slot)
+            code_info = get_usercode(node, slot_num)
 
-            if code_info and code_info.get("in_use") is True:
-                code_value = code_info.get("usercode")
-                if code_value:
-                    codes_found[slot] = {
-                        "code": str(code_value),
-                        "status": "occupied",
-                    }
-                    _LOGGER.debug("Found code in slot %s", slot)
+            in_use = code_info.get("in_use") is True if code_info else False
+            code_value = code_info.get("usercode") if code_info else None
+
+            if in_use and code_value:
+                codes_found[slot_num] = {
+                    "code": str(code_value),
+                    "status": "occupied",
+                }
+                _LOGGER.debug("Found code in slot %s", slot_num)
+
+            # Update user_id_status on the CodeSlot if lock object exists
+            if lock_obj:
+                code_slot = lock_obj.code_slots.get(slot_num)
+                if code_slot:
+                    if in_use and code_value:
+                        code_slot.user_id_status = USER_ID_STATUS_ENABLED
+                    elif code_value and not in_use:
+                        code_slot.user_id_status = USER_ID_STATUS_DISABLED
+                    else:
+                        code_slot.user_id_status = USER_ID_STATUS_AVAILABLE
 
         except Exception as e:
             slots_with_errors += 1
-            _LOGGER.debug("No code in slot %s: %s", slot, e)
+            _LOGGER.debug("No code in slot %s: %s", slot_num, e)
 
     # Fire event with found codes
     hass.bus.async_fire(

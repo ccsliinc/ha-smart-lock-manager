@@ -51,8 +51,19 @@ SLOT_STATUSES = {
     "SYNCHRONIZED": SlotStatus(
         "SYNCHRONIZED", "Synchronized", "#4caf50", "Code active and synced with lock"
     ),
+    "DISABLED_IN_LOCK": SlotStatus(
+        "DISABLED_IN_LOCK",
+        "Disabled in Lock",
+        "#ff9800",
+        "Code exists but disabled in physical lock",
+    ),
     "UNKNOWN": SlotStatus("UNKNOWN", "Unknown Status", "#9e9e9e", "Status unclear"),
 }
+
+# Z-Wave userIdStatus values
+USER_ID_STATUS_AVAILABLE = 0
+USER_ID_STATUS_ENABLED = 1
+USER_ID_STATUS_DISABLED = 2
 
 
 @dataclass
@@ -72,6 +83,9 @@ class CodeSlot:
     sync_attempts: int = 0
     last_sync_attempt: Optional[datetime] = None
     sync_error: Optional[str] = None
+
+    # Z-Wave userIdStatus (0=available, 1=enabled, 2=disabled)
+    user_id_status: Optional[int] = None
 
     # Time-based access control
     start_date: Optional[datetime] = None
@@ -173,6 +187,9 @@ class CodeSlot:
                 ):
                     return SLOT_STATUSES["SYNCHRONIZING"]
                 return SLOT_STATUSES["SYNC_ERROR"]
+            # Check if code exists but is disabled in the physical lock
+            if self.user_id_status == USER_ID_STATUS_DISABLED:
+                return SLOT_STATUSES["DISABLED_IN_LOCK"]
             # All good - active, valid, and synced
             return SLOT_STATUSES["SYNCHRONIZED"]
 
@@ -295,6 +312,7 @@ class SmartLockManagerLock:
         slot.user_name = None
         slot.is_active = False
         slot.is_synced = True
+        slot.user_id_status = USER_ID_STATUS_AVAILABLE
         slot.created_at = None
         slot.expires_at = None
 
@@ -429,9 +447,18 @@ class SmartLockManagerLock:
 
         for slot_number, slot in self.code_slots.items():
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
+            zwave_in_use = zwave_codes.get(slot_number, {}).get("in_use", False)
+
+            # Map Z-Wave in_use to user_id_status
+            if slot_number in zwave_codes:
+                if zwave_in_use:
+                    slot.user_id_status = USER_ID_STATUS_ENABLED
+                elif zwave_code:
+                    slot.user_id_status = USER_ID_STATUS_DISABLED
+                else:
+                    slot.user_id_status = USER_ID_STATUS_AVAILABLE
 
             # Check if slot is properly synced
-            zwave_in_use = zwave_codes.get(slot_number, {}).get("in_use", False)
             if slot.is_active and slot.pin_code:
                 if zwave_code == slot.pin_code and zwave_in_use:
                     slot.is_synced = True
@@ -549,6 +576,7 @@ class SmartLockManagerLock:
                         child_slot.allowed_days = slot.allowed_days
                         child_slot.max_uses = slot.max_uses
                         child_slot.notify_on_use = slot.notify_on_use
+                        child_slot.user_id_status = slot.user_id_status
                         # Don't sync usage counters - each lock tracks its own usage
 
     def get_usage_statistics(self) -> Dict[str, Any]:
@@ -591,6 +619,7 @@ class SmartLockManagerLock:
                 "is_synced": slot.is_synced,
                 "sync_attempts": slot.sync_attempts,
                 "sync_error": slot.sync_error,
+                "user_id_status": slot.user_id_status,
                 "start_date": slot.start_date.isoformat() if slot.start_date else None,
                 "end_date": slot.end_date.isoformat() if slot.end_date else None,
                 "allowed_hours": slot.allowed_hours,
@@ -600,6 +629,11 @@ class SmartLockManagerLock:
                 "notify_on_use": slot.notify_on_use,
                 "created_at": slot.created_at.isoformat() if slot.created_at else None,
                 "last_used": slot.last_used.isoformat() if slot.last_used else None,
+                "last_sync_attempt": (
+                    slot.last_sync_attempt.isoformat()
+                    if slot.last_sync_attempt
+                    else None
+                ),
             }
 
         return {

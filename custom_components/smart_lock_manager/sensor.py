@@ -14,7 +14,13 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .const import DOMAIN, PRIMARY_LOCK
-from .models.lock import CodeSlot, SmartLockManagerLock
+from .models.lock import (
+    USER_ID_STATUS_AVAILABLE,
+    USER_ID_STATUS_DISABLED,
+    USER_ID_STATUS_ENABLED,
+    CodeSlot,
+    SmartLockManagerLock,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +42,7 @@ async def async_setup_entry(
 
 
 class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
-    """Summary sensor that exposes lock object data as attributes for automation access."""
+    """Summary sensor that exposes lock object data as attributes."""
 
     def __init__(
         self,
@@ -80,12 +86,12 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                     break
 
         if found_lock:
-            return found_lock
+            return found_lock  # type: ignore[no-any-return]
         return self._lock
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return the attributes of the sensor with ALL object data for automation access."""
+        """Return the attributes of the sensor with all object data."""
         # Always get the latest lock object
         lock_to_use = self._get_current_lock()
 
@@ -117,7 +123,8 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 "is_active": slot.is_active,
                 "is_synced": slot.is_synced,
                 "is_valid_now": is_valid_now,
-                "use_count": slot.use_count,  # Always show usage, even for disabled slots
+                # Always show usage, even for disabled slots
+                "use_count": slot.use_count,
                 # Timestamps
                 "created_at": slot.created_at.isoformat() if slot.created_at else None,
                 "expires_at": slot.expires_at.isoformat() if slot.expires_at else None,
@@ -130,6 +137,11 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 "max_uses": slot.max_uses,
                 "notify_on_use": slot.notify_on_use,
                 "should_disable": slot.should_disable(),
+                # Z-Wave user ID status
+                "user_id_status": slot.user_id_status,
+                "user_id_status_text": self._get_user_id_status_text(
+                    slot.user_id_status
+                ),
                 # NEW: Unified status system
                 "status": status.to_dict(),
                 # Legacy fields for backward compatibility (until frontend is updated)
@@ -188,8 +200,25 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "architecture": "object_oriented_advanced",
         }
 
+    def _get_user_id_status_text(self, user_id_status: Optional[int]) -> str:
+        """Map user_id_status integer to human-readable string.
+
+        Description: Converts USER_ID_STATUS_* constant to display text.
+        Inputs: user_id_status (Optional[int]) - 0=available, 1=enabled,
+            2=disabled, None=unknown
+        Outputs: str - Human-readable status label
+        Example: _get_user_id_status_text(1) -> "Enabled"
+        """
+        if user_id_status == USER_ID_STATUS_AVAILABLE:
+            return "Available"
+        if user_id_status == USER_ID_STATUS_ENABLED:
+            return "Enabled"
+        if user_id_status == USER_ID_STATUS_DISABLED:
+            return "Disabled"
+        return "Unknown"
+
     def _get_slot_display_title(self, slot_num: int, slot: CodeSlot) -> str:
-        """Generate the display title for slot (e.g., 'Slot 1: John Doe' or 'Slot 2:')."""
+        """Generate display title for slot (e.g., 'Slot 1: John Doe' or 'Slot 2:')."""
         if slot.user_name:
             return f"Slot {slot_num}: {slot.user_name}"
         else:
@@ -287,7 +316,8 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 )
                 reasons.append(f"Only allowed on: {days_str}")
             if slot.allowed_hours:
-                hours_str = f"{min(slot.allowed_hours):02d}:00-{max(slot.allowed_hours)+1:02d}:00"
+                end_hour = max(slot.allowed_hours) + 1
+                hours_str = f"{min(slot.allowed_hours):02d}:00-{end_hour:02d}:00"
                 reasons.append(f"Only allowed during: {hours_str}")
             return "; ".join(reasons) if reasons else "Time restrictions active"
 

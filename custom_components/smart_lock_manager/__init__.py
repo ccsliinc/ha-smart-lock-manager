@@ -265,6 +265,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 is_synced=slot_data.get("is_synced", False),
                 sync_attempts=slot_data.get("sync_attempts", 0),
                 sync_error=slot_data.get("sync_error"),
+                last_sync_attempt=(
+                    datetime.fromisoformat(slot_data["last_sync_attempt"])
+                    if slot_data.get("last_sync_attempt")
+                    else None
+                ),
+                user_id_status=slot_data.get("user_id_status"),
             )
             lock.code_slots[slot_num] = slot
 
@@ -326,6 +332,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Fetch initial data and force full sync on startup
     await coordinator.async_config_entry_first_refresh()
     _LOGGER.info("Completed first refresh for %s coordinator", lock.lock_name)
+
+    # Auto-repair parent-child link inconsistencies after all locks loaded
+    _repair_parent_child_links(hass)
 
     # NOTE: Initial Z-Wave code reading removed — it was blocking HA startup.
     # hass.services.async_call creates service-call tasks that HA's bootstrap
@@ -557,6 +566,47 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     _LOGGER.info("Registered system services")
 
 
+def _repair_parent_child_links(hass: HomeAssistant) -> None:
+    """Auto-repair one-sided parent-child lock relationships.
+
+    Iterates all loaded locks. If a child claims a parent but the parent's
+    child_lock_ids list doesn't contain the child, the child is added.
+    Also warns (but does not remove) if a parent lists a child that doesn't
+    claim it as parent.
+    """
+    all_locks = {}
+    for entry_id, entry_data in hass.data[DOMAIN].items():
+        if isinstance(entry_data, dict):
+            lock_obj = entry_data.get(PRIMARY_LOCK)
+            if lock_obj:
+                all_locks[lock_obj.lock_entity_id] = lock_obj
+
+    for entity_id, lock_obj in all_locks.items():
+        # Forward check: child claims parent -> ensure parent knows about child
+        if lock_obj.parent_lock_id:
+            parent = all_locks.get(lock_obj.parent_lock_id)
+            if parent and entity_id not in parent.child_lock_ids:
+                parent.child_lock_ids.append(entity_id)
+                _LOGGER.warning(
+                    "Auto-repaired: added %s to %s's child_lock_ids",
+                    entity_id,
+                    parent.lock_entity_id,
+                )
+
+        # Reverse check: parent lists child -> warn if child doesn't claim parent
+        if lock_obj.child_lock_ids:
+            for child_id in lock_obj.child_lock_ids:
+                child = all_locks.get(child_id)
+                if child and child.parent_lock_id != entity_id:
+                    _LOGGER.warning(
+                        "Parent %s lists %s as child, but child's parent_lock_id"
+                        " is %s (not removing — may be intentional)",
+                        entity_id,
+                        child_id,
+                        child.parent_lock_id,
+                    )
+
+
 class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching data from the lock."""
 
@@ -592,6 +642,9 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 return {}
 
             if lock:
+                # Step 0: Auto-repair parent-child link inconsistencies
+                _repair_parent_child_links(self.hass)
+
                 # Step 1: Check for slot validity changes and auto-disable expired slots
                 lock.check_and_update_slot_validity()
 
