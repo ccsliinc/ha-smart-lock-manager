@@ -5,6 +5,12 @@ zwave_js integration. Uses the sync ``get_usercode`` helper (reads from
 the cached ValueDB) for fast reads, with ``get_usercode_from_node``
 (async, queries the physical device) as a fallback to populate the cache
 after writes or when the cache is empty for slots that should have codes.
+
+IMPORTANT: The HA ``set_lock_usercode`` service (and the underlying
+``zwave_js_server.util.lock.set_usercode``) only writes the PIN value --
+it does NOT set ``userIdStatus`` to Enabled.  We therefore use the
+User Code CC ``set`` command via ``invoke_cc_api`` which atomically
+writes both the status and the code in a single Z-Wave frame.
 """
 
 from __future__ import annotations
@@ -27,6 +33,12 @@ _LOGGER = logging.getLogger(__name__)
 # Timeout for the entire read_zwave_codes operation (seconds)
 _READ_CODES_TIMEOUT = 30
 
+# User Code CC command class ID
+_CC_USER_CODE = 99
+
+# UserIdStatus values for the User Code CC ``set`` command
+_USER_ID_STATUS_ENABLED = 1
+
 # Z-Wave JS integration support
 try:
     # async_get_node_from_entity_id is a @callback (sync), NOT a coroutine
@@ -41,12 +53,46 @@ except (ModuleNotFoundError, ImportError):
     ZWAVE_JS_AVAILABLE = False
 
 
+async def _set_usercode_with_status(
+    hass: HomeAssistant,
+    entity_id: str,
+    code_slot: int,
+    usercode: str,
+) -> None:
+    """Write a user code AND set userIdStatus=Enabled in a single Z-Wave frame.
+
+    The HA ``set_lock_usercode`` service only writes the PIN value; it does not
+    update ``userIdStatus``, so the slot stays "Available" (0) and reads back
+    as ``in_use=False``.  This helper uses the User Code CC ``set`` command
+    via ``zwave_js.invoke_cc_api`` which atomically sets both the status and
+    the code, matching the behaviour of ``set_usercodes`` / ``setMany``.
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: Lock entity ID.
+        code_slot: Slot number to program.
+        usercode: PIN code string (numeric, 4-8 digits).
+    """
+    await hass.services.async_call(
+        "zwave_js",
+        "invoke_cc_api",
+        {
+            "entity_id": entity_id,
+            "command_class": _CC_USER_CODE,
+            "endpoint": 0,
+            "method_name": "set",
+            "parameters": [code_slot, _USER_ID_STATUS_ENABLED, usercode],
+        },
+        blocking=True,
+    )
+
+
 async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None:
     """Force-refresh the Z-Wave ValueDB cache for a specific slot by querying the node.
 
-    After set_lock_usercode or clear_lock_usercode, the Z-Wave JS cached ValueDB
-    may not reflect the new value (especially for slots that were empty during
-    the initial Z-Wave interview). This uses get_usercode_from_node() which calls
+    After writing a code or clearing a slot, the Z-Wave JS cached ValueDB may
+    not reflect the new value (especially for slots that were empty during the
+    initial Z-Wave interview). This uses get_usercode_from_node() which calls
     node.async_invoke_cc_api(USER_CODE, "get", code_slot) to force the Z-Wave
     driver to query the physical node, populating the cache for subsequent sync reads.
 
@@ -65,12 +111,20 @@ async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None
         await asyncio.sleep(2)
 
         result = await get_usercode_from_node(node, code_slot)
+        in_use = result.get("in_use") if result else None
         _LOGGER.debug(
             "Z-Wave cache refreshed for slot %s on %s: in_use=%s",
             code_slot,
             entity_id,
-            result.get("in_use") if result else None,
+            in_use,
         )
+        if result and not result.get("in_use"):
+            _LOGGER.warning(
+                "Slot %s on %s still shows in_use=False after write+enable; "
+                "the lock may need more time to update its cache",
+                code_slot,
+                entity_id,
+            )
     except Exception as err:
         _LOGGER.warning(
             "Could not refresh Z-Wave cache for slot %s on %s: %s",
@@ -221,20 +275,15 @@ class ZWaveServices:
                         e,
                     )
 
-                # Add/update code in Z-Wave lock
-                await hass.services.async_call(
-                    "zwave_js",
-                    "set_lock_usercode",
-                    {
-                        "entity_id": entity_id,
-                        "code_slot": slot_number,
-                        "usercode": slot.pin_code,
-                    },
-                    blocking=True,
+                # Add/update code in Z-Wave lock with userIdStatus=Enabled
+                await _set_usercode_with_status(
+                    hass, entity_id, slot_number, slot.pin_code
                 )
                 slot.user_id_status = USER_ID_STATUS_ENABLED
                 _LOGGER.info(
-                    "Added code to Z-Wave lock %s slot %s", entity_id, slot_number
+                    "Added code to Z-Wave lock %s slot %s (with status=Enabled)",
+                    entity_id,
+                    slot_number,
                 )
                 if node:
                     await _refresh_slot_cache(node, slot_number, entity_id)
@@ -338,20 +387,14 @@ class ZWaveServices:
                             "Could not check existing code, proceeding with set: %s", e
                         )
 
-                    # Should be in lock - add it
-                    await hass.services.async_call(
-                        "zwave_js",
-                        "set_lock_usercode",
-                        {
-                            "entity_id": entity_id,
-                            "code_slot": slot_number,
-                            "usercode": slot.pin_code,
-                        },
-                        blocking=True,
+                    # Should be in lock - add it with userIdStatus=Enabled
+                    await _set_usercode_with_status(
+                        hass, entity_id, slot_number, slot.pin_code
                     )
                     slot.user_id_status = USER_ID_STATUS_ENABLED
                     _LOGGER.info(
-                        "Auto-added code to Z-Wave lock %s slot %s",
+                        "Auto-added code to Z-Wave lock %s slot %s"
+                        " (with status=Enabled)",
                         entity_id,
                         slot_number,
                     )
