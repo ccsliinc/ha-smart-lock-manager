@@ -8,10 +8,10 @@ after writes or when the cache is empty for slots that should have codes.
 
 IMPORTANT: The HA ``set_lock_usercode`` service (and the underlying
 ``zwave_js_server.util.lock.set_usercode``) only writes the PIN value --
-it does NOT set ``userIdStatus`` to Enabled.  We therefore use the
-User Code CC ``setMany`` command via ``invoke_cc_api`` which atomically
-writes both the status and the code in a single Z-Wave frame, matching
-the approach used by ``zwave_js_server.util.lock.set_usercodes``.
+it does NOT set ``userIdStatus`` to Enabled.  We therefore call
+``set_usercodes()`` from ``zwave_js_server.util.lock`` directly on the
+node object, which atomically writes both the status and the code in a
+single Z-Wave frame via the User Code CC ``setMany`` command.
 """
 
 from __future__ import annotations
@@ -34,12 +34,6 @@ _LOGGER = logging.getLogger(__name__)
 # Timeout for the entire read_zwave_codes operation (seconds)
 _READ_CODES_TIMEOUT = 30
 
-# User Code CC command class ID
-_CC_USER_CODE = 99
-
-# UserIdStatus values for the User Code CC ``set`` command
-_USER_ID_STATUS_ENABLED = 1
-
 # Z-Wave JS integration support
 try:
     # async_get_node_from_entity_id is a @callback (sync), NOT a coroutine
@@ -47,7 +41,11 @@ try:
 
     # get_usercode is sync (reads from cached ValueDB) - safe and fast
     # get_usercode_from_node is async (queries the device) - populates cache
-    from zwave_js_server.util.lock import get_usercode, get_usercode_from_node
+    from zwave_js_server.util.lock import (
+        get_usercode,
+        get_usercode_from_node,
+        set_usercodes,
+    )
 
     ZWAVE_JS_AVAILABLE = True
 except (ModuleNotFoundError, ImportError):
@@ -59,45 +57,36 @@ async def _set_usercode_with_status(
     entity_id: str,
     code_slot: int,
     usercode: str,
+    node: Any = None,
 ) -> None:
-    """Write a user code AND set userIdStatus=Enabled atomically via setMany.
+    """Write a user code AND set userIdStatus=Enabled atomically.
 
-    The HA ``set_lock_usercode`` service only writes the PIN value; it does not
-    update ``userIdStatus``, so the slot stays "Available" (0) and reads back
-    as ``in_use=False``.  This helper uses the User Code CC ``setMany`` command
-    via ``zwave_js.invoke_cc_api`` which atomically sets both the status and
-    the code, matching the behaviour of ``zwave_js_server.util.lock.set_usercodes``.
+    Uses ``set_usercodes()`` from zwave_js_server which internally calls
+    ``node.async_invoke_cc_api(CommandClass.USER_CODE, "setMany", ...)``
+    with the correctly formatted dict and sets userIdStatus to Enabled.
 
-    The ``parameters`` list wraps the codes array in another list because
-    ``invoke_cc_api`` spreads parameters as positional args to the CC method,
-    and ``setMany`` expects a single array argument.
+    Falls back to the HA ``set_lock_usercode`` service if no node is available
+    (this fallback does NOT set userIdStatus, but is better than nothing).
 
     Args:
         hass: Home Assistant instance.
         entity_id: Lock entity ID.
         code_slot: Slot number to program.
         usercode: PIN code string (numeric, 4-8 digits).
+        node: Z-Wave JS node object (optional, enables direct set_usercodes).
     """
-    await hass.services.async_call(
-        "zwave_js",
-        "invoke_cc_api",
-        {
-            "entity_id": entity_id,
-            "command_class": _CC_USER_CODE,
-            "endpoint": 0,
-            "method_name": "setMany",
-            "parameters": [
-                [
-                    {
-                        "userId": code_slot,
-                        "userIdStatus": _USER_ID_STATUS_ENABLED,
-                        "userCode": usercode,
-                    }
-                ]
-            ],
-        },
-        blocking=True,
-    )
+    if node is None:
+        # Fall back to HA service if no node available
+        await hass.services.async_call(
+            "zwave_js",
+            "set_lock_usercode",
+            {"entity_id": entity_id, "code_slot": code_slot, "usercode": usercode},
+            blocking=True,
+        )
+        return
+
+    # Use set_usercodes which sets BOTH code AND userIdStatus=Enabled
+    await set_usercodes(node, {code_slot: usercode})
 
 
 async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None:
@@ -290,7 +279,7 @@ class ZWaveServices:
 
                 # Add/update code in Z-Wave lock with userIdStatus=Enabled
                 await _set_usercode_with_status(
-                    hass, entity_id, slot_number, slot.pin_code
+                    hass, entity_id, slot_number, slot.pin_code, node=node
                 )
                 slot.user_id_status = USER_ID_STATUS_ENABLED
                 _LOGGER.info(
@@ -402,7 +391,7 @@ class ZWaveServices:
 
                     # Should be in lock - add it with userIdStatus=Enabled
                     await _set_usercode_with_status(
-                        hass, entity_id, slot_number, slot.pin_code
+                        hass, entity_id, slot_number, slot.pin_code, node=node
                     )
                     slot.user_id_status = USER_ID_STATUS_ENABLED
                     _LOGGER.info(
