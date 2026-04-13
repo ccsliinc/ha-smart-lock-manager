@@ -70,10 +70,11 @@ success "SSH connectivity confirmed."
 
 # ─── Backup ───────────────────────────────────────────────────────────────────
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-BACKUP_PATH="${REMOTE_BASE}/smart_lock_manager.bak.${TIMESTAMP}"
+BACKUP_DIR="/homeassistant/backups/slm"
+BACKUP_PATH="${BACKUP_DIR}/smart_lock_manager.bak.${TIMESTAMP}"
 
 info "Creating remote backup → ${BACKUP_PATH}"
-ssh "$REMOTE_HOST" "cp -r ${REMOTE_PATH} ${BACKUP_PATH} 2>/dev/null && echo 'backup ok' || echo 'no existing dir, skipping backup'"
+ssh "$REMOTE_HOST" "mkdir -p ${BACKUP_DIR} && cp -r ${REMOTE_PATH} ${BACKUP_PATH} 2>/dev/null && echo 'backup ok' || echo 'no existing dir, skipping backup'"
 success "Backup step complete."
 
 # ─── Diff Summary ─────────────────────────────────────────────────────────────

@@ -38,6 +38,59 @@ except (ModuleNotFoundError, ImportError):
     ZWAVE_JS_AVAILABLE = False
 
 
+async def _refresh_zwave_cache(
+    hass: HomeAssistant, entity_id: str, slot_number: int
+) -> None:
+    """Refresh the Z-Wave ValueDB cache for a specific usercode slot after a write.
+
+    After set_lock_usercode or clear_lock_usercode, the Z-Wave JS cached ValueDB
+    may still hold stale data. This calls zwave_js.refresh_value to force a live
+    read from the node, so subsequent sync get_usercode() calls return the updated
+    value.
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: Lock entity ID.
+        slot_number: The code slot that was just written.
+    """
+    try:
+        _LOGGER.debug(
+            "Refreshing Z-Wave cache for slot %s after write on %s",
+            slot_number,
+            entity_id,
+        )
+        # Allow Z-Wave network propagation before refreshing cache
+        await asyncio.sleep(2)
+
+        node = async_get_node_from_entity_id(hass, entity_id)
+        if not node:
+            _LOGGER.warning("Could not get node for %s to refresh cache", entity_id)
+            return
+
+        # Build the value_id for the userCode value on this slot
+        # CommandClass 0x63 (99) = USER_CODE
+        value_id = f"{node.node_id}-99-0-userCode-{slot_number}"
+
+        await hass.services.async_call(
+            "zwave_js",
+            "refresh_value",
+            {"entity_id": entity_id, "value_id": value_id},
+            blocking=True,
+        )
+        _LOGGER.debug(
+            "Z-Wave cache refreshed for slot %s on %s", slot_number, entity_id
+        )
+    except Exception as e:
+        # Non-fatal: cache may be stale but the write itself succeeded
+        _LOGGER.warning(
+            "Could not refresh Z-Wave cache for slot %s on %s: %s "
+            "(cache may be stale until next poll)",
+            slot_number,
+            entity_id,
+            e,
+        )
+
+
 class ZWaveServices:
     """Service handler for Z-Wave integration operations."""
 
@@ -188,6 +241,7 @@ class ZWaveServices:
                 _LOGGER.info(
                     "Added code to Z-Wave lock %s slot %s", entity_id, slot_number
                 )
+                await _refresh_zwave_cache(hass, entity_id, slot_number)
 
             elif action == "disable":
                 # Remove code from Z-Wave lock
@@ -201,6 +255,7 @@ class ZWaveServices:
                 _LOGGER.info(
                     "Removed code from Z-Wave lock %s slot %s", entity_id, slot_number
                 )
+                await _refresh_zwave_cache(hass, entity_id, slot_number)
 
             elif action == "auto":
                 # Automatically determine action based on slot state
@@ -304,6 +359,7 @@ class ZWaveServices:
                         entity_id,
                         slot_number,
                     )
+                    await _refresh_zwave_cache(hass, entity_id, slot_number)
                 else:
                     # Should not be in lock - remove it
                     await hass.services.async_call(
@@ -318,6 +374,7 @@ class ZWaveServices:
                         entity_id,
                         slot_number,
                     )
+                    await _refresh_zwave_cache(hass, entity_id, slot_number)
 
             # Update sync status
             slot.is_synced = True
@@ -374,7 +431,11 @@ async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
                 lock_obj = candidate
                 break
 
-    # Read codes from all slots using sync get_usercode (cached ValueDB)
+    # Read codes from all slots using sync get_usercode (cached ValueDB).
+    # This reads from the Z-Wave JS ValueDB cache, NOT the live device.
+    # If a write just occurred and _refresh_zwave_cache hasn't completed yet,
+    # values here may be stale. Do NOT switch to async get_usercode_from_node
+    # as it queries the mesh and can hang indefinitely on sleeping nodes.
     codes_found = {}
     slots_tested = 0
     slots_with_errors = 0
