@@ -674,7 +674,10 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     from homeassistant.helpers.entity_registry import (
                         async_get as async_get_entity_registry,
                     )
-                    from zwave_js_server.util.lock import get_usercode
+                    from zwave_js_server.util.lock import (
+                        get_usercode,
+                        get_usercode_from_node,
+                    )
 
                     ent_reg = async_get_entity_registry(self.hass)
                     entity_entry = ent_reg.async_get(lock.lock_entity_id)
@@ -720,6 +723,35 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             for slot in range(1, 11):
                                 try:
                                     code_data = get_usercode(node, slot)
+                                except Exception:
+                                    code_data = None
+
+                                # If cache is empty but SLM expects a code in
+                                # this slot, force-refresh from the physical node
+                                if (
+                                    code_data is None
+                                    and lock
+                                    and slot in lock.code_slots
+                                    and lock.code_slots[slot].pin_code
+                                ):
+                                    try:
+                                        _LOGGER.debug(
+                                            "Coordinator: cache miss for slot %s"
+                                            " with expected code, querying node",
+                                            slot,
+                                        )
+                                        code_data = await get_usercode_from_node(
+                                            node, slot
+                                        )
+                                    except Exception as e:
+                                        _LOGGER.debug(
+                                            "Coordinator: async refresh failed"
+                                            " for slot %s: %s",
+                                            slot,
+                                            e,
+                                        )
+
+                                try:
                                     if code_data and code_data.get("usercode"):
                                         in_use = code_data.get("in_use") is True
                                         zwave_codes[slot] = {

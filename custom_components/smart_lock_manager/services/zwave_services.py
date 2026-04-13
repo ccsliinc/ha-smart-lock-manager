@@ -2,13 +2,16 @@
 
 Handles reading and writing user codes to physical Z-Wave locks via the
 zwave_js integration. Uses the sync ``get_usercode`` helper (reads from
-the cached ValueDB) instead of the async ``get_usercode_from_node``
-(which queries the device over the mesh and can hang if the node is
-asleep or unreachable).
+the cached ValueDB) for fast reads, with ``get_usercode_from_node``
+(async, queries the physical device) as a fallback to populate the cache
+after writes or when the cache is empty for slots that should have codes.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from homeassistant.core import HomeAssistant, ServiceCall
 
@@ -30,81 +33,51 @@ try:
     from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
 
     # get_usercode is sync (reads from cached ValueDB) - safe and fast
-    # get_usercode_from_node is async (queries the device) - can hang
-    from zwave_js_server.util.lock import get_usercode
+    # get_usercode_from_node is async (queries the device) - populates cache
+    from zwave_js_server.util.lock import get_usercode, get_usercode_from_node
 
     ZWAVE_JS_AVAILABLE = True
 except (ModuleNotFoundError, ImportError):
     ZWAVE_JS_AVAILABLE = False
 
 
-async def _refresh_zwave_cache(
-    hass: HomeAssistant, entity_id: str, slot_number: int
-) -> None:
-    """Refresh the Z-Wave ValueDB cache after a usercode write.
+async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None:
+    """Force-refresh the Z-Wave ValueDB cache for a specific slot by querying the node.
 
     After set_lock_usercode or clear_lock_usercode, the Z-Wave JS cached ValueDB
-    may still hold stale data. This refreshes all node values so subsequent sync
-    get_usercode() calls return the updated value.
+    may not reflect the new value (especially for slots that were empty during
+    the initial Z-Wave interview). This uses get_usercode_from_node() which calls
+    node.async_invoke_cc_api(USER_CODE, "get", code_slot) to force the Z-Wave
+    driver to query the physical node, populating the cache for subsequent sync reads.
 
     Args:
-        hass: Home Assistant instance.
-        entity_id: Lock entity ID.
-        slot_number: The code slot that was just written (for logging only).
+        node: Z-Wave JS node object.
+        code_slot: The code slot number that was just written.
+        entity_id: Lock entity ID (for logging).
     """
     try:
         _LOGGER.debug(
-            "Refreshing Z-Wave cache for slot %s after write on %s",
-            slot_number,
+            "Refreshing Z-Wave cache for slot %s on %s via node query",
+            code_slot,
             entity_id,
         )
-        # Allow Z-Wave network propagation before refreshing cache
+        # Allow Z-Wave network propagation before querying back
         await asyncio.sleep(2)
 
-        # Use invoke_cc_api to read back the specific slot from the node.
-        # Command class 99 = User Code, method "get" reads a single slot.
-        await hass.services.async_call(
-            "zwave_js",
-            "invoke_cc_api",
-            {
-                "entity_id": entity_id,
-                "command_class": 99,
-                "endpoint": 0,
-                "method_name": "get",
-                "parameters": [slot_number],
-            },
-            blocking=True,
-            return_response=True,
-        )
+        result = await get_usercode_from_node(node, code_slot)
         _LOGGER.debug(
-            "Z-Wave cache refreshed for slot %s on %s", slot_number, entity_id
-        )
-    except Exception as e:
-        # Fallback: refresh all node values if invoke_cc_api is unavailable
-        _LOGGER.debug(
-            "invoke_cc_api failed for slot %s on %s (%s), "
-            "falling back to refresh_node_values",
-            slot_number,
+            "Z-Wave cache refreshed for slot %s on %s: in_use=%s",
+            code_slot,
             entity_id,
-            e,
+            result.get("in_use") if result else None,
         )
-        try:
-            await hass.services.async_call(
-                "zwave_js",
-                "refresh_node_values",
-                {"entity_id": entity_id},
-                blocking=True,
-            )
-            _LOGGER.debug("Z-Wave node values refreshed (fallback) for %s", entity_id)
-        except Exception as fallback_err:
-            # Non-fatal: cache may be stale but the write itself succeeded
-            _LOGGER.warning(
-                "Could not refresh Z-Wave cache for slot %s on %s: %s "
-                "(cache may be stale until next poll)",
-                slot_number,
-                entity_id,
-                fallback_err,
-            )
+    except Exception as err:
+        _LOGGER.warning(
+            "Could not refresh Z-Wave cache for slot %s on %s: %s",
+            code_slot,
+            entity_id,
+            err,
+        )
 
 
 class ZWaveServices:
@@ -180,6 +153,13 @@ class ZWaveServices:
             _LOGGER.error("No slot %s found in lock %s", slot_number, lock.lock_name)
             return
 
+        # Get Z-Wave node once for cache refresh operations
+        try:
+            node = async_get_node_from_entity_id(hass, entity_id)
+        except Exception as e:
+            _LOGGER.debug("Could not get Z-Wave node for %s: %s", entity_id, e)
+            node = None
+
         try:
             if action == "enable" and slot.is_active and slot.pin_code:
                 # Validate PIN code before sending to Z-Wave
@@ -192,7 +172,6 @@ class ZWaveServices:
 
                 # Check cached code to avoid unnecessary writes
                 try:
-                    node = async_get_node_from_entity_id(hass, entity_id)
                     if node:
                         current_code_info = get_usercode(node, slot_number)
                         current_code = (
@@ -257,7 +236,8 @@ class ZWaveServices:
                 _LOGGER.info(
                     "Added code to Z-Wave lock %s slot %s", entity_id, slot_number
                 )
-                await _refresh_zwave_cache(hass, entity_id, slot_number)
+                if node:
+                    await _refresh_slot_cache(node, slot_number, entity_id)
 
             elif action == "disable":
                 # Remove code from Z-Wave lock
@@ -271,7 +251,8 @@ class ZWaveServices:
                 _LOGGER.info(
                     "Removed code from Z-Wave lock %s slot %s", entity_id, slot_number
                 )
-                await _refresh_zwave_cache(hass, entity_id, slot_number)
+                if node:
+                    await _refresh_slot_cache(node, slot_number, entity_id)
 
             elif action == "auto":
                 # Automatically determine action based on slot state
@@ -289,7 +270,6 @@ class ZWaveServices:
 
                     # Check cached code - use sync get_usercode (fast, no network)
                     try:
-                        node = async_get_node_from_entity_id(hass, entity_id)
                         if node:
                             current_code_info = get_usercode(node, slot_number)
                             current_code = (
@@ -375,7 +355,8 @@ class ZWaveServices:
                         entity_id,
                         slot_number,
                     )
-                    await _refresh_zwave_cache(hass, entity_id, slot_number)
+                    if node:
+                        await _refresh_slot_cache(node, slot_number, entity_id)
                 else:
                     # Should not be in lock - remove it
                     await hass.services.async_call(
@@ -390,7 +371,8 @@ class ZWaveServices:
                         entity_id,
                         slot_number,
                     )
-                    await _refresh_zwave_cache(hass, entity_id, slot_number)
+                    if node:
+                        await _refresh_slot_cache(node, slot_number, entity_id)
 
             # Update sync status
             slot.is_synced = True
