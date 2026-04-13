@@ -41,17 +41,16 @@ except (ModuleNotFoundError, ImportError):
 async def _refresh_zwave_cache(
     hass: HomeAssistant, entity_id: str, slot_number: int
 ) -> None:
-    """Refresh the Z-Wave ValueDB cache for a specific usercode slot after a write.
+    """Refresh the Z-Wave ValueDB cache after a usercode write.
 
     After set_lock_usercode or clear_lock_usercode, the Z-Wave JS cached ValueDB
-    may still hold stale data. This calls zwave_js.refresh_value to force a live
-    read from the node, so subsequent sync get_usercode() calls return the updated
-    value.
+    may still hold stale data. This refreshes all node values so subsequent sync
+    get_usercode() calls return the updated value.
 
     Args:
         hass: Home Assistant instance.
         entity_id: Lock entity ID.
-        slot_number: The code slot that was just written.
+        slot_number: The code slot that was just written (for logging only).
     """
     try:
         _LOGGER.debug(
@@ -62,33 +61,50 @@ async def _refresh_zwave_cache(
         # Allow Z-Wave network propagation before refreshing cache
         await asyncio.sleep(2)
 
-        node = async_get_node_from_entity_id(hass, entity_id)
-        if not node:
-            _LOGGER.warning("Could not get node for %s to refresh cache", entity_id)
-            return
-
-        # Build the value_id for the userCode value on this slot
-        # CommandClass 0x63 (99) = USER_CODE
-        value_id = f"{node.node_id}-99-0-userCode-{slot_number}"
-
+        # Use invoke_cc_api to read back the specific slot from the node.
+        # Command class 99 = User Code, method "get" reads a single slot.
         await hass.services.async_call(
             "zwave_js",
-            "refresh_value",
-            {"entity_id": entity_id, "value_id": value_id},
+            "invoke_cc_api",
+            {
+                "entity_id": entity_id,
+                "command_class": 99,
+                "endpoint": 0,
+                "method_name": "get",
+                "parameters": [slot_number],
+            },
             blocking=True,
+            return_response=True,
         )
         _LOGGER.debug(
             "Z-Wave cache refreshed for slot %s on %s", slot_number, entity_id
         )
     except Exception as e:
-        # Non-fatal: cache may be stale but the write itself succeeded
-        _LOGGER.warning(
-            "Could not refresh Z-Wave cache for slot %s on %s: %s "
-            "(cache may be stale until next poll)",
+        # Fallback: refresh all node values if invoke_cc_api is unavailable
+        _LOGGER.debug(
+            "invoke_cc_api failed for slot %s on %s (%s), "
+            "falling back to refresh_node_values",
             slot_number,
             entity_id,
             e,
         )
+        try:
+            await hass.services.async_call(
+                "zwave_js",
+                "refresh_node_values",
+                {"entity_id": entity_id},
+                blocking=True,
+            )
+            _LOGGER.debug("Z-Wave node values refreshed (fallback) for %s", entity_id)
+        except Exception as fallback_err:
+            # Non-fatal: cache may be stale but the write itself succeeded
+            _LOGGER.warning(
+                "Could not refresh Z-Wave cache for slot %s on %s: %s "
+                "(cache may be stale until next poll)",
+                slot_number,
+                entity_id,
+                fallback_err,
+            )
 
 
 class ZWaveServices:
