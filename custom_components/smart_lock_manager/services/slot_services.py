@@ -8,6 +8,7 @@ from ..const import (
     ATTR_CODE_SLOT,
     ATTR_ENTITY_ID,
     ATTR_SLOT_COUNT,
+    COORDINATOR,
     DOMAIN,
     PRIMARY_LOCK,
 )
@@ -39,10 +40,11 @@ class SlotServices:
 
                         await _save_lock_data(hass, lock, entry_id)
 
-                        # Trigger immediate child sync if this is a main lock with children
+                        # Trigger immediate child sync if main lock has children
                         if lock.is_main_lock and lock.child_lock_ids:
                             _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s enabled, triggering immediate child sync to %s children",
+                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s enabled,"
+                                " triggering immediate child sync to %s children",
                                 lock.lock_name,
                                 code_slot,
                                 len(lock.child_lock_ids),
@@ -50,19 +52,22 @@ class SlotServices:
 
                             try:
                                 from ..const import SERVICE_SYNC_CHILD_LOCKS
+
                                 await hass.services.async_call(
                                     DOMAIN,
                                     SERVICE_SYNC_CHILD_LOCKS,
                                     {ATTR_ENTITY_ID: lock.lock_entity_id},
                                 )
                                 _LOGGER.info(
-                                    "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s enable",
+                                    "🔄 IMMEDIATE SYNC - Successfully triggered"
+                                    " immediate child sync for %s after slot %s enable",
                                     lock.lock_name,
                                     code_slot,
                                 )
                             except Exception as e:
                                 _LOGGER.error(
-                                    "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                    "🔄 IMMEDIATE SYNC - Failed to trigger"
+                                    " immediate child sync for %s: %s",
                                     lock.lock_name,
                                     e,
                                 )
@@ -98,10 +103,11 @@ class SlotServices:
 
                         await _save_lock_data(hass, lock, entry_id)
 
-                        # Trigger immediate child sync if this is a main lock with children
+                        # Trigger immediate child sync if main lock has children
                         if lock.is_main_lock and lock.child_lock_ids:
                             _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s disabled, triggering immediate child sync to %s children",
+                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s disabled,"
+                                " triggering immediate child sync to %s children",
                                 lock.lock_name,
                                 code_slot,
                                 len(lock.child_lock_ids),
@@ -109,19 +115,22 @@ class SlotServices:
 
                             try:
                                 from ..const import SERVICE_SYNC_CHILD_LOCKS
+
                                 await hass.services.async_call(
                                     DOMAIN,
                                     SERVICE_SYNC_CHILD_LOCKS,
                                     {ATTR_ENTITY_ID: lock.lock_entity_id},
                                 )
                                 _LOGGER.info(
-                                    "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s disable",
+                                    "🔄 IMMEDIATE SYNC - Successfully triggered"
+                                    " child sync for %s after slot %s disable",
                                     lock.lock_name,
                                     code_slot,
                                 )
                             except Exception as e:
                                 _LOGGER.error(
-                                    "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                    "🔄 IMMEDIATE SYNC - Failed to trigger"
+                                    " immediate child sync for %s: %s",
                                     lock.lock_name,
                                     e,
                                 )
@@ -161,6 +170,48 @@ class SlotServices:
                     else:
                         _LOGGER.error(
                             "Failed to reset usage counter for slot %s in lock %s",
+                            code_slot,
+                            lock.lock_name,
+                        )
+                    return
+
+        _LOGGER.error("No lock found for entity_id: %s", entity_id)
+
+    @staticmethod
+    async def reset_sync(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Reset sync state for a code slot, clearing error state for fresh sync."""
+        entity_id = service_call.data[ATTR_ENTITY_ID]
+        code_slot = service_call.data[ATTR_CODE_SLOT]
+
+        for entry_id, entry_data in hass.data[DOMAIN].items():
+            if isinstance(entry_data, dict):  # Skip global_settings
+                lock = entry_data.get(PRIMARY_LOCK)
+                if lock and lock.lock_entity_id == entity_id:
+                    slot = lock.code_slots.get(code_slot)
+                    if slot:
+                        slot.sync_attempts = 0
+                        slot.sync_error = None
+                        slot.is_synced = False
+                        slot.user_id_status = None  # Force re-read from Z-Wave
+
+                        _LOGGER.info(
+                            "Reset sync state for slot %s on %s",
+                            code_slot,
+                            entity_id,
+                        )
+
+                        # Save changes to storage
+                        from .. import _save_lock_data
+
+                        await _save_lock_data(hass, lock, entry_id)
+
+                        # Trigger coordinator refresh to start sync on next cycle
+                        coordinator = entry_data.get(COORDINATOR)
+                        if coordinator:
+                            await coordinator.async_request_refresh()
+                    else:
+                        _LOGGER.error(
+                            "Slot %s not found in lock %s",
                             code_slot,
                             lock.lock_name,
                         )
