@@ -9,8 +9,9 @@ after writes or when the cache is empty for slots that should have codes.
 IMPORTANT: The HA ``set_lock_usercode`` service (and the underlying
 ``zwave_js_server.util.lock.set_usercode``) only writes the PIN value --
 it does NOT set ``userIdStatus`` to Enabled.  We therefore use the
-User Code CC ``set`` command via ``invoke_cc_api`` which atomically
-writes both the status and the code in a single Z-Wave frame.
+User Code CC ``setMany`` command via ``invoke_cc_api`` which atomically
+writes both the status and the code in a single Z-Wave frame, matching
+the approach used by ``zwave_js_server.util.lock.set_usercodes``.
 """
 
 from __future__ import annotations
@@ -59,13 +60,17 @@ async def _set_usercode_with_status(
     code_slot: int,
     usercode: str,
 ) -> None:
-    """Write a user code AND set userIdStatus=Enabled in a single Z-Wave frame.
+    """Write a user code AND set userIdStatus=Enabled atomically via setMany.
 
     The HA ``set_lock_usercode`` service only writes the PIN value; it does not
     update ``userIdStatus``, so the slot stays "Available" (0) and reads back
-    as ``in_use=False``.  This helper uses the User Code CC ``set`` command
+    as ``in_use=False``.  This helper uses the User Code CC ``setMany`` command
     via ``zwave_js.invoke_cc_api`` which atomically sets both the status and
-    the code, matching the behaviour of ``set_usercodes`` / ``setMany``.
+    the code, matching the behaviour of ``zwave_js_server.util.lock.set_usercodes``.
+
+    The ``parameters`` list wraps the codes array in another list because
+    ``invoke_cc_api`` spreads parameters as positional args to the CC method,
+    and ``setMany`` expects a single array argument.
 
     Args:
         hass: Home Assistant instance.
@@ -80,8 +85,16 @@ async def _set_usercode_with_status(
             "entity_id": entity_id,
             "command_class": _CC_USER_CODE,
             "endpoint": 0,
-            "method_name": "set",
-            "parameters": [code_slot, _USER_ID_STATUS_ENABLED, usercode],
+            "method_name": "setMany",
+            "parameters": [
+                [
+                    {
+                        "userId": code_slot,
+                        "userIdStatus": _USER_ID_STATUS_ENABLED,
+                        "userCode": usercode,
+                    }
+                ]
+            ],
         },
         blocking=True,
     )
