@@ -48,6 +48,7 @@ from .const import (
     SERVICE_REFRESH_CODES,
     SERVICE_REMOVE_CHILD_LOCK,
     SERVICE_RESET_SLOT_USAGE,
+    SERVICE_RESET_SYNC,
     SERVICE_RESIZE_SLOTS,
     SERVICE_SET_CODE,
     SERVICE_SET_CODE_ADVANCED,
@@ -380,6 +381,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_ENABLE_SLOT)
             hass.services.async_remove(DOMAIN, SERVICE_DISABLE_SLOT)
             hass.services.async_remove(DOMAIN, SERVICE_RESET_SLOT_USAGE)
+            hass.services.async_remove(DOMAIN, SERVICE_RESET_SYNC)
             hass.services.async_remove(DOMAIN, SERVICE_RESIZE_SLOTS)
             hass.services.async_remove(DOMAIN, SERVICE_SYNC_CHILD_LOCKS)
             hass.services.async_remove(DOMAIN, SERVICE_GET_USAGE_STATS)
@@ -439,6 +441,9 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     async def reset_slot_usage_wrapper(service_call: ServiceCall) -> None:
         return await SlotServices.reset_slot_usage(hass, service_call)
+
+    async def reset_sync_wrapper(service_call: ServiceCall) -> None:
+        return await SlotServices.reset_sync(hass, service_call)
 
     async def resize_slots_wrapper(service_call: ServiceCall) -> None:
         return await SlotServices.resize_slots(hass, service_call)
@@ -500,6 +505,12 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_RESIZE_SLOTS, resize_slots_wrapper, schema=RESIZE_SLOTS_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_SYNC,
+        reset_sync_wrapper,
+        schema=ENABLE_DISABLE_SLOT_SCHEMA,
     )
     _LOGGER.info("Registered slot management services")
 
@@ -614,6 +625,11 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
         """Initialize."""
         self.entry = entry
         self.lock_name = entry.data.get("lock_name", "Smart Lock")
+
+        # Track periodic retry state for permanently failed slots.
+        # Key: "{entity_id}_slot_{slot_num}"
+        # Value: {"last_retry": datetime, "periodic_attempts": int}
+        self._periodic_retry_tracker: dict[str, dict] = {}
 
         super().__init__(
             hass,
@@ -735,6 +751,19 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     list(zwave_codes.keys()) if zwave_codes else "none",
                 )
                 lock.update_sync_status(zwave_codes)
+
+                # Clean up periodic retry tracker for slots that are now synced
+                for sn, sl in lock.code_slots.items():
+                    if sl.is_synced:
+                        tk = f"{lock.lock_entity_id}_slot_{sn}"
+                        if tk in self._periodic_retry_tracker:
+                            _LOGGER.info(
+                                "Slot %s on %s now synced, clearing"
+                                " periodic retry tracker",
+                                sn,
+                                lock.lock_entity_id,
+                            )
+                            del self._periodic_retry_tracker[tk]
 
                 # Log sync comparison for active slots
                 for sn, sl in lock.code_slots.items():
@@ -890,39 +919,132 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             e,
                         )
 
-                # Step 5: Retry sync for failed slots (throttled)
-                for slot_number in sync_actions.get("retry", []):
-                    slot = lock.code_slots.get(slot_number)
-                    if slot and slot.sync_error:
-                        now = datetime.now()
+                # Step 5: Periodic retry for permanently failed slots
+                # Instead of just logging, actually re-attempt sync on a
+                # schedule: every 30 min for the first 30 cumulative attempts,
+                # then every 2 hours after that. Only ONE slot retried per cycle
+                # to avoid flooding the Z-Wave mesh.
+                retry_slots = sync_actions.get("retry", [])
+                if retry_slots:
+                    now = datetime.now()
+                    best_candidate = None
+                    best_last_retry = None
 
-                        # Throttle retries to once every 10 minutes
-                        if slot.last_sync_attempt and (
-                            now - slot.last_sync_attempt
-                        ) < timedelta(minutes=10):
+                    for slot_number in retry_slots:
+                        slot = lock.code_slots.get(slot_number)
+                        if not slot:
                             continue
 
-                        slot.last_sync_attempt = now
+                        tracker_key = f"{lock.lock_entity_id}_slot_{slot_number}"
+                        tracker = self._periodic_retry_tracker.get(tracker_key, {})
+                        last_retry = tracker.get("last_retry")
+                        periodic_attempts = tracker.get("periodic_attempts", 0)
 
-                        # Log at warning level once per hour (~120 cycles at 30s)
-                        if slot.sync_attempts % 120 == 0:
-                            _LOGGER.warning(
-                                "Slot %s sync failed permanently (attempt %s): %s",
-                                slot_number,
-                                slot.sync_attempts,
-                                slot.sync_error,
+                        # Determine retry interval based on cumulative attempts
+                        # (original 10 + periodic retries * 10 each round)
+                        total_attempts = slot.sync_attempts + (periodic_attempts * 10)
+                        if total_attempts >= 30:
+                            retry_interval = timedelta(hours=2)
+                        else:
+                            retry_interval = timedelta(minutes=30)
+
+                        # Check if enough time has passed
+                        if last_retry and (now - last_retry) < retry_interval:
+                            continue
+
+                        # Pick the slot with the oldest (or missing) retry time
+                        if best_candidate is None or (
+                            last_retry is None
+                            or (
+                                best_last_retry is not None
+                                and last_retry < best_last_retry
+                            )
+                        ):
+                            best_candidate = slot_number
+                            best_last_retry = last_retry
+
+                    # Retry ONE slot per cycle
+                    if best_candidate is not None:
+                        slot = lock.code_slots.get(best_candidate)
+                        if slot:
+                            tracker_key = (
+                                f"{lock.lock_entity_id}_slot_" f"{best_candidate}"
+                            )
+                            tracker = self._periodic_retry_tracker.get(tracker_key, {})
+                            periodic_attempts = tracker.get("periodic_attempts", 0)
+                            old_attempts = slot.sync_attempts
+
+                            # Reset slot sync state for a fresh start
+                            slot.sync_attempts = 0
+                            slot.sync_error = None
+                            slot.is_synced = False
+
+                            _LOGGER.info(
+                                "Periodic retry: re-attempting sync for"
+                                " slot %s on %s (was stuck at %s"
+                                " attempts, periodic retry #%s)",
+                                best_candidate,
+                                lock.lock_entity_id,
+                                old_attempts,
+                                periodic_attempts + 1,
                             )
 
-                            # Fire event only when we log (once per hour)
+                            try:
+                                action = "enable" if slot.is_active else "disable"
+                                await self.hass.services.async_call(
+                                    DOMAIN,
+                                    "sync_slot_to_zwave",
+                                    {
+                                        ATTR_ENTITY_ID: (lock.lock_entity_id),
+                                        ATTR_CODE_SLOT: best_candidate,
+                                        "action": action,
+                                    },
+                                )
+                            except Exception as e:
+                                _LOGGER.error(
+                                    "Periodic retry failed for slot %s" " on %s: %s",
+                                    best_candidate,
+                                    lock.lock_entity_id,
+                                    e,
+                                )
+
+                            # Update tracker regardless of success/failure
+                            self._periodic_retry_tracker[tracker_key] = {
+                                "last_retry": now,
+                                "periodic_attempts": periodic_attempts + 1,
+                            }
+
+                            # Fire event for visibility
                             self.hass.bus.async_fire(
-                                "smart_lock_manager_sync_error",
+                                "smart_lock_manager_sync_retry",
                                 {
                                     "entity_id": lock.lock_entity_id,
-                                    "slot_number": slot_number,
-                                    "error": slot.sync_error,
-                                    "attempts": slot.sync_attempts,
+                                    "slot_number": best_candidate,
+                                    "periodic_attempt": (periodic_attempts + 1),
+                                    "previous_attempts": old_attempts,
                                 },
                             )
+
+                    # Still log warning for all stuck slots (once per hour)
+                    for slot_number in retry_slots:
+                        slot = lock.code_slots.get(slot_number)
+                        if slot and slot.sync_error:
+                            if slot.sync_attempts % 120 == 0:
+                                _LOGGER.warning(
+                                    "Slot %s sync stuck (attempt %s): %s",
+                                    slot_number,
+                                    slot.sync_attempts,
+                                    slot.sync_error,
+                                )
+                                self.hass.bus.async_fire(
+                                    "smart_lock_manager_sync_error",
+                                    {
+                                        "entity_id": lock.lock_entity_id,
+                                        "slot_number": slot_number,
+                                        "error": slot.sync_error,
+                                        "attempts": slot.sync_attempts,
+                                    },
+                                )
 
                 # Step 6: Auto-sync codes to child locks if this is a main lock
                 if lock.is_main_lock and lock.child_lock_ids:

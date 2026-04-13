@@ -212,6 +212,23 @@ reset_slot_usage:
           max: 50
           mode: box
 
+reset_sync:
+  name: Reset Sync
+  description: Reset sync state for a code slot, clearing error state and allowing fresh sync attempt.
+  target:
+    entity:
+      domain: lock
+  fields:
+    code_slot:
+      name: Code Slot
+      description: The code slot number to reset.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+
 resize_slots:
   name: Resize Slots
   description: Change the number of available code slots for a lock.

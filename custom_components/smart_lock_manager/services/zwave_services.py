@@ -160,9 +160,10 @@ class ZWaveServices:
                             )
                         ):
                             _LOGGER.warning(
-                                "Slot %s has correct code but userIdStatus"
-                                " not Enabled - will re-set to fix",
+                                "Code matches but not enabled in lock"
+                                " — re-sending to enable for slot %s on %s",
                                 slot_number,
+                                entity_id,
                             )
                 except Exception as e:
                     _LOGGER.debug(
@@ -258,9 +259,10 @@ class ZWaveServices:
                                 )
                             ):
                                 _LOGGER.warning(
-                                    "Slot %s has correct code but userIdStatus"
-                                    " not Enabled - will re-set to fix",
+                                    "Code matches but not enabled in lock"
+                                    " — re-sending to enable for slot %s on %s",
                                     slot_number,
+                                    entity_id,
                                 )
 
                             # If there's a different code in the slot, clear it first

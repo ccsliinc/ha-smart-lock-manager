@@ -1,6 +1,10 @@
 """Constants for Smart Lock Manager."""
 
+import logging
+
 from homeassistant.components.lock import LockState
+
+_LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_lock_manager"
 VERSION = "2025.1.0"
@@ -83,6 +87,7 @@ SERVICE_GET_USAGE_STATS = "get_usage_stats"
 SERVICE_READ_ZWAVE_CODES = "read_zwave_codes"
 SERVICE_REFRESH_CODES = "refresh_codes"
 SERVICE_RESET_SLOT_USAGE = "reset_slot_usage"
+SERVICE_RESET_SYNC = "reset_sync"
 SERVICE_REMOVE_CHILD_LOCK = "remove_child_lock"
 SERVICE_RESIZE_SLOTS = "resize_slots"
 SERVICE_SET_CODE = "set_code"
@@ -128,7 +133,3 @@ LOCK_STATE_MAP = {
     ALARM_TYPE: {LockState.LOCKED: 24, LockState.UNLOCKED: 25},
     ACCESS_CONTROL: {LockState.LOCKED: 3, LockState.UNLOCKED: 4},
 }
-
-import logging
-
-_LOGGER = logging.getLogger(__name__)

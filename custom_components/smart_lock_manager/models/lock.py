@@ -411,6 +411,7 @@ class SmartLockManagerLock:
 
         for slot_number, slot in self.code_slots.items():
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
+            zwave_in_use = zwave_codes.get(slot_number, {}).get("in_use", False)
 
             # Smart Lock Manager wants this slot active
             if slot.is_active and slot.pin_code and slot.is_valid_now():
@@ -421,6 +422,9 @@ class SmartLockManagerLock:
                     else:
                         retry_slots.append(slot_number)
                         slot.sync_error = "Failed to sync after 10 attempts"
+                # Code matches but disabled in lock - needs re-enable
+                elif zwave_code == slot.pin_code and not zwave_in_use:
+                    add_slots.append(slot_number)
 
             # Smart Lock Manager wants this slot disabled/removed
             elif not slot.is_active or not slot.pin_code or not slot.is_valid_now():
