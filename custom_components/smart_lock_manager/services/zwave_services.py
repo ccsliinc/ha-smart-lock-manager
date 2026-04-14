@@ -6,12 +6,10 @@ the cached ValueDB) for fast reads, with ``get_usercode_from_node``
 (async, queries the physical device) as a fallback to populate the cache
 after writes or when the cache is empty for slots that should have codes.
 
-IMPORTANT: The HA ``set_lock_usercode`` service (and the underlying
-``zwave_js_server.util.lock.set_usercode``) only writes the PIN value --
-it does NOT set ``userIdStatus`` to Enabled.  We therefore call
-``set_usercodes()`` from ``zwave_js_server.util.lock`` directly on the
-node object, which atomically writes both the status and the code in a
-single Z-Wave frame via the User Code CC ``setMany`` command.
+Write path: the HA ``set_lock_usercode`` service is used as the primary
+mechanism to write the PIN value.  After the write, ``userIdStatus`` is
+explicitly set to Enabled via ``node.async_set_value()`` to ensure the
+slot is active on Kwikset 918 and similar locks.
 """
 
 from __future__ import annotations
@@ -41,10 +39,14 @@ try:
 
     # get_usercode is sync (reads from cached ValueDB) - safe and fast
     # get_usercode_from_node is async (queries the device) - populates cache
+    from zwave_js_server.const.command_class.lock import (
+        LOCK_USERCODE_STATUS_PROPERTY,
+        CodeSlotStatus,
+    )
     from zwave_js_server.util.lock import (
+        get_code_slot_value,
         get_usercode,
         get_usercode_from_node,
-        set_usercodes,
     )
 
     ZWAVE_JS_AVAILABLE = True
@@ -59,34 +61,52 @@ async def _set_usercode_with_status(
     usercode: str,
     node: Any = None,
 ) -> None:
-    """Write a user code AND set userIdStatus=Enabled atomically.
+    """Write a user code via HA service, then explicitly enable userIdStatus.
 
-    Uses ``set_usercodes()`` from zwave_js_server which internally calls
-    ``node.async_invoke_cc_api(CommandClass.USER_CODE, "setMany", ...)``
-    with the correctly formatted dict and sets userIdStatus to Enabled.
-
-    Falls back to the HA ``set_lock_usercode`` service if no node is available
-    (this fallback does NOT set userIdStatus, but is better than nothing).
+    Uses the HA ``set_lock_usercode`` service as the primary write path —
+    proven reliable on Kwikset 918 locks.  After the write completes, the
+    userIdStatus value is explicitly set to Enabled via ``node.async_set_value()``
+    to ensure the slot is active on locks that do not auto-enable on PIN write.
 
     Args:
         hass: Home Assistant instance.
         entity_id: Lock entity ID.
         code_slot: Slot number to program.
         usercode: PIN code string (numeric, 4-8 digits).
-        node: Z-Wave JS node object (optional, enables direct set_usercodes).
+        node: Z-Wave JS node object (optional, used to set userIdStatus after write).
     """
-    if node is None:
-        # Fall back to HA service if no node available
-        await hass.services.async_call(
-            "zwave_js",
-            "set_lock_usercode",
-            {"entity_id": entity_id, "code_slot": code_slot, "usercode": usercode},
-            blocking=True,
-        )
-        return
+    await hass.services.async_call(
+        "zwave_js",
+        "set_lock_usercode",
+        {"entity_id": entity_id, "code_slot": code_slot, "usercode": usercode},
+        blocking=True,
+    )
+    _LOGGER.info(
+        "set_lock_usercode service call succeeded for slot %s on %s",
+        code_slot,
+        entity_id,
+    )
 
-    # Use set_usercodes which sets BOTH code AND userIdStatus=Enabled
-    await set_usercodes(node, {code_slot: usercode})
+    # Explicitly set userIdStatus=Enabled after the PIN write
+    if node:
+        try:
+            await asyncio.sleep(2)
+            status_value = get_code_slot_value(
+                node, code_slot, LOCK_USERCODE_STATUS_PROPERTY
+            )
+            await node.async_set_value(status_value, CodeSlotStatus.ENABLED)
+            _LOGGER.info(
+                "Explicitly set userIdStatus=Enabled for slot %s on %s",
+                code_slot,
+                entity_id,
+            )
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not set userIdStatus for slot %s on %s: %s",
+                code_slot,
+                entity_id,
+                err,
+            )
 
 
 async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None:
@@ -110,7 +130,8 @@ async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None
             entity_id,
         )
         # Allow Z-Wave network propagation before querying back
-        await asyncio.sleep(2)
+        # Kwikset locks need extra time for mesh propagation
+        await asyncio.sleep(5)
 
         result = await get_usercode_from_node(node, code_slot)
         in_use = result.get("in_use") if result else None
@@ -269,6 +290,24 @@ class ZWaveServices:
                                 slot_number,
                                 entity_id,
                             )
+
+                        # If there's a different code in the slot, clear first
+                        if current_code and str(current_code) != slot.pin_code:
+                            _LOGGER.info(
+                                "Clearing existing code from slot %s before"
+                                " writing new code",
+                                slot_number,
+                            )
+                            await hass.services.async_call(
+                                "zwave_js",
+                                "clear_lock_usercode",
+                                {
+                                    "entity_id": entity_id,
+                                    "code_slot": slot_number,
+                                },
+                                blocking=True,
+                            )
+                            await asyncio.sleep(2)
                 except Exception as e:
                     _LOGGER.debug(
                         "Could not pre-check code for slot %s,"
@@ -370,8 +409,8 @@ class ZWaveServices:
                             # If there's a different code in the slot, clear it first
                             if current_code and str(current_code) != slot.pin_code:
                                 _LOGGER.info(
-                                    "Clearing existing code before setting new"
-                                    " one in slot %s",
+                                    "Clearing existing code from slot %s before"
+                                    " writing new code",
                                     slot_number,
                                 )
                                 await hass.services.async_call(
@@ -383,7 +422,7 @@ class ZWaveServices:
                                     },
                                     blocking=True,
                                 )
-                                await asyncio.sleep(1)
+                                await asyncio.sleep(2)
                     except Exception as e:
                         _LOGGER.debug(
                             "Could not check existing code, proceeding with set: %s", e
