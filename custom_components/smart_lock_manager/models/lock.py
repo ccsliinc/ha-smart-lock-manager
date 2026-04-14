@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
 _LOGGER = logging.getLogger(__name__)
@@ -409,7 +409,14 @@ class SmartLockManagerLock:
         # Get current Z-Wave codes if provided
         zwave_codes = zwave_codes or {}
 
+        now = datetime.now()
         for slot_number, slot in self.code_slots.items():
+            # Grace period: skip slots that were recently written (within 60s)
+            if slot.last_sync_attempt and (now - slot.last_sync_attempt) < timedelta(
+                seconds=60
+            ):
+                continue
+
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
             zwave_in_use = zwave_codes.get(slot_number, {}).get("in_use", False)
 
@@ -426,20 +433,17 @@ class SmartLockManagerLock:
                 elif zwave_code == slot.pin_code and not zwave_in_use:
                     add_slots.append(slot_number)
 
-            # Smart Lock Manager wants this slot disabled/removed
-            elif not slot.is_active or not slot.pin_code or not slot.is_valid_now():
-                # Check if there's still a code in the lock that shouldn't be there
+            # Only remove codes that SLM intentionally disabled
+            # (is_active=False AND pin_code is set means SLM explicitly
+            # disabled this slot)
+            elif not slot.is_active and slot.pin_code:
                 if zwave_code:
                     remove_slots.append(slot_number)
 
-        # Find rogue codes in lock that Smart Lock Manager doesn't know about
-        for slot_number, zwave_data in zwave_codes.items():
-            if slot_number not in self.code_slots:
-                # Rogue code - remove it
-                remove_slots.append(slot_number)
-            elif not self.code_slots[slot_number].is_active:
-                # Code exists but slot should be inactive - remove it
-                remove_slots.append(slot_number)
+            # Do NOT remove codes where SLM has no pin_code
+            # (SLM never managed this slot)
+            # Do NOT remove codes based on is_valid_now()
+            # (time-based disabling handled separately)
 
         return {"add": add_slots, "remove": remove_slots, "retry": retry_slots}
 

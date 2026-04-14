@@ -726,23 +726,55 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                 except Exception:
                                     code_data = None
 
-                                # If cache is empty but SLM expects a code in
-                                # this slot, force-refresh from the physical node
+                                # Diagnostic: log raw get_usercode result for
+                                # slots where SLM expects a code but data looks wrong
                                 if (
-                                    code_data is None
+                                    code_data is not None
+                                    and lock
+                                    and slot in lock.code_slots
+                                    and lock.code_slots[slot].pin_code
+                                ):
+                                    _LOGGER.debug(
+                                        "Coordinator: raw get_usercode slot %s:"
+                                        " usercode=%s, in_use=%s",
+                                        slot,
+                                        repr(code_data.get("usercode", "MISSING"))[:10],
+                                        code_data.get("in_use"),
+                                    )
+
+                                # If cache is empty OR returns no usercode but SLM
+                                # expects a code in this slot, force-refresh from node
+                                if (
+                                    (code_data is None or not code_data.get("usercode"))
                                     and lock
                                     and slot in lock.code_slots
                                     and lock.code_slots[slot].pin_code
                                 ):
                                     try:
                                         _LOGGER.debug(
-                                            "Coordinator: cache miss for slot %s"
+                                            "Coordinator: cache miss/empty for slot %s"
                                             " with expected code, querying node",
                                             slot,
                                         )
-                                        code_data = await get_usercode_from_node(
+                                        fallback_data = await get_usercode_from_node(
                                             node, slot
                                         )
+                                        _LOGGER.debug(
+                                            "Coordinator: get_usercode_from_node"
+                                            " slot %s returned: usercode=%s, in_use=%s",
+                                            slot,
+                                            repr(
+                                                fallback_data.get("usercode", "MISSING")
+                                                if fallback_data
+                                                else "None"
+                                            )[:10],
+                                            (
+                                                fallback_data.get("in_use")
+                                                if fallback_data
+                                                else "N/A"
+                                            ),
+                                        )
+                                        code_data = fallback_data
                                     except Exception as e:
                                         _LOGGER.debug(
                                             "Coordinator: async refresh failed"
@@ -889,22 +921,21 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 for slot_number in sync_actions.get("remove", []):
                     slot = lock.code_slots.get(slot_number)
                     try:
-                        # If slot doesn't exist in Smart Lock Manager, it's a rogue code
+                        _LOGGER.warning(
+                            "Coordinator: REMOVING code from physical lock %s slot %s"
+                            " (reason: SLM intentionally disabled)",
+                            lock.lock_entity_id,
+                            slot_number,
+                        )
                         if not slot:
-                            await self.hass.services.async_call(
-                                DOMAIN,
-                                SERVICE_CLEAR_CODE,
-                                {
-                                    ATTR_ENTITY_ID: lock.lock_entity_id,
-                                    ATTR_CODE_SLOT: slot_number,
-                                },
-                            )
-                            _LOGGER.info(
-                                "Auto-clearing rogue code from lock %s slot %s"
-                                " (no Smart Lock Manager entry)",
-                                self.lock_name,
+                            # Should no longer happen since rogue code removal
+                            # was removed
+                            _LOGGER.warning(
+                                "Coordinator: slot %s has no SLM entry but was"
+                                " in remove list - skipping",
                                 slot_number,
                             )
+                            continue
                         elif not slot.is_active:
                             # Slot exists but disabled - remove from Z-Wave only
                             _LOGGER.info(
