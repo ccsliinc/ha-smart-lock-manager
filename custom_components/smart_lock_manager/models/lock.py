@@ -418,7 +418,6 @@ class SmartLockManagerLock:
                 continue
 
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
-            zwave_in_use = zwave_codes.get(slot_number, {}).get("in_use", False)
 
             # Smart Lock Manager wants this slot active
             if slot.is_active and slot.pin_code and slot.is_valid_now():
@@ -429,9 +428,7 @@ class SmartLockManagerLock:
                     else:
                         retry_slots.append(slot_number)
                         slot.sync_error = "Failed to sync after 10 attempts"
-                # Code matches but disabled in lock - needs re-enable
-                elif zwave_code == slot.pin_code and not zwave_in_use:
-                    add_slots.append(slot_number)
+                # Code matches — it's synced, don't re-write regardless of in_use
 
             # Only remove codes that SLM intentionally disabled
             # (is_active=False AND pin_code is set means SLM explicitly
@@ -468,14 +465,12 @@ class SmartLockManagerLock:
 
             # Check if slot is properly synced
             if slot.is_active and slot.pin_code:
-                if zwave_code == slot.pin_code and zwave_in_use:
+                if zwave_code == slot.pin_code:
+                    # Code matches in lock — that's what matters for sync
                     slot.is_synced = True
-                    slot.sync_attempts = 0  # Reset on success
+                    slot.sync_attempts = 0
                     slot.sync_error = None
-                elif zwave_code == slot.pin_code and not zwave_in_use:
-                    # Code matches but userIdStatus is not Enabled
-                    slot.is_synced = False
-                    slot.sync_error = "Code present but userIdStatus not Enabled"
+                    # user_id_status is informational only, not a sync gate
                 else:
                     slot.is_synced = False
             elif not slot.is_active or not slot.pin_code:

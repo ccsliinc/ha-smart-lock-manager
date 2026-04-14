@@ -676,7 +676,6 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     )
                     from zwave_js_server.util.lock import (
                         get_usercode,
-                        get_usercode_from_node,
                     )
 
                     ent_reg = async_get_entity_registry(self.hass)
@@ -742,46 +741,8 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                         code_data.get("in_use"),
                                     )
 
-                                # If cache is empty OR returns no usercode but SLM
-                                # expects a code in this slot, force-refresh from node
-                                if (
-                                    (code_data is None or not code_data.get("usercode"))
-                                    and lock
-                                    and slot in lock.code_slots
-                                    and lock.code_slots[slot].pin_code
-                                ):
-                                    try:
-                                        _LOGGER.debug(
-                                            "Coordinator: cache miss/empty for slot %s"
-                                            " with expected code, querying node",
-                                            slot,
-                                        )
-                                        fallback_data = await get_usercode_from_node(
-                                            node, slot
-                                        )
-                                        _LOGGER.debug(
-                                            "Coordinator: get_usercode_from_node"
-                                            " slot %s returned: usercode=%s, in_use=%s",
-                                            slot,
-                                            repr(
-                                                fallback_data.get("usercode", "MISSING")
-                                                if fallback_data
-                                                else "None"
-                                            )[:10],
-                                            (
-                                                fallback_data.get("in_use")
-                                                if fallback_data
-                                                else "N/A"
-                                            ),
-                                        )
-                                        code_data = fallback_data
-                                    except Exception as e:
-                                        _LOGGER.debug(
-                                            "Coordinator: async refresh failed"
-                                            " for slot %s: %s",
-                                            slot,
-                                            e,
-                                        )
+                                # Cache empty for this slot — let sync logic handle it.
+                                # No async fallback to avoid hammering the Z-Wave mesh.
 
                                 try:
                                     if code_data and code_data.get("usercode"):

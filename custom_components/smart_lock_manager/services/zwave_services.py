@@ -2,14 +2,11 @@
 
 Handles reading and writing user codes to physical Z-Wave locks via the
 zwave_js integration. Uses the sync ``get_usercode`` helper (reads from
-the cached ValueDB) for fast reads, with ``get_usercode_from_node``
-(async, queries the physical device) as a fallback to populate the cache
-after writes or when the cache is empty for slots that should have codes.
+the cached ValueDB) for fast reads.
 
-Write path: the HA ``set_lock_usercode`` service is used as the primary
-mechanism to write the PIN value.  After the write, ``userIdStatus`` is
-explicitly set to Enabled via ``node.async_set_value()`` to ensure the
-slot is active on Kwikset 918 and similar locks.
+Write path: the HA ``set_lock_usercode`` service is the sole write
+mechanism. No explicit userIdStatus commands — the lock handles enablement
+on its own after receiving the PIN write.
 """
 
 from __future__ import annotations
@@ -39,14 +36,8 @@ try:
 
     # get_usercode is sync (reads from cached ValueDB) - safe and fast
     # get_usercode_from_node is async (queries the device) - populates cache
-    from zwave_js_server.const.command_class.lock import (
-        LOCK_USERCODE_STATUS_PROPERTY,
-        CodeSlotStatus,
-    )
     from zwave_js_server.util.lock import (
-        get_code_slot_value,
         get_usercode,
-        get_usercode_from_node,
     )
 
     ZWAVE_JS_AVAILABLE = True
@@ -61,19 +52,17 @@ async def _set_usercode_with_status(
     usercode: str,
     node: Any = None,
 ) -> None:
-    """Write a user code via HA service, then explicitly enable userIdStatus.
+    """Write a user code to the lock via HA service.
 
-    Uses the HA ``set_lock_usercode`` service as the primary write path —
-    proven reliable on Kwikset 918 locks.  After the write completes, the
-    userIdStatus value is explicitly set to Enabled via ``node.async_set_value()``
-    to ensure the slot is active on locks that do not auto-enable on PIN write.
+    Simple write — no explicit userIdStatus set, no sleep, no cache refresh.
+    The OLD working behavior: just write the code and let the lock handle it.
 
     Args:
         hass: Home Assistant instance.
         entity_id: Lock entity ID.
         code_slot: Slot number to program.
         usercode: PIN code string (numeric, 4-8 digits).
-        node: Z-Wave JS node object (optional, used to set userIdStatus after write).
+        node: Z-Wave JS node object (unused, kept for call-site compatibility).
     """
     await hass.services.async_call(
         "zwave_js",
@@ -87,74 +76,14 @@ async def _set_usercode_with_status(
         entity_id,
     )
 
-    # Explicitly set userIdStatus=Enabled after the PIN write
-    if node:
-        try:
-            await asyncio.sleep(2)
-            status_value = get_code_slot_value(
-                node, code_slot, LOCK_USERCODE_STATUS_PROPERTY
-            )
-            await node.async_set_value(status_value, CodeSlotStatus.ENABLED)
-            _LOGGER.info(
-                "Explicitly set userIdStatus=Enabled for slot %s on %s",
-                code_slot,
-                entity_id,
-            )
-        except Exception as err:
-            _LOGGER.warning(
-                "Could not set userIdStatus for slot %s on %s: %s",
-                code_slot,
-                entity_id,
-                err,
-            )
-
 
 async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None:
-    """Force-refresh the Z-Wave ValueDB cache for a specific slot by querying the node.
+    """Skip cache refresh to reduce Z-Wave mesh traffic.
 
-    After writing a code or clearing a slot, the Z-Wave JS cached ValueDB may
-    not reflect the new value (especially for slots that were empty during the
-    initial Z-Wave interview). This uses get_usercode_from_node() which calls
-    node.async_invoke_cc_api(USER_CODE, "get", code_slot) to force the Z-Wave
-    driver to query the physical node, populating the cache for subsequent sync reads.
-
-    Args:
-        node: Z-Wave JS node object.
-        code_slot: The code slot number that was just written.
-        entity_id: Lock entity ID (for logging).
+    The coordinator's 30-second cycle will pick up cache changes naturally.
+    Kept as a no-op for call-site compatibility.
     """
-    try:
-        _LOGGER.debug(
-            "Refreshing Z-Wave cache for slot %s on %s via node query",
-            code_slot,
-            entity_id,
-        )
-        # Allow Z-Wave network propagation before querying back
-        # Kwikset locks need extra time for mesh propagation
-        await asyncio.sleep(5)
-
-        result = await get_usercode_from_node(node, code_slot)
-        in_use = result.get("in_use") if result else None
-        _LOGGER.debug(
-            "Z-Wave cache refreshed for slot %s on %s: in_use=%s",
-            code_slot,
-            entity_id,
-            in_use,
-        )
-        if result and not result.get("in_use"):
-            _LOGGER.warning(
-                "Slot %s on %s still shows in_use=False after write+enable; "
-                "the lock may need more time to update its cache",
-                code_slot,
-                entity_id,
-            )
-    except Exception as err:
-        _LOGGER.warning(
-            "Could not refresh Z-Wave cache for slot %s on %s: %s",
-            code_slot,
-            entity_id,
-            err,
-        )
+    pass
 
 
 class ZWaveServices:
@@ -256,40 +185,16 @@ class ZWaveServices:
                             if current_code_info
                             else None
                         )
-                        current_in_use = (
-                            current_code_info.get("in_use") is True
-                            if current_code_info
-                            else False
-                        )
-                        if (
-                            current_code
-                            and str(current_code) == slot.pin_code
-                            and current_in_use
-                            and slot.user_id_status == USER_ID_STATUS_ENABLED
-                        ):
+                        # Code matches = synced, regardless of in_use status
+                        if current_code and str(current_code) == slot.pin_code:
                             _LOGGER.info(
-                                "Slot %s already has correct code and is enabled,"
-                                " skipping write",
+                                "Slot %s already has correct code, skipping write",
                                 slot_number,
                             )
                             slot.is_synced = True
                             slot.sync_error = None
                             slot.sync_attempts = 0
                             return
-                        if (
-                            current_code
-                            and str(current_code) == slot.pin_code
-                            and (
-                                not current_in_use
-                                or slot.user_id_status != USER_ID_STATUS_ENABLED
-                            )
-                        ):
-                            _LOGGER.warning(
-                                "Code matches but not enabled in lock"
-                                " — re-sending to enable for slot %s on %s",
-                                slot_number,
-                                entity_id,
-                            )
 
                         # If there's a different code in the slot, clear first
                         if current_code and str(current_code) != slot.pin_code:
@@ -367,44 +272,18 @@ class ZWaveServices:
                                 if current_code_info
                                 else None
                             )
-                            current_in_use = (
-                                current_code_info.get("in_use") is True
-                                if current_code_info
-                                else False
-                            )
 
-                            # If code matches AND is enabled, skip the write
-                            if (
-                                current_code
-                                and str(current_code) == slot.pin_code
-                                and current_in_use
-                                and slot.user_id_status == USER_ID_STATUS_ENABLED
-                            ):
+                            # Code matches = synced, regardless of in_use
+                            if current_code and str(current_code) == slot.pin_code:
                                 _LOGGER.info(
-                                    "Slot %s already has correct code and is"
-                                    " enabled, skipping write",
+                                    "Slot %s already has correct code,"
+                                    " skipping write",
                                     slot_number,
                                 )
                                 slot.is_synced = True
                                 slot.sync_error = None
                                 slot.sync_attempts = 0
                                 return
-
-                            # Code matches but not enabled - log and re-set
-                            if (
-                                current_code
-                                and str(current_code) == slot.pin_code
-                                and (
-                                    not current_in_use
-                                    or slot.user_id_status != USER_ID_STATUS_ENABLED
-                                )
-                            ):
-                                _LOGGER.warning(
-                                    "Code matches but not enabled in lock"
-                                    " — re-sending to enable for slot %s on %s",
-                                    slot_number,
-                                    entity_id,
-                                )
 
                             # If there's a different code in the slot, clear it first
                             if current_code and str(current_code) != slot.pin_code:
