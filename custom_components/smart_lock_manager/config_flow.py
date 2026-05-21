@@ -10,7 +10,7 @@ from homeassistant.helpers import selector
 from .const import DOMAIN
 
 
-class SmartLockManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class SmartLockManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle a config flow for Smart Lock Manager."""
 
     VERSION = 1
