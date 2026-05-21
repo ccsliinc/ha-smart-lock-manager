@@ -9,21 +9,21 @@ on:
 jobs:
   hacs:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Check out repository
       uses: actions/checkout@v4
-    
+
     - name: HACS validation
       uses: hacs/action@main
       with:
         category: integration
         ignore: brands
-    
+
     - name: Validate integration structure
       run: |
         echo "🔍 Validating Home Assistant integration structure..."
-        
+
         # Check required files
         required_files=(
           "custom_components/smart_lock_manager/__init__.py"
@@ -31,7 +31,7 @@ jobs:
           "custom_components/smart_lock_manager/config_flow.py"
           "hacs.json"
         )
-        
+
         for file in "${required_files[@]}"; do
           if [ ! -f "$file" ]; then
             echo "❌ Missing required file: $file"
@@ -39,25 +39,35 @@ jobs:
           fi
           echo "✅ Found: $file"
         done
-        
+
         # Check manifest requirements for HACS
         python -c "
         import json
         with open('custom_components/smart_lock_manager/manifest.json') as f:
             manifest = json.load(f)
-        
+
         # HACS required fields
         hacs_required = ['documentation', 'issue_tracker', 'codeowners']
         for field in hacs_required:
             if field not in manifest:
                 raise ValueError(f'HACS requires manifest field: {field}')
             print(f'✅ HACS field present: {field}')
-        
+
         # Version format check
         version = manifest['version']
         if not version.startswith('2025.'):
             raise ValueError(f'Expected CalVer format (2025.x.x), got: {version}')
         print(f'✅ Version format valid: {version}')
         "
-        
+
         echo "✅ Integration structure validation passed"
+
+  hassfest:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Run hassfest
+      uses: home-assistant/actions/hassfest@master

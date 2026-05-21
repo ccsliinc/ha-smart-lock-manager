@@ -97,6 +97,11 @@ yarn.lock
 .vulture
 .safety-cache/
 security-scan-results.json
+safety-report.json
+
+# Development scratch / dev-only artifacts
+_docs/
+test_environment.py
 
 # Environment files
 .env
