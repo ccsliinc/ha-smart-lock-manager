@@ -22,7 +22,47 @@ from ..models.lock import (
     USER_ID_STATUS_AVAILABLE,
     USER_ID_STATUS_DISABLED,
     USER_ID_STATUS_ENABLED,
+    SmartLockManagerLock,
 )
+
+
+def _reject_for_prefix_collision(
+    lock: SmartLockManagerLock, slot_number: int, pin: str
+) -> bool:
+    """Return True if writing ``pin`` to ``slot_number`` would collide.
+
+    Compares first-N digits against other active slots on this lock and
+    tags the target slot's ``sync_error`` plus ``validation_rejections``.
+    Used by the auto-sync coordinator path so silent Kwikset drops are caught
+    BEFORE the Z-Wave write is dispatched. The slot's ``sync_error`` is
+    populated and ``validation_rejections`` is incremented. PIN values are
+    never logged — only the prefix is.
+    """
+    conflict = lock.find_prefix_conflict(pin, slot_number)
+    if conflict is None:
+        return False
+    prefix_len = lock.code_collision_prefix_length
+    prefix = pin[:prefix_len]
+    message = (
+        f"Cannot set slot {slot_number}: PIN starts with same {prefix_len} digits "
+        f"({prefix}) as slot {conflict.slot_number} "
+        f"({conflict.user_name or 'unnamed'}). Kwikset locks silently reject "
+        f"such writes — pick a PIN with a different first {prefix_len} digits."
+    )
+    slot = lock.code_slots.get(slot_number)
+    if slot is not None:
+        slot.sync_error = message
+        slot.validation_rejections += 1
+        slot.is_synced = False
+    _LOGGER.error(
+        "Prefix-collision rejection on %s: slot %s vs slot %s (prefix=%s)",
+        lock.lock_name,
+        slot_number,
+        conflict.slot_number,
+        prefix,
+    )
+    return True
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -176,6 +216,10 @@ class ZWaveServices:
                         f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
                     )
 
+                # Kwikset prefix-collision guard: bail before Z-Wave write
+                if _reject_for_prefix_collision(lock, slot_number, slot.pin_code):
+                    return
+
                 # Check cached code to avoid unnecessary writes
                 try:
                     if node:
@@ -262,6 +306,10 @@ class ZWaveServices:
                             "PIN code must be 4-8 digits"
                             f" (length: {len(slot.pin_code)})"
                         )
+
+                    # Kwikset prefix-collision guard: bail before Z-Wave write
+                    if _reject_for_prefix_collision(lock, slot_number, slot.pin_code):
+                        return
 
                     # Check cached code - use sync get_usercode (fast, no network)
                     try:

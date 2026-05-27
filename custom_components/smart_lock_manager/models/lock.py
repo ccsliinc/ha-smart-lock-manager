@@ -66,6 +66,48 @@ USER_ID_STATUS_ENABLED = 1
 USER_ID_STATUS_DISABLED = 2
 
 
+def find_prefix_conflict(
+    new_pin: Optional[str],
+    existing_slots: List["CodeSlot"],
+    target_slot: int,
+    prefix_len: int = 4,
+) -> Optional["CodeSlot"]:
+    """Return existing slot that collides with ``new_pin`` on its prefix.
+
+    Compares the first ``prefix_len`` digits of ``new_pin`` against every
+    other active slot's code; returns the conflicting CodeSlot or ``None``.
+    Many Kwikset Z-Wave deadbolts silently drop a user-code write when the
+    new PIN shares its first 4 digits with any code already programmed on
+    the lock. This helper lets callers pre-validate writes and reject them
+    with a clear error instead of burning sync attempts.
+
+    - Description: Detect first-N-digit PIN collisions against active slots.
+    - Inputs:
+        new_pin: candidate PIN string (digits) or None.
+        existing_slots: iterable of CodeSlot objects on the same lock.
+        target_slot: slot number being written (excluded from comparison).
+        prefix_len: number of leading digits to compare (default 4). A value
+            <= 0 disables the check (returns None).
+    - Outputs: the conflicting CodeSlot, or None.
+    - Example: ``find_prefix_conflict("040873", lock.code_slots.values(), 7)``
+    """
+    if prefix_len <= 0:
+        return None
+    if not new_pin or len(new_pin) < prefix_len:
+        return None
+    prefix = new_pin[:prefix_len]
+    for slot in existing_slots:
+        if slot.slot_number == target_slot:
+            continue  # updating the same slot is always allowed
+        if not slot.is_active or not slot.pin_code:
+            continue
+        if len(slot.pin_code) < prefix_len:
+            continue
+        if slot.pin_code[:prefix_len] == prefix:
+            return slot
+    return None
+
+
 @dataclass
 class CodeSlot:
     """Represents a single code slot in a smart lock.
@@ -83,6 +125,11 @@ class CodeSlot:
     sync_attempts: int = 0
     last_sync_attempt: Optional[datetime] = None
     sync_error: Optional[str] = None
+
+    # Pre-sync validation tracking. Incremented when a write is rejected before
+    # dispatch (e.g. Kwikset 4-digit prefix collision). Distinct from
+    # ``sync_attempts`` which counts real Z-Wave write dispatches.
+    validation_rejections: int = 0
 
     # Z-Wave userIdStatus (0=available, 1=enabled, 2=disabled)
     user_id_status: Optional[int] = None
@@ -235,6 +282,12 @@ class SmartLockManagerLock:
     # All code slots stored as Python objects (NO SENSORS!)
     code_slots: Dict[int, CodeSlot] = field(default_factory=dict)
 
+    # Vendor-specific PIN collision prefix length. Some Z-Wave deadbolts
+    # (notably Kwikset 9xx series) silently DROP user-code writes when the
+    # new PIN shares its first N digits with any existing code on that lock.
+    # Default of 4 reflects the dominant Kwikset behavior; set to 0 to disable.
+    code_collision_prefix_length: int = 4
+
     # Lock status and connection state (NO SENSORS!)
     is_connected: bool = True
     connection_status: str = (
@@ -348,6 +401,21 @@ class SmartLockManagerLock:
     def get_slot_info(self, slot_number: int) -> Optional[CodeSlot]:
         """Get information about a specific slot."""
         return self.code_slots.get(slot_number)
+
+    def find_prefix_conflict(
+        self, new_pin: Optional[str], target_slot: int
+    ) -> Optional[CodeSlot]:
+        """Return CodeSlot that collides with ``new_pin`` on prefix, or None.
+
+        Convenience wrapper around the module-level ``find_prefix_conflict``
+        that uses this lock's ``code_collision_prefix_length`` setting.
+        """
+        return find_prefix_conflict(
+            new_pin,
+            list(self.code_slots.values()),
+            target_slot,
+            self.code_collision_prefix_length,
+        )
 
     def get_all_active_slots(self) -> Dict[int, CodeSlot]:
         """Get all active code slots."""
@@ -622,6 +690,7 @@ class SmartLockManagerLock:
                 "is_synced": slot.is_synced,
                 "sync_attempts": slot.sync_attempts,
                 "sync_error": slot.sync_error,
+                "validation_rejections": slot.validation_rejections,
                 "user_id_status": slot.user_id_status,
                 "start_date": slot.start_date.isoformat() if slot.start_date else None,
                 "end_date": slot.end_date.isoformat() if slot.end_date else None,
@@ -647,6 +716,7 @@ class SmartLockManagerLock:
             "is_main_lock": self.is_main_lock,
             "parent_lock_id": self.parent_lock_id,
             "child_lock_ids": self.child_lock_ids,
+            "code_collision_prefix_length": self.code_collision_prefix_length,
             "settings": {
                 "friendly_name": self.settings.friendly_name,
                 "auto_lock_time": (

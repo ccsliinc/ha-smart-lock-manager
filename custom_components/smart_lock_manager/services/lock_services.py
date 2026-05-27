@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 
 from ..const import (
     ATTR_CODE_SLOT,
@@ -15,6 +16,48 @@ from ..const import (
     PRIMARY_LOCK,
 )
 from ..models.lock import SmartLockManagerLock
+
+
+def _check_prefix_collision(
+    lock: SmartLockManagerLock, code_slot: int, user_code: Optional[str]
+) -> None:
+    """Raise HomeAssistantError if ``user_code`` collides on the lock's prefix.
+
+    Kwikset Z-Wave deadbolts silently drop user-code writes that share their
+    first N digits (default 4) with an existing code. Reject early with a
+    clear, user-facing error and tag the slot's ``sync_error`` for the UI.
+    PIN values are NEVER included in the error message — only the prefix.
+    """
+    if not user_code:
+        return
+    conflict = lock.find_prefix_conflict(user_code, code_slot)
+    if conflict is None:
+        return
+
+    prefix_len = lock.code_collision_prefix_length
+    prefix = user_code[:prefix_len]
+    message = (
+        f"Cannot set slot {code_slot}: PIN starts with same {prefix_len} digits "
+        f"({prefix}) as slot {conflict.slot_number} "
+        f"({conflict.user_name or 'unnamed'}). Kwikset locks silently reject "
+        f"such writes — pick a PIN with a different first {prefix_len} digits."
+    )
+
+    target_slot = lock.code_slots.get(code_slot)
+    if target_slot is not None:
+        target_slot.sync_error = message
+        target_slot.validation_rejections += 1
+        target_slot.is_synced = False
+
+    _LOGGER.error(
+        "Prefix-collision rejection on %s: slot %s vs slot %s (prefix=%s)",
+        lock.lock_name,
+        code_slot,
+        conflict.slot_number,
+        prefix,
+    )
+    raise HomeAssistantError(message)
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +89,9 @@ class LockServices:
                         lock.lock_name,
                         code_slot,
                     )
+
+                    # Pre-flight: reject PIN-prefix collisions before any write
+                    _check_prefix_collision(lock, code_slot, user_code)
 
                     success = lock.set_code(code_slot, user_code, user_name)
                     if success:
@@ -149,6 +195,9 @@ class LockServices:
         for entry_id, entry_data in hass.data[DOMAIN].items():
             lock = entry_data.get(PRIMARY_LOCK)
             if lock and lock.lock_entity_id == entity_id:
+                # Pre-flight: reject PIN-prefix collisions before any write
+                _check_prefix_collision(lock, code_slot, user_code)
+
                 success = lock.set_code(
                     code_slot,
                     user_code,

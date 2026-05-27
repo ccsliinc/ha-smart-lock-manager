@@ -275,3 +275,70 @@ class TestSmartLockManagerLock:
 
         # Slot 2 should not be synced (code mismatch)
         assert not sample_lock.code_slots[2].is_synced
+
+
+class TestPrefixConflict:
+    """Tests for the Kwikset 4-digit-prefix collision detector."""
+
+    def _make_lock(self) -> SmartLockManagerLock:
+        """Build a 10-slot lock for prefix testing."""
+        return SmartLockManagerLock(
+            lock_name="prefix_test",
+            lock_entity_id="lock.prefix_test",
+            slots=10,
+            start_from=1,
+        )
+
+    def test_conflict_on_same_prefix(self):
+        """Two codes sharing first 4 digits should collide."""
+        lock = self._make_lock()
+        lock.set_code(4, "040812", "Existing")
+        lock.code_slots[4].is_active = True
+
+        conflict = lock.find_prefix_conflict("040873", target_slot=7)
+
+        assert conflict is not None
+        assert conflict.slot_number == 4
+
+    def test_no_conflict_on_different_prefix(self):
+        """Different first 4 digits → no conflict."""
+        lock = self._make_lock()
+        lock.set_code(4, "040812", "Existing")
+        lock.code_slots[4].is_active = True
+
+        assert lock.find_prefix_conflict("050873", target_slot=7) is None
+
+    def test_same_slot_update_allowed(self):
+        """Updating the target slot's own code is never a conflict."""
+        lock = self._make_lock()
+        lock.set_code(4, "040812", "Same")
+        lock.code_slots[4].is_active = True
+
+        assert lock.find_prefix_conflict("040899", target_slot=4) is None
+
+    def test_inactive_slot_ignored(self):
+        """A disabled slot's code should not gate a new write."""
+        lock = self._make_lock()
+        lock.set_code(4, "040812", "Disabled")
+        lock.code_slots[4].is_active = False
+
+        assert lock.find_prefix_conflict("040873", target_slot=7) is None
+
+    def test_empty_or_short_pin_returns_none(self):
+        """Empty, None, or shorter-than-prefix PIN cannot collide."""
+        lock = self._make_lock()
+        lock.set_code(4, "040812", "Existing")
+        lock.code_slots[4].is_active = True
+
+        assert lock.find_prefix_conflict(None, target_slot=7) is None
+        assert lock.find_prefix_conflict("", target_slot=7) is None
+        assert lock.find_prefix_conflict("040", target_slot=7) is None
+
+    def test_configurable_prefix_length(self):
+        """Setting prefix_length=0 disables the check entirely."""
+        lock = self._make_lock()
+        lock.code_collision_prefix_length = 0
+        lock.set_code(4, "040812", "Existing")
+        lock.code_slots[4].is_active = True
+
+        assert lock.find_prefix_conflict("040873", target_slot=7) is None

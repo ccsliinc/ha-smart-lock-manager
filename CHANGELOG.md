@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2025.1.1] - 2026-05-27 - Kwikset Prefix-Collision Guard
+
+### Fixed
+- **Kwikset silent-drop bug**: Kwikset Z-Wave deadbolts (918 and most 9xx-series)
+  silently discard `set_lock_usercode` writes when the new PIN shares its first
+  4 digits with any existing code on the lock. The device ACKs the write but
+  never enables the code, so `is_synced` stays false and the coordinator burns
+  retries forever.
+
+### Added
+- `find_prefix_conflict()` helper in `models/lock.py` — pure, testable function
+  that returns the conflicting slot (or `None`) for a candidate PIN.
+- Per-lock `code_collision_prefix_length` setting (default `4`; set `0` to disable).
+- `validation_rejections` counter on `CodeSlot` — increments on pre-write
+  rejections so they are distinguishable from real Z-Wave `sync_attempts`.
+- Pre-write validation hooks in `lock_services.set_code`, `set_code_advanced`,
+  and `zwave_services.sync_slot_to_zwave` (the auto-sync coordinator path).
+- Conflict reason is written to `slot.sync_error` so the UI surfaces it.
+- Service calls raise `HomeAssistantError` with a clear message naming the
+  conflicting slot, its user name, and the offending prefix. PIN values are
+  never logged in full — only the prefix.
+
+### Tests
+- Six new unit tests in `tests/test_models_lock.py::TestPrefixConflict` cover:
+  basic conflict, no conflict, same-slot update, inactive-slot ignore,
+  empty/None PIN, and short-PIN edge cases.
+
 ## [2025.1.0] - 2025-08-19 - First Public Release
 
 ### 🎉 **MAJOR MILESTONE: First Public Release**
@@ -40,7 +67,7 @@ This release represents the complete transformation of Smart Lock Manager from a
 
 #### Added
 - **Bandit Security Scanning**: Python security vulnerability detection
-- **Safety Dependency Scanning**: Third-party vulnerability monitoring  
+- **Safety Dependency Scanning**: Third-party vulnerability monitoring
 - **Vulture Dead Code Detection**: Code quality and optimization analysis
 - **Enhanced Pre-commit Hooks**: Comprehensive validation with security checks
 - **PIN Validation Security**: Prevents logging of sensitive data
@@ -77,7 +104,7 @@ This release represents the complete transformation of Smart Lock Manager from a
 #### Added
 - **60+ New Test Cases** across 4 comprehensive test suites:
   - `test_sensor.py`: Complete sensor functionality testing
-  - `test_config_flow.py`: Configuration flow validation  
+  - `test_config_flow.py`: Configuration flow validation
   - `test_services_slot.py`: Slot management service testing
   - `test_security.py`: Security-focused test cases with injection attack prevention
 - **Coverage Reporting**: pytest-cov integration with HTML reports
