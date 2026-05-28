@@ -65,6 +65,11 @@ USER_ID_STATUS_AVAILABLE = 0
 USER_ID_STATUS_ENABLED = 1
 USER_ID_STATUS_DISABLED = 2
 
+# Maximum number of access-log entries retained per lock in persistent
+# storage. Oldest entries are dropped once this bound is exceeded so the
+# ``.storage`` file cannot grow without limit.
+ACCESS_LOG_MAX_ENTRIES = 100
+
 
 def find_prefix_conflict(
     new_pin: Optional[str],
@@ -294,6 +299,12 @@ class SmartLockManagerLock:
         "Connected"  # "Connected", "Connecting", "Disconnected", "Disconnecting"
     )
     last_updated: Optional[datetime] = None
+
+    # Access log: ordered list of lock/unlock/jam events with user attribution.
+    # Each entry is a dict; see ``add_access_log_entry``. Bounded to
+    # ``ACCESS_LOG_MAX_ENTRIES`` (oldest dropped) so persistent storage does
+    # not grow unbounded. NEVER contains PIN codes — only user_name + slot.
+    access_log: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Initialize code slots after dataclass creation."""
@@ -601,6 +612,44 @@ class SmartLockManagerLock:
 
         return True
 
+    def add_access_log_entry(
+        self,
+        action: str,
+        source: str,
+        user_name: Optional[str] = None,
+        slot: Optional[int] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Append a lock/unlock/jam event to the bounded access log.
+
+        - Description: Record a physical lock event with user attribution and
+          keep only the most recent ``ACCESS_LOG_MAX_ENTRIES`` entries.
+        - Inputs:
+            action: "locked", "unlocked", or "jammed".
+            source: "keypad", "manual", "rf", or "auto".
+            user_name: resolved person name for keypad events, else None.
+            slot: Z-Wave user slot number for keypad events, else None.
+            timestamp: event time (defaults to ``datetime.now()``).
+        - Outputs: the entry dict that was appended.
+        - Example: ``lock.add_access_log_entry("unlocked", "keypad", "Joe", 1)``
+
+        SECURITY: never stores PIN codes — only user_name and slot number.
+        """
+        entry: Dict[str, Any] = {
+            "timestamp": (timestamp or datetime.now()).isoformat(),
+            "action": action,
+            "source": source,
+            "user_name": user_name,
+            "slot": slot,
+        }
+        self.access_log.append(entry)
+
+        # Bound the list: drop oldest entries beyond the cap.
+        if len(self.access_log) > ACCESS_LOG_MAX_ENTRIES:
+            self.access_log = self.access_log[-ACCESS_LOG_MAX_ENTRIES:]
+
+        return entry
+
     def enable_slot(self, slot_number: int) -> bool:
         """Enable a slot (make it active)."""
         if slot_number not in self.code_slots:
@@ -732,6 +781,7 @@ class SmartLockManagerLock:
                 "timezone": self.settings.timezone,
             },
             "code_slots": slot_data,
+            "access_log": self.access_log,
             "is_connected": self.is_connected,
             "connection_status": self.connection_status,
             "last_updated": (

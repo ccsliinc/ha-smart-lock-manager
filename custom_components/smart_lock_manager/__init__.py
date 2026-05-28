@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -58,7 +58,7 @@ from .const import (
     VERSION,
 )
 from .frontend.panel import async_register_panel, async_unregister_panel
-from .models.lock import SmartLockManagerLock
+from .models.lock import ACCESS_LOG_MAX_ENTRIES, SmartLockManagerLock
 from .services.lock_services import LockServices
 from .services.management_services import ManagementServices
 from .services.slot_services import SlotServices
@@ -83,6 +83,157 @@ async def _save_lock_data(
 
     except Exception as e:
         _LOGGER.error("Failed to save lock data for %s: %s", lock.lock_name, e)
+
+
+# ---------------------------------------------------------------------------
+# Z-Wave Access Control notification -> access-log mapping
+# ---------------------------------------------------------------------------
+# Kwikset-style Access Control (command_class 113) event codes mapped to an
+# (action, source) tuple. Keypad events (5/6) additionally carry a
+# parameters.userId pointing at the SLM code slot.
+#   1 = manual lock (thumbturn)        2 = manual unlock (thumbturn)
+#   3 = RF lock (app/HA)               4 = RF unlock (app/HA)
+#   5 = keypad lock (-> userId)        6 = keypad unlock (-> userId)
+#   9 = auto-lock                      11 = lock jammed
+ACCESS_CONTROL_EVENT_MAP: Dict[int, Dict[str, str]] = {
+    1: {"action": "locked", "source": "manual"},
+    2: {"action": "unlocked", "source": "manual"},
+    3: {"action": "locked", "source": "rf"},
+    4: {"action": "unlocked", "source": "rf"},
+    5: {"action": "locked", "source": "keypad"},
+    6: {"action": "unlocked", "source": "keypad"},
+    9: {"action": "locked", "source": "auto"},
+    11: {"action": "jammed", "source": "manual"},
+}
+
+# Z-Wave Notification command class number for Access Control events.
+NOTIFICATION_COMMAND_CLASS = 113
+
+
+def map_access_control_event(event_code: int) -> Optional[Dict[str, str]]:
+    """Map a Z-Wave Access Control event code to action/source.
+
+    - Description: Translate a Kwikset Access Control event code into the
+      ``{"action", "source"}`` dict used by the access log.
+    - Inputs: event_code (int) — the ``event`` field of the notification.
+    - Outputs: dict with "action" and "source", or None if unrecognized.
+    - Example: ``map_access_control_event(6)`` ->
+      ``{"action": "unlocked", "source": "keypad"}``
+    """
+    mapping = ACCESS_CONTROL_EVENT_MAP.get(event_code)
+    return dict(mapping) if mapping else None
+
+
+def _resolve_lock_for_node(
+    hass: HomeAssistant, node_id: Optional[int]
+) -> Optional[SmartLockManagerLock]:
+    """Find the SLM-managed lock whose Z-Wave node matches ``node_id``.
+
+    - Description: SLM never stores node_id on the lock object, so resolve
+      each managed lock's entity_id to its Z-Wave node and compare node_id.
+    - Inputs: node_id (int) from the notification event data.
+    - Outputs: matching SmartLockManagerLock or None.
+    """
+    if node_id is None:
+        return None
+
+    try:
+        from homeassistant.components.zwave_js.helpers import (
+            async_get_node_from_entity_id,
+        )
+    except Exception:  # pragma: no cover - zwave_js always present in prod
+        return None
+
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        if not isinstance(entry_data, dict):
+            continue
+        lock: Optional[SmartLockManagerLock] = entry_data.get(PRIMARY_LOCK)
+        if not lock or not lock.lock_entity_id:
+            continue
+        try:
+            # async_get_node_from_entity_id is @callback (sync) — do NOT await
+            node = async_get_node_from_entity_id(hass, lock.lock_entity_id)
+        except Exception:
+            node = None
+        if node is not None and getattr(node, "node_id", None) == node_id:
+            return lock
+
+    return None
+
+
+def _build_access_log_handler(hass: HomeAssistant) -> Callable:
+    """Create the ``zwave_js_notification`` event handler for the access log.
+
+    - Description: Returns an async listener that records lock/unlock/jam
+      events (with user attribution for keypad events) on the matching SLM
+      lock's bounded access log, then persists the lock data.
+    - Inputs: hass (HomeAssistant).
+    - Outputs: an async callable suitable for ``hass.bus.async_listen``.
+
+    SECURITY: only user_name + slot number are logged — never PIN codes.
+    """
+
+    async def _handle_zwave_notification(event: Any) -> None:
+        data = event.data or {}
+
+        # Only Access Control (door lock) notifications carry lock events.
+        if data.get("command_class") != NOTIFICATION_COMMAND_CLASS:
+            return
+
+        event_code = data.get("event")
+        if not isinstance(event_code, int):
+            return
+
+        mapping = map_access_control_event(event_code)
+        if not mapping:
+            _LOGGER.debug(
+                "Access log: ignoring unmapped Access Control event %s", event_code
+            )
+            return
+
+        lock = _resolve_lock_for_node(hass, data.get("node_id"))
+        if not lock:
+            _LOGGER.debug(
+                "Access log: no SLM lock matches node_id %s", data.get("node_id")
+            )
+            return
+
+        # Resolve user attribution for keypad events via parameters.userId.
+        user_name: Optional[str] = None
+        slot: Optional[int] = None
+        if mapping["source"] == "keypad":
+            params = data.get("parameters") or {}
+            raw_slot = params.get("userId")
+            if isinstance(raw_slot, int):
+                slot = raw_slot
+                slot_obj = lock.code_slots.get(slot)
+                user_name = (
+                    slot_obj.user_name
+                    if slot_obj and slot_obj.user_name
+                    else f"slot {slot}"
+                )
+
+        entry = lock.add_access_log_entry(
+            action=mapping["action"],
+            source=mapping["source"],
+            user_name=user_name,
+            slot=slot,
+        )
+        _LOGGER.info(
+            "Access log [%s]: %s via %s%s",
+            lock.lock_name,
+            entry["action"],
+            entry["source"],
+            f" by {user_name} (slot {slot})" if user_name else "",
+        )
+
+        # Persist the updated access log. Find this lock's entry_id to save.
+        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+            if isinstance(entry_data, dict) and entry_data.get(PRIMARY_LOCK) is lock:
+                await _save_lock_data(hass, lock, entry_id)
+                break
+
+    return _handle_zwave_notification
 
 
 # Service schemas
@@ -314,6 +465,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if stored_data.get("child_lock_ids"):
         lock.child_lock_ids = stored_data["child_lock_ids"]
 
+    # Restore the access log (bounded) from storage so history survives restart
+    if stored_data.get("access_log"):
+        lock.access_log = stored_data["access_log"][-ACCESS_LOG_MAX_ENTRIES:]
+        _LOGGER.info(
+            "Restored %s access-log entries for %s",
+            len(lock.access_log),
+            lock_name,
+        )
+
     # Create coordinator for data updates
     coordinator = SmartLockManagerDataUpdateCoordinator(hass, entry)
     _LOGGER.debug("Created coordinator for %s with 30s update interval", lock.lock_name)
@@ -329,6 +489,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register services BEFORE initial sync
     await _register_services(hass)
     await _register_advanced_services(hass)
+
+    # Register a single global Z-Wave notification listener for the access log.
+    # One event bus serves all locks; the handler resolves the target lock by
+    # node_id, so we only subscribe once and store the unsub callback.
+    if "_access_log_unsub" not in hass.data[DOMAIN]:
+        hass.data[DOMAIN]["_access_log_unsub"] = hass.bus.async_listen(
+            "zwave_js_notification", _build_access_log_handler(hass)
+        )
+        _LOGGER.info("Access log: registered zwave_js_notification listener")
 
     # Fetch initial data and force full sync on startup
     await coordinator.async_config_entry_first_refresh()
@@ -368,6 +537,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+
+        # If no lock entries remain, tear down the global access-log listener.
+        remaining_locks = [v for v in hass.data[DOMAIN].values() if isinstance(v, dict)]
+        if not remaining_locks:
+            unsub = hass.data[DOMAIN].pop("_access_log_unsub", None)
+            if unsub:
+                unsub()
+                _LOGGER.info("Access log: removed zwave_js_notification listener")
 
         # Remove services only if this is the last instance
         if not hass.data[DOMAIN]:

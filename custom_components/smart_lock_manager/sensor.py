@@ -195,6 +195,9 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "usage_stats": usage_stats,
             # Detailed slot information (for advanced automations)
             "slot_details": slot_details,
+            # Recent access log (most-recent 25 surfaced; full history in storage).
+            # Most-recent-first ordering for direct frontend consumption.
+            "access_log": list(reversed(lock_to_use.access_log[-25:])),
             # Integration info
             "integration_version": "1.0.0",
             "architecture": "object_oriented_advanced",

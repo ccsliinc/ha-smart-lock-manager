@@ -1,5 +1,6 @@
-// Smart Lock Manager Advanced Panel v2.0.2
-// Enhanced panel with slot management grid, advanced code management, and usage analytics
+// Smart Lock Manager Advanced Panel v2.1.0
+// Enhanced panel with slot management grid, advanced code management, usage
+// analytics, and a per-lock Access Log (lock/unlock/jam events with attribution)
 
 // Prevent redefinition if already loaded
 if (!window.SmartLockManagerPanel) {
@@ -173,6 +174,87 @@ class SmartLockManagerPanel extends HTMLElement {
       statusName: details?.status?.name || 'UNKNOWN',
       description: details?.status?.description || details?.status_reason || ''
     };
+  }
+
+  // Build the icon + meta for a single access-log action/source.
+  getAccessLogPresentation(entry) {
+    const action = entry?.action || 'unknown';
+    const source = entry?.source || '';
+
+    let icon = 'mdi:help-circle-outline';
+    let color = '#9e9e9e';
+    if (action === 'locked') { icon = 'mdi:lock'; color = '#4a7c2a'; }
+    else if (action === 'unlocked') { icon = 'mdi:lock-open'; color = '#cc3333'; }
+    else if (action === 'jammed') { icon = 'mdi:lock-alert'; color = '#f44336'; }
+
+    // Human-friendly attribution / source label.
+    let attr;
+    if (entry?.user_name) {
+      attr = entry.slot != null ? `${entry.user_name} (slot ${entry.slot})` : entry.user_name;
+    } else if (source === 'manual') {
+      attr = 'Thumbturn';
+    } else if (source === 'rf') {
+      attr = 'App/Remote';
+    } else if (source === 'auto') {
+      attr = 'Auto-lock';
+    } else if (source === 'keypad') {
+      attr = 'Keypad';
+    } else {
+      attr = source || '—';
+    }
+
+    return { icon, color, attr };
+  }
+
+  // Format an ISO timestamp into a local, human-friendly string.
+  formatAccessLogTime(iso) {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString([], {
+        month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit'
+      });
+    } catch (e) {
+      return iso;
+    }
+  }
+
+  // Render the collapsible Access Log section for a lock.
+  // Reads the most-recent-first ``access_log`` attribute surfaced by sensor.py.
+  renderAccessLog(lock) {
+    const entries = lock?.attributes?.access_log || [];
+    const lockKey = (lock?.attributes?.lock_entity_id || lock?.entity_id || '').replace(/\./g, '_');
+    const bodyId = `access-log-body-${lockKey}`;
+
+    const rows = entries.map(entry => {
+      const p = this.getAccessLogPresentation(entry);
+      return `
+        <div class="access-log-row">
+          <ha-icon class="al-icon" icon="${p.icon}" style="width:18px;height:18px;color:${p.color};"></ha-icon>
+          <div class="al-main">
+            <div class="al-action">${entry.action || 'unknown'}</div>
+            <div class="al-attr">${p.attr}</div>
+          </div>
+          <div class="al-time">${this.formatAccessLogTime(entry.timestamp)}</div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="access-log-section">
+        <div class="access-log-header" onclick="SmartLockManagerPanel.toggleAccessLog('${bodyId}')">
+          <span>Access Log${entries.length ? ` (${entries.length})` : ''}</span>
+          <ha-icon icon="mdi:chevron-down" style="width:18px;height:18px;"></ha-icon>
+        </div>
+        <div class="access-log-body" id="${bodyId}">
+          ${entries.length
+            ? rows
+            : '<div class="access-log-empty">No access events recorded yet.</div>'}
+        </div>
+      </div>
+    `;
   }
 
   openSlotModal(slotNumber) {
@@ -1638,6 +1720,78 @@ class SmartLockManagerPanel extends HTMLElement {
           gap: 8px;
         }
 
+        /* Access Log section */
+        .access-log-section {
+          margin-top: 12px;
+          border: 1px solid var(--divider-color);
+          border-radius: 6px;
+          overflow: hidden;
+        }
+
+        .access-log-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 8px 12px;
+          cursor: pointer;
+          background: var(--secondary-background-color);
+          font-size: 13px;
+          font-weight: 500;
+          user-select: none;
+        }
+
+        .access-log-header:hover {
+          background: var(--primary-background-color);
+        }
+
+        .access-log-body {
+          max-height: 220px;
+          overflow-y: auto;
+        }
+
+        .access-log-empty {
+          padding: 12px;
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          text-align: center;
+        }
+
+        .access-log-row {
+          display: flex;
+          align-items: center;
+          padding: 6px 12px;
+          border-top: 1px solid var(--divider-color);
+          font-size: 12px;
+        }
+
+        .access-log-row .al-icon {
+          margin-right: 10px;
+          flex-shrink: 0;
+        }
+
+        .access-log-row .al-main {
+          flex-grow: 1;
+          min-width: 0;
+        }
+
+        .access-log-row .al-action {
+          font-weight: 500;
+          text-transform: capitalize;
+        }
+
+        .access-log-row .al-attr {
+          color: var(--secondary-text-color);
+          margin-top: 1px;
+        }
+
+        .access-log-row .al-time {
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          white-space: nowrap;
+          margin-left: 8px;
+          flex-shrink: 0;
+        }
+
         .btn {
           padding: 6px 12px;
           background: var(--primary-color);
@@ -2139,6 +2293,8 @@ class SmartLockManagerPanel extends HTMLElement {
                     Refresh
                   </button>
                 </div>
+
+                ${this.renderAccessLog(lock)}
               </div>
             `;
           }).join('')}
@@ -2545,6 +2701,18 @@ ${Object.keys(slotDetails)
       return;
     }
     panel.closeModal();
+  }
+
+  // Collapse/expand an access-log body by element id (ephemeral UI state).
+  static toggleAccessLog(bodyId) {
+    const panel = window.smartLockManagerPanel;
+    if (!panel || !panel.shadowRoot) {
+      return;
+    }
+    const body = panel.shadowRoot.getElementById(bodyId);
+    if (body) {
+      body.style.display = (body.style.display === 'none') ? '' : 'none';
+    }
   }
 
   static saveSlot() {
@@ -3113,4 +3281,3 @@ window.customCards.push({
   name: 'Smart Lock Manager Panel',
   description: 'Advanced panel for managing smart locks with scheduling and usage tracking'
 });
-

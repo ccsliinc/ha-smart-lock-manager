@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2025.1.2] - 2026-05-28 - Access Log with User Attribution
+
+### Added
+- **Lock/unlock access log**: SLM now records physical lock events (lock,
+  unlock, jam) to a per-lock, persistent `access_log`. Keypad events resolve
+  the Z-Wave `parameters.userId` to the slot's `user_name` (falling back to
+  `slot N`); manual/RF/auto events are logged with a source label and no user.
+- Global `zwave_js_notification` event listener registered in
+  `async_setup_entry` (one subscription serves all locks; the handler resolves
+  the target lock by matching `node_id` to each managed lock's Z-Wave node).
+  The unsubscribe callback is torn down cleanly in `async_unload_entry`.
+- `SmartLockManagerLock.add_access_log_entry()` — bounded append helper that
+  retains only the most recent `ACCESS_LOG_MAX_ENTRIES` (100) entries so
+  `.storage` cannot grow unbounded. The log is serialized in `to_dict()` and
+  restored on startup.
+- `map_access_control_event()` — pure, testable mapping of Kwikset Access
+  Control event codes (1/2 manual, 3/4 RF, 5/6 keypad+userId, 9 auto, 11 jam)
+  to `{action, source}`.
+- `access_log` surfaced on the summary sensor's `extra_state_attributes`
+  (most-recent-first, latest 25; full 100 kept in storage).
+- **Panel Access Log section**: collapsible per-lock card rendering the event
+  table (local-time timestamp, lock/unlock/jam icon, and attribution such as
+  "Joe (slot 1)", "Thumbturn", "App/Remote", or "Auto-lock").
+
+### Security
+- Access-log entries store only `user_name` and slot number — **never** PIN
+  codes.
+
 ## [2025.1.1] - 2026-05-27 - Kwikset Prefix-Collision Guard
 
 ### Fixed
