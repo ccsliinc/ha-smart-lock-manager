@@ -7,7 +7,7 @@ from homeassistant.components.lock import LockState
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_lock_manager"
-VERSION = "2025.1.3"
+VERSION = "2025.1.4"
 ISSUE_URL = "https://github.com/ccsliinc/ha-smart-lock-manager"
 PLATFORMS = ["sensor"]
 ZWAVE_NETWORK = "zwave_network"

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2025.1.4] - 2026-05-31 - Fix access-log unsub registry pollution crash
+
+### Fixed
+- **`set_code_advanced`/`clear_code` no longer crash with
+  `AttributeError: 'functools.partial' object has no attribute 'get'`**: the
+  2025.1.2 access-log feature stored the `zwave_js_notification` listener's
+  unsub callback (a `functools.partial`) inside `hass.data[DOMAIN]`, which is
+  the per-config-entry registry that many loops iterate expecting only entry
+  dicts. When a loop reached the stray `_access_log_unsub` key it called
+  `.get(PRIMARY_LOCK)` on the partial and raised. The unsub is now stored in a
+  separate `smart_lock_manager_runtime` namespace
+  (`hass.data["smart_lock_manager_runtime"]["access_log_unsub"]`) so it never
+  pollutes the entry registry. Setup and unload were both updated; teardown
+  still unsubscribes correctly on last-entry unload.
+- **Defensive registry-iteration guards**: the two remaining unguarded loops in
+  `lock_services.py` (`set_code_advanced`, `clear_code`) now `continue` on any
+  non-dict `entry_data`, so a stray non-dict entry can never crash these paths
+  again. All other registry loops were already guarded.
+
 ## [2025.1.3] - 2026-05-30 - Metadata-Only Edits & Per-Lock Access Log
 
 ### Fixed

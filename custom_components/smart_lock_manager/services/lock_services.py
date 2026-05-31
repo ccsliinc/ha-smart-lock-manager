@@ -193,6 +193,10 @@ class LockServices:
 
         # Find the lock object for this entity_id
         for entry_id, entry_data in hass.data[DOMAIN].items():
+            # Skip non-dict entries (e.g. stray runtime callbacks) so a polluted
+            # registry can never crash this loop with an AttributeError.
+            if not isinstance(entry_data, dict):
+                continue
             lock = entry_data.get(PRIMARY_LOCK)
             if lock and lock.lock_entity_id == entity_id:
                 # Metadata-only fast path: if the incoming PIN matches the PIN
@@ -320,6 +324,9 @@ class LockServices:
 
         # Find the lock object for this entity_id
         for entry_id, entry_data in hass.data[DOMAIN].items():
+            # Skip non-dict entries so a polluted registry can never crash here.
+            if not isinstance(entry_data, dict):
+                continue
             lock = entry_data.get(PRIMARY_LOCK)
             if lock and lock.lock_entity_id == entity_id:
                 # Clear from Smart Lock Manager storage

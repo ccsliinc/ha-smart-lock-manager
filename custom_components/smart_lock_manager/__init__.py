@@ -493,8 +493,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register a single global Z-Wave notification listener for the access log.
     # One event bus serves all locks; the handler resolves the target lock by
     # node_id, so we only subscribe once and store the unsub callback.
-    if "_access_log_unsub" not in hass.data[DOMAIN]:
-        hass.data[DOMAIN]["_access_log_unsub"] = hass.bus.async_listen(
+    #
+    # IMPORTANT: the unsub callback (a functools.partial) is stored in a
+    # SEPARATE ``{DOMAIN}_runtime`` namespace — never inside
+    # ``hass.data[DOMAIN]``, which is the per-config-entry registry that many
+    # loops iterate expecting only entry dicts. Storing a non-dict there caused
+    # an ``AttributeError: 'functools.partial' object has no attribute 'get'``.
+    runtime = hass.data.setdefault(f"{DOMAIN}_runtime", {})
+    if "access_log_unsub" not in runtime:
+        runtime["access_log_unsub"] = hass.bus.async_listen(
             "zwave_js_notification", _build_access_log_handler(hass)
         )
         _LOGGER.info("Access log: registered zwave_js_notification listener")
@@ -539,9 +546,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id)
 
         # If no lock entries remain, tear down the global access-log listener.
+        # The unsub lives in the separate ``{DOMAIN}_runtime`` namespace, not in
+        # the per-entry registry (see async_setup_entry for rationale).
         remaining_locks = [v for v in hass.data[DOMAIN].values() if isinstance(v, dict)]
         if not remaining_locks:
-            unsub = hass.data[DOMAIN].pop("_access_log_unsub", None)
+            runtime = hass.data.get(f"{DOMAIN}_runtime", {})
+            unsub = runtime.pop("access_log_unsub", None)
             if unsub:
                 unsub()
                 _LOGGER.info("Access log: removed zwave_js_notification listener")
