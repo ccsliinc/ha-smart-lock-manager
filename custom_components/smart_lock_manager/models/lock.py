@@ -634,13 +634,22 @@ class SmartLockManagerLock:
         - Example: ``lock.add_access_log_entry("unlocked", "keypad", "Joe", 1)``
 
         SECURITY: never stores PIN codes — only user_name and slot number.
+
+        Each entry also records which physical lock produced the event:
+        ``lock_name`` (friendly name), ``lock_entity_id``, and ``role``
+        ("parent" or "child", derived from ``parent_lock_id``) so a parent
+        card can aggregate child-lock events and badge each row by door.
         """
+        role = "child" if self.parent_lock_id else "parent"
         entry: Dict[str, Any] = {
             "timestamp": (timestamp or datetime.now()).isoformat(),
             "action": action,
             "source": source,
             "user_name": user_name,
             "slot": slot,
+            "lock_name": self.settings.friendly_name or self.lock_name,
+            "lock_entity_id": self.lock_entity_id,
+            "role": role,
         }
         self.access_log.append(entry)
 

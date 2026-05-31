@@ -195,6 +195,58 @@ class LockServices:
         for entry_id, entry_data in hass.data[DOMAIN].items():
             lock = entry_data.get(PRIMARY_LOCK)
             if lock and lock.lock_entity_id == entity_id:
+                # Metadata-only fast path: if the incoming PIN matches the PIN
+                # already stored for this slot, the caller only edited the
+                # username/scheduling metadata. Update those fields in place
+                # WITHOUT marking the slot unsynced — this avoids a spurious
+                # Z-Wave re-write (which can surface transient Kwikset errors)
+                # even if a caller redundantly re-sends the existing PIN.
+                existing_slot = lock.code_slots.get(code_slot)
+                if (
+                    existing_slot is not None
+                    and existing_slot.pin_code
+                    and user_code
+                    and existing_slot.pin_code == user_code
+                ):
+                    _LOGGER.info(
+                        "Metadata-only update for slot %s in lock %s "
+                        "(PIN unchanged) — skipping Z-Wave re-write",
+                        code_slot,
+                        lock.lock_name,
+                    )
+                    existing_slot.user_name = user_name
+                    existing_slot.start_date = start_date
+                    existing_slot.end_date = end_date
+                    existing_slot.allowed_hours = allowed_hours
+                    existing_slot.allowed_days = allowed_days
+                    existing_slot.max_uses = max_uses
+                    existing_slot.notify_on_use = notify_on_use
+                    # Deliberately do NOT touch is_synced — the physical lock
+                    # already holds this PIN, so no re-sync is required.
+
+                    from ..storage.lock_storage import save_lock_data
+
+                    await save_lock_data(hass, lock, entry_id)
+
+                    # Propagate metadata to child locks if applicable.
+                    if lock.is_main_lock and lock.child_lock_ids:
+                        try:
+                            from ..const import SERVICE_SYNC_CHILD_LOCKS
+
+                            await hass.services.async_call(
+                                DOMAIN,
+                                SERVICE_SYNC_CHILD_LOCKS,
+                                {ATTR_ENTITY_ID: lock.lock_entity_id},
+                            )
+                        except Exception as e:
+                            _LOGGER.error(
+                                "Failed child sync after metadata-only update "
+                                "for %s: %s",
+                                lock.lock_name,
+                                e,
+                            )
+                    return
+
                 # Pre-flight: reject PIN-prefix collisions before any write
                 _check_prefix_collision(lock, code_slot, user_code)
 

@@ -224,23 +224,68 @@ class SmartLockManagerPanel extends HTMLElement {
   // Render the collapsible Access Log section for a lock.
   // Reads the most-recent-first ``access_log`` attribute surfaced by sensor.py.
   renderAccessLog(lock) {
-    const entries = lock?.attributes?.access_log || [];
-    const lockKey = (lock?.attributes?.lock_entity_id || lock?.entity_id || '').replace(/\./g, '_');
+    const lockEntityId = lock?.attributes?.lock_entity_id || lock?.entity_id || '';
+    const lockKey = lockEntityId.replace(/\./g, '_');
     const bodyId = `access-log-body-${lockKey}`;
 
-    const rows = entries.map(entry => {
+    // The card's own friendly name — used as the fallback badge for legacy
+    // entries that predate lock identity fields.
+    const cardLockName = lock?.attributes?.custom_friendly_name
+      || lock?.attributes?.lock_name
+      || lockEntityId;
+
+    // Aggregate this lock's own access log with its child locks' logs so a
+    // parent card shows events from every door in the group on one timeline.
+    // Standalone locks (no children) simply show their own entries.
+    let combined = (lock?.attributes?.access_log || []).map(e => ({
+      ...e,
+      _cardName: e.lock_name || cardLockName,
+    }));
+
+    const childLocks = (lock?.attributes?.is_main_lock !== false)
+      ? this.getChildLocks(lockEntityId)
+      : [];
+    const hasChildren = childLocks.length > 0;
+    childLocks.forEach(child => {
+      const childName = child?.attributes?.custom_friendly_name
+        || child?.attributes?.lock_name
+        || child?.attributes?.lock_entity_id
+        || 'Child Lock';
+      (child?.attributes?.access_log || []).forEach(e => {
+        combined.push({ ...e, _cardName: e.lock_name || childName });
+      });
+    });
+
+    // Time-sort the merged list, most-recent first, and cap surfaced rows.
+    combined.sort((a, b) => {
+      const ta = Date.parse(a.timestamp || '') || 0;
+      const tb = Date.parse(b.timestamp || '') || 0;
+      return tb - ta;
+    });
+    combined = combined.slice(0, 25);
+
+    // Show the per-row lock badge whenever the group spans multiple doors
+    // (parent has children) OR the merged list references more than one lock.
+    const distinctLocks = new Set(combined.map(e => e._cardName));
+    const showBadge = hasChildren || distinctLocks.size > 1;
+
+    const rows = combined.map(entry => {
       const p = this.getAccessLogPresentation(entry);
+      const badge = showBadge
+        ? `<span class="al-lock-badge"${entry.role === 'child' ? ' data-role="child"' : ''}>${entry._cardName}</span>`
+        : '';
       return `
         <div class="access-log-row">
           <ha-icon class="al-icon" icon="${p.icon}" style="width:18px;height:18px;color:${p.color};"></ha-icon>
           <div class="al-main">
-            <div class="al-action">${entry.action || 'unknown'}</div>
+            <div class="al-action">${entry.action || 'unknown'}${badge}</div>
             <div class="al-attr">${p.attr}</div>
           </div>
           <div class="al-time">${this.formatAccessLogTime(entry.timestamp)}</div>
         </div>
       `;
     }).join('');
+    const entries = combined;
 
     return `
       <div class="access-log-section">
@@ -887,10 +932,20 @@ class SmartLockManagerPanel extends HTMLElement {
       serviceData.end_date = accessToField.value;
     }
 
+    // Determine whether the PIN actually changed. If the user only edited the
+    // username/metadata (PIN unchanged from what is already stored), we must
+    // NOT re-write the code to the physical Z-Wave lock — that needless
+    // set_lock_usercode can surface a transient Kwikset error. We only chain
+    // sync_slot_to_zwave when the PIN genuinely changed.
+    const currentLock = this._locks?.find(l => l.attributes.lock_entity_id === entityIdForSpinner);
+    const existingPin = currentLock?.attributes?.slot_details?.[`slot_${slotNumber}`]?.pin_code || '';
+    const pinUnchanged = existingPin && pinCode && existingPin === pinCode;
+
     await this.callService('set_code_advanced', serviceData);
 
-    // Automatically sync the code to the physical Z-Wave lock
-    if (serviceData.usercode && serviceData.usercode.length >= 4) {
+    // Automatically sync the code to the physical Z-Wave lock ONLY when the
+    // PIN changed. Metadata-only edits skip the physical re-write entirely.
+    if (!pinUnchanged && serviceData.usercode && serviceData.usercode.length >= 4) {
       await this.callService('sync_slot_to_zwave', {
         entity_id: serviceData.entity_id,
         code_slot: serviceData.code_slot, // Already converted to int above
@@ -1777,6 +1832,25 @@ class SmartLockManagerPanel extends HTMLElement {
         .access-log-row .al-action {
           font-weight: 500;
           text-transform: capitalize;
+        }
+
+        .access-log-row .al-lock-badge {
+          display: inline-block;
+          margin-left: 8px;
+          padding: 1px 7px;
+          border-radius: 10px;
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: none;
+          vertical-align: middle;
+          background: var(--primary-color);
+          color: var(--text-primary-color);
+          opacity: 0.85;
+        }
+
+        .access-log-row .al-lock-badge[data-role="child"] {
+          background: var(--secondary-background-color, #607d8b);
+          color: var(--primary-text-color);
         }
 
         .access-log-row .al-attr {

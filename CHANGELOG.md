@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2025.1.3] - 2026-05-30 - Metadata-Only Edits & Per-Lock Access Log
+
+### Fixed
+- **Username/metadata-only edits no longer trigger a Z-Wave re-write**: the
+  panel's `saveSlotSettings()` now detects when the PIN is unchanged from the
+  stored value and skips the chained `sync_slot_to_zwave` call, so editing only
+  a slot's username/scheduling no longer re-issues a `set_lock_usercode` (which
+  could surface a transient Kwikset error). The backend `set_code_advanced`
+  service was hardened to match: when the incoming PIN equals the slot's stored
+  PIN it performs an in-place metadata update (user_name/dates/hours/days/
+  max_uses/notify) without clearing `is_synced`, so no spurious physical write
+  occurs even if a caller redundantly re-sends the existing PIN.
+
+### Added
+- **Per-lock access-log attribution**: `add_access_log_entry()` now records
+  `lock_name` (friendly name), `lock_entity_id`, and `role` ("parent"/"child",
+  derived from `parent_lock_id`) on every entry so events carry their source
+  door. The summary sensor surfaces these fields automatically.
+- **Parent cards aggregate child-lock events**: the panel `renderAccessLog()`
+  merges a parent lock's own log with its child locks' logs into one
+  time-sorted timeline and badges each row with the originating door
+  ("Front North" vs "Rear Entrance"). Standalone locks show no badge. Legacy
+  entries lacking `lock_name` fall back gracefully to the card's lock name.
+
 ## [2025.1.2] - 2026-05-28 - Access Log with User Attribution
 
 ### Added
