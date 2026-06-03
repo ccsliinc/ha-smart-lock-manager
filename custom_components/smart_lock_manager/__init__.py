@@ -373,7 +373,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Restore slot data from storage
     if stored_data.get("code_slots"):
-        _LOGGER.info(
+        _LOGGER.debug(
             "Restoring %s saved slots for %s", len(stored_data["code_slots"]), lock_name
         )
         lock.code_slots = {}
@@ -386,7 +386,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             is_active = slot_data.get("is_active", False)
             pin_code = slot_data.get("pin_code")
             user_name = slot_data.get("user_name")
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Restoring slot %s: user=%s, pin=%s, active=%s",
                 slot_num,
                 user_name,
@@ -431,7 +431,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         settings_data = stored_data["settings"]
         if settings_data.get("friendly_name"):
             lock.settings.friendly_name = settings_data["friendly_name"]
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Restored friendly name for %s: %s",
                 lock_name,
                 settings_data["friendly_name"],
@@ -453,7 +453,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         # Initialize with default friendly name from lock name if no settings exist
         lock.settings.friendly_name = lock_name
-        _LOGGER.info(
+        _LOGGER.debug(
             "Initialized default friendly name for %s: %s", lock_name, lock_name
         )
 
@@ -468,11 +468,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Restore the access log (bounded) from storage so history survives restart
     if stored_data.get("access_log"):
         lock.access_log = stored_data["access_log"][-ACCESS_LOG_MAX_ENTRIES:]
-        _LOGGER.info(
+        _LOGGER.debug(
             "Restored %s access-log entries for %s",
             len(lock.access_log),
             lock_name,
         )
+
+    # Reconcile the slot collection to the configured count. The config entry
+    # is authoritative for slot count: storage may hold MORE or FEWER slots
+    # than ``entry.data['slots']`` after an OptionsFlow slot-count change.
+    #   - Shrinking: drop slots above the configured count so removed slots
+    #     are NOT resurrected from storage and leave no orphan stored data.
+    #   - Growing: add empty slots up to the configured count.
+    # Surviving slots keep their restored data. Reconcile against the ACTUAL
+    # restored key set (not ``lock.slots``, which was set from entry.data at
+    # construction), then re-save so pruned slots vanish from persistent
+    # storage on this very setup.
+    configured_slots = entry.data.get("slots", 10)
+    valid_range = set(range(lock.start_from, lock.start_from + configured_slots))
+    current_keys = set(lock.code_slots.keys())
+    if current_keys != valid_range:
+        from .models.lock import CodeSlot
+
+        for slot_num in current_keys - valid_range:
+            del lock.code_slots[slot_num]
+        for slot_num in valid_range - current_keys:
+            lock.code_slots[slot_num] = CodeSlot(slot_number=slot_num)
+        lock.slots = configured_slots
+        _LOGGER.debug(
+            "Reconciled %s to configured %s slots (stored: %s -> now: %s)",
+            lock_name,
+            configured_slots,
+            sorted(current_keys),
+            sorted(lock.code_slots.keys()),
+        )
+    else:
+        lock.slots = configured_slots
 
     # Create coordinator for data updates
     coordinator = SmartLockManagerDataUpdateCoordinator(hass, entry)
@@ -528,7 +559,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register custom panel
     await async_register_panel(hass)
 
+    # Live reload: when the OptionsFlow updates entry.data (topology change),
+    # reload this entry so async_setup_entry re-reads lock_name / lock_entity_id
+    # / slots and reconciles the slot collection — no manual HA restart needed.
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
     return True
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the config entry after an options/topology update."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -660,7 +701,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
 
     # Register advanced services using modular classes
-    _LOGGER.info("Registering advanced services...")
+    _LOGGER.debug("Registering advanced services...")
 
     hass.services.async_register(
         DOMAIN,
@@ -668,7 +709,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         set_code_advanced_wrapper,
         schema=SET_CODE_ADVANCED_SCHEMA,
     )
-    _LOGGER.info("Registered set_code_advanced service")
+    _LOGGER.debug("Registered set_code_advanced service")
 
     hass.services.async_register(
         DOMAIN,
@@ -682,7 +723,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         disable_slot_wrapper,
         schema=ENABLE_DISABLE_SLOT_SCHEMA,
     )
-    _LOGGER.info("Registered enable/disable_slot services")
+    _LOGGER.debug("Registered enable/disable_slot services")
 
     hass.services.async_register(
         DOMAIN,
@@ -699,7 +740,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         reset_sync_wrapper,
         schema=ENABLE_DISABLE_SLOT_SCHEMA,
     )
-    _LOGGER.info("Registered slot management services")
+    _LOGGER.debug("Registered slot management services")
 
     hass.services.async_register(
         DOMAIN,
@@ -721,7 +762,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    _LOGGER.info("Registered Z-Wave services")
+    _LOGGER.debug("Registered Z-Wave services")
 
     hass.services.async_register(
         DOMAIN,
@@ -753,7 +794,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         clear_all_slots_wrapper,
         schema=CLEAR_ALL_SLOTS_SCHEMA,
     )
-    _LOGGER.info("Registered management services")
+    _LOGGER.debug("Registered management services")
 
     hass.services.async_register(
         DOMAIN,
@@ -761,7 +802,7 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         update_global_settings_wrapper,
         schema=UPDATE_GLOBAL_SETTINGS_SCHEMA,
     )
-    _LOGGER.info("Registered system services")
+    _LOGGER.debug("Registered system services")
 
 
 def _repair_parent_child_links(hass: HomeAssistant) -> None:
@@ -896,7 +937,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             )
                             node = None
 
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Coordinator: Z-Wave node for %s: %s (type: %s)",
                             lock.lock_entity_id,
                             node,
@@ -956,7 +997,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("Traceback: %s", traceback.format_exc())
 
                 # Step 3: Update sync status and determine needed actions
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Coordinator: Z-Wave codes for %s: %d found (slots: %s)",
                     lock.lock_entity_id,
                     len(zwave_codes),
@@ -969,7 +1010,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     if sl.is_synced:
                         tk = f"{lock.lock_entity_id}_slot_{sn}"
                         if tk in self._periodic_retry_tracker:
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Slot %s on %s now synced, clearing"
                                 " periodic retry tracker",
                                 sn,
@@ -995,7 +1036,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     or sync_actions.get("remove")
                     or sync_actions.get("retry")
                 ):
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "Coordinator: sync actions needed: add=%s, remove=%s, retry=%s",
                         sync_actions.get("add", []),
                         sync_actions.get("remove", []),
@@ -1010,7 +1051,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                         # attempting sync
                         cached_zwave_code = zwave_codes.get(slot_number, {}).get("code")
                         if cached_zwave_code and cached_zwave_code == slot.pin_code:
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Slot %s on %s already synced (code matches"
                                 " Z-Wave cache), marking synchronized",
                                 slot_number,
@@ -1051,7 +1092,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                     "action": "enable",
                                 },
                             )
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Auto-syncing code to lock %s slot %s (attempt %s)",
                                 self.lock_name,
                                 slot_number,
@@ -1086,7 +1127,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             continue
                         elif not slot.is_active:
                             # Slot exists but disabled - remove from Z-Wave only
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Found disabled slot %s with code in Z-Wave,"
                                 " removing from lock only",
                                 slot_number,
@@ -1100,7 +1141,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                     "action": "disable",
                                 },
                             )
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Auto-removing disabled slot %s from lock %s"
                                 " (keeping Smart Lock Manager data)",
                                 slot_number,
@@ -1117,7 +1158,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                     "action": "disable",
                                 },
                             )
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Auto-removing code from lock %s slot %s (sync issue)",
                                 self.lock_name,
                                 slot_number,
@@ -1190,7 +1231,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             slot.sync_error = None
                             slot.is_synced = False
 
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Periodic retry: re-attempting sync for"
                                 " slot %s on %s (was stuck at %s"
                                 " attempts, periodic retry #%s)",
@@ -1289,7 +1330,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
 
                         # Sync to child locks if main lock changed
                         if main_lock_changed:
-                            _LOGGER.info(
+                            _LOGGER.debug(
                                 "Main lock %s codes changed, syncing to %d child locks",
                                 lock.lock_name,
                                 len(child_locks),

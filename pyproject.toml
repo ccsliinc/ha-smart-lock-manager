@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-lock-manager"
-version = "2025.1.0"
+version = "2025.1.5"
 description = "Advanced Z-Wave lock management for Home Assistant with time-based access control"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Smart Lock Manager Contributors"}
+    {name = "Joseph Sugamele", email = "jsugamele@gmail.com"}
 ]
 keywords = ["homeassistant", "zwave", "lock", "security", "automation"]
 classifiers = [

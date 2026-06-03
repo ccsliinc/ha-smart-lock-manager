@@ -73,8 +73,8 @@ class LockServices:
         user_code = service_call.data[ATTR_USER_CODE]
         user_name = service_call.data.get(ATTR_CODE_SLOT_NAME)
 
-        _LOGGER.info(
-            "🔄 SET_CODE DEBUG - Set code service called: slot %s, user %s",
+        _LOGGER.debug(
+            "set_code called for slot %s, user %s",
             code_slot,
             user_name,
         )
@@ -84,8 +84,8 @@ class LockServices:
             if isinstance(entry_data, dict):  # Skip global_settings
                 lock = entry_data.get(PRIMARY_LOCK)
                 if lock and lock.lock_entity_id == entity_id:
-                    _LOGGER.info(
-                        "🔄 SET_CODE DEBUG - Found lock %s, setting slot %s",
+                    _LOGGER.debug(
+                        "found lock %s, setting slot %s",
                         lock.lock_name,
                         code_slot,
                     )
@@ -95,8 +95,8 @@ class LockServices:
 
                     success = lock.set_code(code_slot, user_code, user_name)
                     if success:
-                        _LOGGER.info(
-                            "🔄 SET_CODE DEBUG - Successfully set code for slot %s in lock %s",
+                        _LOGGER.debug(
+                            "set code success slot %s in lock %s",
                             code_slot,
                             lock.lock_name,
                         )
@@ -105,12 +105,13 @@ class LockServices:
                         from .. import _save_lock_data
 
                         await _save_lock_data(hass, lock, entry_id)
-                        _LOGGER.info("🔄 SET_CODE DEBUG - Saved slot data to storage")
+                        _LOGGER.debug("SET_CODE: saved slot data to storage")
 
-                        # Trigger immediate child sync if this is a main lock with children
+                        # Trigger immediate child sync for a main lock with children
                         if lock.is_main_lock and lock.child_lock_ids:
                             _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s code set, triggering immediate child sync to %s children",
+                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s code set, "
+                                "triggering immediate child sync to %s children",
                                 lock.lock_name,
                                 code_slot,
                                 len(lock.child_lock_ids),
@@ -125,20 +126,24 @@ class LockServices:
                                     {ATTR_ENTITY_ID: lock.lock_entity_id},
                                 )
                                 _LOGGER.info(
-                                    "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s code set",
+                                    "🔄 IMMEDIATE SYNC - Successfully triggered "
+                                    "immediate child sync for %s after slot %s "
+                                    "code set",
                                     lock.lock_name,
                                     code_slot,
                                 )
                             except Exception as e:
                                 _LOGGER.error(
-                                    "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                    "🔄 IMMEDIATE SYNC - Failed to trigger "
+                                    "immediate child sync for %s: %s",
                                     lock.lock_name,
                                     e,
                                 )
 
                     else:
                         _LOGGER.error(
-                            "🔄 SET_CODE DEBUG - Failed to set code for slot %s in lock %s",
+                            "🔄 SET_CODE DEBUG - Failed to set code for "
+                            "slot %s in lock %s",
                             code_slot,
                             lock.lock_name,
                         )
@@ -163,7 +168,7 @@ class LockServices:
             try:
                 # Handle datetime-local format from frontend (YYYY-MM-DDTHH:MM)
                 start_date = datetime.fromisoformat(str(start_date_raw))
-                _LOGGER.info("Parsed start_date: %s", start_date)
+                _LOGGER.debug("Parsed start_date: %s", start_date)
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
                     "Invalid start_date format: %s, error: %s", start_date_raw, e
@@ -174,7 +179,7 @@ class LockServices:
             try:
                 # Handle datetime-local format from frontend (YYYY-MM-DDTHH:MM)
                 end_date = datetime.fromisoformat(str(end_date_raw))
-                _LOGGER.info("Parsed end_date: %s", end_date)
+                _LOGGER.debug("Parsed end_date: %s", end_date)
             except (ValueError, TypeError) as e:
                 _LOGGER.warning(
                     "Invalid end_date format: %s, error: %s", end_date_raw, e
@@ -276,10 +281,11 @@ class LockServices:
 
                     await save_lock_data(hass, lock, entry_id)
 
-                    # Trigger immediate child sync if this is a main lock with children
+                    # Trigger immediate child sync for a main lock with children
                     if lock.is_main_lock and lock.child_lock_ids:
                         _LOGGER.info(
-                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s advanced code set, triggering immediate child sync to %s children",
+                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s advanced code "
+                            "set, triggering immediate child sync to %s children",
                             lock.lock_name,
                             code_slot,
                             len(lock.child_lock_ids),
@@ -294,13 +300,16 @@ class LockServices:
                                 {ATTR_ENTITY_ID: lock.lock_entity_id},
                             )
                             _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s advanced code set",
+                                "🔄 IMMEDIATE SYNC - Successfully triggered "
+                                "immediate child sync for %s after slot %s "
+                                "advanced code set",
                                 lock.lock_name,
                                 code_slot,
                             )
                         except Exception as e:
                             _LOGGER.error(
-                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate "
+                                "child sync for %s: %s",
                                 lock.lock_name,
                                 e,
                             )
@@ -320,7 +329,7 @@ class LockServices:
         entity_id = service_call.data[ATTR_ENTITY_ID]
         code_slot = service_call.data[ATTR_CODE_SLOT]
 
-        _LOGGER.info("Clear code service called: slot %s", code_slot)
+        _LOGGER.debug("Clear code service called: slot %s", code_slot)
 
         # Find the lock object for this entity_id
         for entry_id, entry_data in hass.data[DOMAIN].items():
@@ -333,7 +342,8 @@ class LockServices:
                 success = lock.clear_code(code_slot)
                 if success:
                     _LOGGER.info(
-                        "Successfully cleared code for slot %s in Smart Lock Manager %s",
+                        "Successfully cleared code for slot %s in Smart Lock "
+                        "Manager %s",
                         code_slot,
                         lock.lock_name,
                     )
@@ -363,10 +373,11 @@ class LockServices:
 
                     await save_lock_data(hass, lock, entry_id)
 
-                    # Trigger immediate child sync if this is a main lock with children
+                    # Trigger immediate child sync for a main lock with children
                     if lock.is_main_lock and lock.child_lock_ids:
                         _LOGGER.info(
-                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s code cleared, triggering immediate child sync to %s children",
+                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s code cleared, "
+                            "triggering immediate child sync to %s children",
                             lock.lock_name,
                             code_slot,
                             len(lock.child_lock_ids),
@@ -381,13 +392,16 @@ class LockServices:
                                 {ATTR_ENTITY_ID: lock.lock_entity_id},
                             )
                             _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Successfully triggered immediate child sync for %s after slot %s code clear",
+                                "🔄 IMMEDIATE SYNC - Successfully triggered "
+                                "immediate child sync for %s after slot %s "
+                                "code clear",
                                 lock.lock_name,
                                 code_slot,
                             )
                         except Exception as e:
                             _LOGGER.error(
-                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate child sync for %s: %s",
+                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate "
+                                "child sync for %s: %s",
                                 lock.lock_name,
                                 e,
                             )

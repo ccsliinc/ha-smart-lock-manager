@@ -38,7 +38,7 @@ class ManagementServices:
             return
 
         if not main_lock.child_lock_ids:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "No child locks configured for main lock %s", main_lock.lock_name
             )
             return
@@ -61,7 +61,7 @@ class ManagementServices:
             try:
                 main_lock.sync_to_child_locks([child_lock])
                 synced_count += 1
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Synced codes from %s to child lock %s",
                     main_lock.lock_name,
                     child_lock.lock_name,
@@ -83,7 +83,7 @@ class ManagementServices:
                     "Failed to sync codes to child lock %s: %s", child_lock.lock_name, e
                 )
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Completed sync from main lock %s to %s child locks",
             main_lock.lock_name,
             synced_count,
@@ -135,8 +135,9 @@ class ManagementServices:
                         },
                     )
 
-                    _LOGGER.info(
-                        "Usage statistics generated for lock %s: %s total uses across %s active users",
+                    _LOGGER.debug(
+                        "Usage statistics generated for lock %s: %s total uses "
+                        "across %s active users",
                         lock.lock_name,
                         stats.get("total_uses", 0),
                         stats.get("active_users", 0),
@@ -156,60 +157,72 @@ class ManagementServices:
         is_main_lock = service_call.data.get("is_main_lock")
         parent_lock_id = service_call.data.get("parent_lock_id")
 
-        _LOGGER.info("=== BACKEND DEBUGGING: update_lock_settings called ===")
-        _LOGGER.info(f"🔧 Backend Debug - Service call data: {service_call.data}")
-        _LOGGER.info(f"🔧 Backend Debug - Entity ID: {entity_id}")
-        _LOGGER.info(f"🔧 Backend Debug - Friendly name: '{friendly_name}'")
-        _LOGGER.info(f"🔧 Backend Debug - Slot count: {slot_count}")
-        _LOGGER.info(f"🔧 Backend Debug - Is main lock: {is_main_lock}")
-        _LOGGER.info(f"🔧 Backend Debug - Parent lock ID: {parent_lock_id}")
+        _LOGGER.debug("=== BACKEND DEBUGGING: update_lock_settings called ===")
+        _LOGGER.debug(f"🔧 Backend Debug - Service call data: {service_call.data}")
+        _LOGGER.debug(f"🔧 Backend Debug - Entity ID: {entity_id}")
+        _LOGGER.debug(f"🔧 Backend Debug - Friendly name: '{friendly_name}'")
+        _LOGGER.debug(f"🔧 Backend Debug - Slot count: {slot_count}")
+        _LOGGER.debug(f"🔧 Backend Debug - Is main lock: {is_main_lock}")
+        _LOGGER.debug(f"🔧 Backend Debug - Parent lock ID: {parent_lock_id}")
 
         for entry_id, entry_data in hass.data[DOMAIN].items():
             if isinstance(entry_data, dict):  # Skip global_settings
                 lock = entry_data.get(PRIMARY_LOCK)
-                _LOGGER.info(
-                    f"🔍 Backend Debug - Checking entry {entry_id}: lock={lock}, entity_id={lock.lock_entity_id if lock else 'None'}"
+                _LOGGER.debug(
+                    "🔍 Backend Debug - Checking entry %s: lock=%s, entity_id=%s",
+                    entry_id,
+                    lock,
+                    lock.lock_entity_id if lock else "None",
                 )
 
                 if lock and lock.lock_entity_id == entity_id:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         f"🎯 Backend Debug - Found matching lock: {lock.lock_name}"
                     )
-                    _LOGGER.info(f"🔍 Backend Debug - Current lock state:")
-                    _LOGGER.info(
+                    _LOGGER.debug("🔍 Backend Debug - Current lock state:")
+                    _LOGGER.debug(
                         f"  - Current friendly name: '{lock.settings.friendly_name}'"
                     )
-                    _LOGGER.info(f"  - Current slot count: {lock.slots}")
-                    _LOGGER.info(f"  - Current is_main_lock: {lock.is_main_lock}")
-                    _LOGGER.info(f"  - Current parent_lock_id: {lock.parent_lock_id}")
+                    _LOGGER.debug(f"  - Current slot count: {lock.slots}")
+                    _LOGGER.debug(f"  - Current is_main_lock: {lock.is_main_lock}")
+                    _LOGGER.debug(f"  - Current parent_lock_id: {lock.parent_lock_id}")
 
                     updated = False
 
                     # Update friendly name if provided
                     if friendly_name and friendly_name != lock.settings.friendly_name:
-                        _LOGGER.info(
-                            f"✅ Backend Debug - Friendly name will be updated from '{lock.settings.friendly_name}' to '{friendly_name}'"
+                        _LOGGER.debug(
+                            "✅ Backend Debug - Friendly name will be updated "
+                            "from '%s' to '%s'",
+                            lock.settings.friendly_name,
+                            friendly_name,
                         )
                         lock.settings.friendly_name = friendly_name
                         updated = True
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Updated friendly name for lock %s to: %s",
                             lock.lock_name,
                             friendly_name,
                         )
                     else:
-                        _LOGGER.info(f"❌ Backend Debug - Friendly name NOT updated:")
-                        _LOGGER.info(
-                            f"  - Provided friendly_name: '{friendly_name}' (truthy: {bool(friendly_name)})"
+                        _LOGGER.debug("❌ Backend Debug - Friendly name NOT updated:")
+                        _LOGGER.debug(
+                            "  - Provided friendly_name: '%s' (truthy: %s)",
+                            friendly_name,
+                            bool(friendly_name),
                         )
-                        _LOGGER.info(
-                            f"  - Current friendly_name: '{lock.settings.friendly_name}'"
+                        _LOGGER.debug(
+                            "  - Current friendly_name: '%s'",
+                            lock.settings.friendly_name,
                         )
-                        _LOGGER.info(
-                            f"  - Are they equal? {friendly_name == lock.settings.friendly_name}"
+                        _LOGGER.debug(
+                            "  - Are they equal? %s",
+                            friendly_name == lock.settings.friendly_name,
                         )
-                        _LOGGER.info(
-                            f"  - Condition result: friendly_name={bool(friendly_name)}, different={friendly_name != lock.settings.friendly_name}"
+                        _LOGGER.debug(
+                            "  - Condition result: friendly_name=%s, different=%s",
+                            bool(friendly_name),
+                            friendly_name != lock.settings.friendly_name,
                         )
 
                     # Update slot count if provided
@@ -219,7 +232,7 @@ class ManagementServices:
                             success = lock.resize_slots(slot_count)
                             if success:
                                 updated = True
-                                _LOGGER.info(
+                                _LOGGER.debug(
                                     "Updated slot count for lock %s from %s to %s",
                                     lock.lock_name,
                                     old_count,
@@ -238,7 +251,7 @@ class ManagementServices:
                     if is_main_lock is not None and is_main_lock != lock.is_main_lock:
                         lock.is_main_lock = is_main_lock
                         updated = True
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Updated lock %s type to: %s",
                             lock.lock_name,
                             "Parent Lock" if is_main_lock else "Child Lock",
@@ -262,7 +275,7 @@ class ManagementServices:
                             hass, entity_id, old_parent, parent_lock_id
                         )
 
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Updated parent lock for %s from %s to %s",
                             lock.lock_name,
                             old_parent or "None",
@@ -271,15 +284,17 @@ class ManagementServices:
 
                     # Save changes if any updates were made
                     if updated:
-                        _LOGGER.info(f"💾 Backend Debug - Saving changes to storage")
+                        _LOGGER.debug("💾 Backend Debug - Saving changes to storage")
                         store = entry_data.get("store")
                         if store:
                             lock_dict = lock.to_dict()
-                            _LOGGER.info(
-                                f"💾 Backend Debug - Saving lock data: friendly_name='{lock_dict.get('settings', {}).get('friendly_name')}'"
+                            _LOGGER.debug(
+                                "💾 Backend Debug - Saving lock data: "
+                                "friendly_name='%s'",
+                                lock_dict.get("settings", {}).get("friendly_name"),
                             )
                             await store.async_save(lock_dict)
-                            _LOGGER.info(f"💾 Backend Debug - Storage save completed")
+                            _LOGGER.debug("💾 Backend Debug - Storage save completed")
 
                         # Fire event to notify about settings change
                         hass.bus.async_fire(
@@ -291,8 +306,9 @@ class ManagementServices:
                                 "slot_count": lock.slots,
                             },
                         )
-                        _LOGGER.info(
-                            f"🔥 Backend Debug - Fired settings_updated event for {lock.lock_name}"
+                        _LOGGER.debug(
+                            "🔥 Backend Debug - Fired settings_updated event for %s",
+                            lock.lock_name,
                         )
 
                         # Trigger coordinator refresh to update sensor attributes
@@ -303,15 +319,15 @@ class ManagementServices:
                                 "Triggered coordinator refresh after settings update"
                             )
 
-                        # Update all sensor entities that reference this lock by triggering coordinator refresh
-                        # This ensures all sensors using this lock get the updated object reference
+                        # Refresh the coordinator so every sensor referencing this
+                        # lock picks up the updated object reference.
 
-                        # Force immediate coordinator update (this will refresh all sensors using this lock)
+                        # Force immediate coordinator update to refresh all sensors
                         coordinator = entry_data.get("coordinator")
                         if coordinator:
                             # Force immediate refresh
                             await coordinator.async_request_refresh()
-                            # Wait a moment for the refresh to complete, then force state update
+                            # Wait for the refresh to complete, then force state update
                             import asyncio
 
                             await asyncio.sleep(0.1)
@@ -323,8 +339,8 @@ class ManagementServices:
                             await coordinator.async_request_refresh()
                             await asyncio.sleep(0.2)
                             await coordinator.async_refresh()
-                            _LOGGER.info(
-                                f"Forced coordinator refresh for friendly name update"
+                            _LOGGER.debug(
+                                "Forced coordinator refresh for friendly name update"
                             )
 
                         # Fire event to notify frontend about the change
@@ -337,11 +353,13 @@ class ManagementServices:
                             },
                         )
 
-                        _LOGGER.info(
-                            f"Updated lock settings for {lock.lock_name}, friendly_name: {lock.settings.friendly_name}"
+                        _LOGGER.debug(
+                            "Updated lock settings for %s, friendly_name: %s",
+                            lock.lock_name,
+                            lock.settings.friendly_name,
                         )
                     else:
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "No changes made to lock %s settings", lock.lock_name
                         )
 
@@ -399,7 +417,7 @@ class ManagementServices:
         """Remove a child lock and convert it back to a main lock."""
         child_entity_id = service_call.data[ATTR_ENTITY_ID]
 
-        _LOGGER.info(f"Removing child lock: {child_entity_id}")
+        _LOGGER.debug(f"Removing child lock: {child_entity_id}")
 
         # Find the child lock
         child_lock = None
@@ -436,8 +454,10 @@ class ManagementServices:
                     if parent_lock and parent_lock.lock_entity_id == old_parent_id:
                         if child_entity_id in parent_lock.child_lock_ids:
                             parent_lock.child_lock_ids.remove(child_entity_id)
-                            _LOGGER.info(
-                                f"Removed {child_entity_id} from parent {old_parent_id} child list"
+                            _LOGGER.debug(
+                                "Removed %s from parent %s child list",
+                                child_entity_id,
+                                old_parent_id,
                             )
 
                         # Save parent lock
@@ -468,8 +488,10 @@ class ManagementServices:
             if coordinator:
                 await coordinator.async_request_refresh()
 
-        _LOGGER.info(
-            f"Successfully removed child lock {child_entity_id} from parent {old_parent_id}"
+        _LOGGER.debug(
+            "Successfully removed child lock %s from parent %s",
+            child_entity_id,
+            old_parent_id,
         )
 
     @staticmethod
@@ -520,14 +542,14 @@ class ManagementServices:
                             },
                         )
 
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Cleared all %s slots for lock %s: %s",
                             len(cleared_slots),
                             lock.lock_name,
                             [f"Slot {num}: {name}" for num, name in cleared_slots],
                         )
                     else:
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "No configured slots to clear for lock %s", lock.lock_name
                         )
 

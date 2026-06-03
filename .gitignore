@@ -18,6 +18,9 @@ developer documentation
 
 # Home Assistant Development Environment
 config/
+# Docker dev harness HA state (docker-compose.dev.yml mounts ./dev-config as /config)
+# NEVER commit this — fills with .storage/, *.db, logs, secrets at runtime.
+dev-config/
 *.db
 *.db-shm
 *.db-wal
