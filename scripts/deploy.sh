@@ -161,7 +161,6 @@ tar czf "$TARBALL" \
   --exclude='.git' \
   --exclude='*.pyc' \
   --exclude='*.backup' \
-  --exclude='.tooling' \
   -C "$(dirname "$LOCAL_SOURCE")" \
   "$(basename "$LOCAL_SOURCE")"
 success "Tarball created."

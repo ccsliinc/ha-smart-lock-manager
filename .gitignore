@@ -12,10 +12,6 @@ venv/
 .idea/
 *.iml
 
-# local tooling settings
-.tooling/
-developer documentation
-
 # Home Assistant Development Environment
 config/
 # Docker dev harness HA state (docker-compose.dev.yml mounts ./dev-config as /config)
