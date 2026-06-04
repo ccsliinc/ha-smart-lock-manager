@@ -75,7 +75,10 @@ jobs:
         # Pin homeassistant to the version the green local suite runs against
         # so pip does not backtrack to an old release with a different
         # zwave_js helper layout (which breaks module-level patching).
-        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269"
+        # pycares is pinned because homeassistant 2025.8.0 leaves it unpinned and
+        # the latest pycares (5.x) dropped ares_query_a_result, which aiodns 3.5.0
+        # imports at startup -> AttributeError before any test runs.
+        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0"
         pip install pytest pytest-asyncio pytest-cov
         pytest tests/ --asyncio-mode=auto
         echo "✅ Test suite passed"
@@ -124,7 +127,9 @@ jobs:
         # versions the green local suite runs against. Without the pin, pip
         # backtracks to an old homeassistant (2025.1.4) whose zwave_js helper
         # layout differs, breaking tests that patch module-level symbols.
-        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269"
+        # pycares pinned: latest 5.x dropped ares_query_a_result, which
+        # aiodns 3.5.0 (pulled by homeassistant 2025.8.0) imports at startup.
+        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0"
         pip install -e ".[dev]" pytest-cov pytest-asyncio
 
     - name: Run test suite
