@@ -3,11 +3,8 @@
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import pytest
-
 from custom_components.smart_lock_manager.models.lock import (
     CodeSlot,
-    LockSettings,
     SmartLockManagerLock,
 )
 

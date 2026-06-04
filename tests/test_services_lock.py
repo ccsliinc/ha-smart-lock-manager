@@ -1,6 +1,6 @@
 """Tests for Smart Lock Manager lock services."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 

@@ -1,10 +1,9 @@
 """Comprehensive tests for Z-Wave services."""
 
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import device_registry as dr
+from homeassistant.core import ServiceCall
 from homeassistant.helpers.entity_registry import EntityRegistry
 
 from custom_components.smart_lock_manager.const import (
@@ -113,36 +112,36 @@ class TestZWaveServices:
         # Mock service call
         service_call_mock.data = {ATTR_ENTITY_ID: "lock.test_lock"}
 
-        # Mock Z-Wave JS helpers and utilities
+        # Patch the real helper symbols at their home in the zwave_services
+        # module. ``async_get_node_from_entity_id`` is a sync @callback (do NOT
+        # await it) and ``get_usercode`` is the sync ValueDB reader the
+        # production code actually uses (there is no get_usercode_from_node /
+        # async_get_entity_registry in the current implementation).
         with (
             patch(
-                "custom_components.smart_lock_manager.services.zwave_services.async_get_entity_registry"
-            ) as mock_get_registry,
-            patch(
-                "custom_components.smart_lock_manager.services.zwave_services.async_get_node_from_entity_id",
-                new_callable=AsyncMock,
+                "custom_components.smart_lock_manager.services.zwave_services."
+                "async_get_node_from_entity_id"
             ) as mock_get_node,
             patch(
-                "custom_components.smart_lock_manager.services.zwave_services.get_usercode_from_node"
+                "custom_components.smart_lock_manager.services.zwave_services."
+                "get_usercode"
             ) as mock_get_usercode,
-            patch("homeassistant.helpers.device_registry.async_get") as mock_device_reg,
         ):
 
             # Set up mocks
-            mock_get_registry.return_value = hass.helpers.entity_registry
             mock_get_node.return_value = mock_zwave_node
-            mock_device_reg.return_value = hass.helpers.device_registry
 
-            # Mock usercode responses for slots 1-3
+            # Mock usercode responses for slots 1-3. The reader uses the
+            # ``usercode`` value and the ``in_use`` flag.
             def mock_usercode_response(node, slot):
                 if slot == 1:
-                    return {"code": "1234", "userIdStatus": "occupied"}
+                    return {"usercode": "1234", "in_use": True}
                 elif slot == 2:
-                    return {"code": "5678", "userIdStatus": "occupied"}
+                    return {"usercode": "5678", "in_use": True}
                 elif slot == 3:
-                    return {"code": "9999", "userIdStatus": "occupied"}
+                    return {"usercode": "9999", "in_use": True}
                 else:
-                    return {"userIdStatus": "available"}
+                    return {"usercode": None, "in_use": False}
 
             mock_get_usercode.side_effect = mock_usercode_response
 
@@ -172,7 +171,8 @@ class TestZWaveServices:
 
         # Mock Z-Wave JS as unavailable
         with patch(
-            "custom_components.smart_lock_manager.services.zwave_services.ZWAVE_JS_AVAILABLE",
+            "custom_components.smart_lock_manager.services.zwave_services."
+            "ZWAVE_JS_AVAILABLE",
             False,
         ):
             await ZWaveServices.read_zwave_codes(hass, service_call_mock)
@@ -201,26 +201,30 @@ class TestZWaveServices:
 
         with (
             patch(
-                "custom_components.smart_lock_manager.services.zwave_services.async_get_node_from_entity_id"
+                "custom_components.smart_lock_manager.services.zwave_services."
+                "async_get_node_from_entity_id"
             ) as mock_get_node,
             patch(
-                "custom_components.smart_lock_manager.services.zwave_services.get_usercode_from_node"
+                "custom_components.smart_lock_manager.services.zwave_services."
+                "get_usercode"
             ) as mock_get_usercode,
-            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("asyncio.sleep", new_callable=AsyncMock),
         ):
 
             mock_get_node.return_value = mock_zwave_node
 
-            # Mock current Z-Wave code as different from desired code
+            # Mock current Z-Wave code as different from desired code so the
+            # clear-then-set path runs (reader returns the ``usercode`` key).
             mock_get_usercode.return_value = {
-                "code": "old_code_1234",
-                "userIdStatus": "occupied",
+                "usercode": "55667788",
+                "in_use": True,
             }
 
             # Execute sync
             await ZWaveServices.sync_slot_to_zwave(hass, service_call)
 
-            # Verify at least the set call was made (clear-then-set logic may vary based on mock setup)
+            # Verify at least the set call was made (clear-then-set logic may
+            # vary based on mock setup)
             assert hass.services.async_call.call_count >= 1
 
             # Check that the final call was to set the correct code
@@ -413,7 +417,8 @@ class TestZWaveServices:
 
         lock = SmartLockManagerLock(lock_name="Test", lock_entity_id="lock.test")
 
-        # Test cases that should FAIL validation (excluding None and empty string which have special handling)
+        # Test cases that should FAIL validation (None and empty string are
+        # handled separately below).
         invalid_cases = [
             "123",  # Too short (3 digits)
             "123456789",  # Too long (9 digits)
@@ -436,7 +441,7 @@ class TestZWaveServices:
         assert result is True  # set_code succeeds but slot becomes inactive
         assert lock.code_slots[1].is_active is False
 
-        # Empty string currently bypasses validation (treated as falsy) and sets is_active=False
+        # Empty string bypasses validation (treated as falsy) -> is_active=False
         result = lock.set_code(1, "", "Test User")
         assert result is True  # set_code succeeds but slot becomes inactive
         assert lock.code_slots[1].is_active is False
@@ -505,27 +510,29 @@ class TestZWaveServices:
 
         with (
             patch(
-                "custom_components.smart_lock_manager.services.zwave_services.async_get_node_from_entity_id"
+                "custom_components.smart_lock_manager.services.zwave_services."
+                "async_get_node_from_entity_id"
             ) as mock_get_node,
             patch(
-                "custom_components.smart_lock_manager.services.zwave_services.get_usercode_from_node"
+                "custom_components.smart_lock_manager.services.zwave_services."
+                "get_usercode"
             ) as mock_get_usercode,
-            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch("asyncio.sleep", new_callable=AsyncMock),
         ):
 
             mock_get_node.return_value = mock_zwave_node
 
             # Mock lock currently has different code (sync mismatch scenario)
             mock_get_usercode.return_value = {
-                "code": "99887766",
-                "userIdStatus": "occupied",
+                "usercode": "99887766",
+                "in_use": True,
             }
 
             # Execute the sync
             await ZWaveServices.sync_slot_to_zwave(hass, service_call)
 
-            # Based on the debug output, when the node mock fails, it just does a direct set
-            # Verify at least one service call was made
+            # When the node mock fails, it falls back to a direct set.
+            # Verify at least one service call was made.
             assert hass.services.async_call.call_count >= 1
 
             # The call should be to set the usercode

@@ -1,11 +1,19 @@
-"""Fixtures for testing."""
+"""Comprehensive pytest fixtures for Smart Lock Manager tests."""
+
+from datetime import datetime
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers.storage import Store
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_lock_manager.const import DOMAIN
+from custom_components.smart_lock_manager.const import DOMAIN, PRIMARY_LOCK
+from custom_components.smart_lock_manager.models.lock import (
+    CodeSlot,
+    SmartLockManagerLock,
+)
 
 
 @pytest.fixture
@@ -29,23 +37,6 @@ async def init_integration(hass: HomeAssistant, mock_config_entry: ConfigEntry):
     return mock_config_entry
 
 
-"""Comprehensive pytest fixtures for Smart Lock Manager tests."""
-
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, Mock
-
-import pytest
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.storage import Store
-
-from custom_components.smart_lock_manager.const import DOMAIN, PRIMARY_LOCK
-from custom_components.smart_lock_manager.models.lock import (
-    CodeSlot,
-    SmartLockManagerLock,
-)
-
-
 @pytest.fixture
 def hass_mock():
     """Create a mock Home Assistant instance."""
@@ -55,7 +46,9 @@ def hass_mock():
     hass.services.async_register = AsyncMock()
     hass.services.async_call = AsyncMock()
     hass.bus = Mock()
-    hass.bus.async_fire = AsyncMock()
+    # async_fire is synchronous in Home Assistant; keep it a plain Mock so
+    # production code that calls it without awaiting does not leak a coroutine.
+    hass.bus.async_fire = Mock()
     return hass
 
 

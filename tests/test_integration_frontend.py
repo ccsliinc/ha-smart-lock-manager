@@ -1,9 +1,7 @@
 """Integration tests for frontend-backend communication."""
 
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from custom_components.smart_lock_manager.models.lock import (
     CodeSlot,
@@ -118,8 +116,8 @@ class TestFrontendBackendIntegration:
             # const isActive = details.is_active === true;
             # const isValidNow = details.is_valid_now === true;
 
-            frontend_is_active = is_active == True  # Simulate === true
-            frontend_is_valid_now = is_valid_now == True  # Simulate === true
+            frontend_is_active = is_active is True  # Simulate === true
+            frontend_is_valid_now = is_valid_now is True  # Simulate === true
 
             if expected_status == "active_and_synced":
                 assert frontend_is_active and frontend_is_valid_now

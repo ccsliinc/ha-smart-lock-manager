@@ -87,8 +87,8 @@ class SystemServices:
 
         _LOGGER.warning(
             "generate_package service is deprecated and no longer supported. "
-            "Smart Lock Manager now uses object-oriented architecture instead of YAML packages. "
-            "Node ID: %s",
+            "Smart Lock Manager now uses object-oriented architecture instead "
+            "of YAML packages. Node ID: %s",
             node_id,
         )
 
@@ -97,6 +97,9 @@ class SystemServices:
             "smart_lock_manager_package_generation_deprecated",
             {
                 "node_id": node_id,
-                "message": "Package generation is deprecated. Use the Smart Lock Manager panel instead.",
+                "message": (
+                    "Package generation is deprecated. Use the Smart Lock "
+                    "Manager panel instead."
+                ),
             },
         )

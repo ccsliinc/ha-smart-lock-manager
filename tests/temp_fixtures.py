@@ -1,7 +1,7 @@
 """Comprehensive pytest fixtures for Smart Lock Manager tests."""
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.config_entries import ConfigEntry
