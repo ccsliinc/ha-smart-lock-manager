@@ -36,7 +36,7 @@ import json
 with open('custom_components/smart_lock_manager/manifest.json') as f:
     manifest = json.load(f)
     print(f'✅ Manifest valid: {manifest[\"name\"]} v{manifest.get(\"version\", \"unknown\")}')
-    
+
     # Check required HACS fields
     required_fields = ['documentation', 'issue_tracker', 'codeowners']
     for field in required_fields:
@@ -52,7 +52,7 @@ import json
 with open('hacs.json') as f:
     hacs = json.load(f)
     print(f'✅ HACS config valid: {hacs[\"name\"]} v{hacs[\"version\"]}')
-    
+
     # Check required fields
     required = ['name', 'version', 'domains']
     for field in required:
@@ -113,14 +113,14 @@ import json
 try:
     with open('custom_components/smart_lock_manager/manifest.json') as f:
         manifest = json.load(f)
-    
+
     doc_url = manifest['documentation']
     issue_url = manifest['issue_tracker']
-    
+
     print(f'📚 Documentation URL: {doc_url}')
     print(f'🐛 Issue tracker URL: {issue_url}')
     print('✅ URLs configured (manual verification recommended)')
-    
+
 except Exception as e:
     print(f'⚠️ Could not validate URLs: {e}')
 "

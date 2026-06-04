@@ -56,29 +56,13 @@ jobs:
         print('✅ Manifest validation passed')
         "
 
-  tests:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov pytest-asyncio
-
-    - name: Run tests
-      run: |
-        if [ -d "tests" ]; then
-          pytest tests/ -v --cov=custom_components.smart_lock_manager
-        else
-          echo "⚠️ No tests directory found - skipping tests"
-        fi
+  # NOTE: The test suite runs authoritatively in validate.yml's `tests` job
+  # (Python 3.13 with the pinned homeassistant/pycares/zwave-js-server-python
+  # deps required for module-level patching of zwave_js helpers). That workflow
+  # triggers on both push and pull_request to main, so a duplicate tests job
+  # here is unnecessary and was perpetually red due to an out-of-date setup
+  # (Python 3.12, no dependency pins, no --asyncio-mode=auto). Removed to keep a
+  # single green, authoritative tests run covering both push and PR.
 
   documentation:
     runs-on: ubuntu-latest

@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Need help with Smart Lock Manager? Please provide details about your setup and what you're trying to achieve.
-        
+
         **Note**: For bugs, please use the Bug Report template instead.
 
   - type: checkboxes
@@ -108,7 +108,7 @@ body:
       description: Select your Home Assistant environment
       options:
         - label: Home Assistant Core
-        - label: Home Assistant Supervised  
+        - label: Home Assistant Supervised
         - label: Home Assistant OS
         - label: Home Assistant Container
 
