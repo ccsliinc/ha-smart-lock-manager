@@ -78,7 +78,9 @@ jobs:
         # pycares is pinned because homeassistant 2025.8.0 leaves it unpinned and
         # the latest pycares (5.x) dropped ares_query_a_result, which aiodns 3.5.0
         # imports at startup -> AttributeError before any test runs.
-        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0"
+        # zwave-js-server-python is the zwave_js component's runtime requirement,
+        # needed so the lazy import of async_get_node_from_entity_id succeeds.
+        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0" "zwave-js-server-python==0.67.1"
         pip install pytest pytest-asyncio pytest-cov
         pytest tests/ --asyncio-mode=auto
         echo "✅ Test suite passed"
@@ -129,7 +131,11 @@ jobs:
         # layout differs, breaking tests that patch module-level symbols.
         # pycares pinned: latest 5.x dropped ares_query_a_result, which
         # aiodns 3.5.0 (pulled by homeassistant 2025.8.0) imports at startup.
-        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0"
+        # zwave-js-server-python is the zwave_js component's runtime requirement
+        # (pip install homeassistant does not pull integration requirements);
+        # without it the lazy import of async_get_node_from_entity_id fails and
+        # the zwave service tests cannot patch that symbol.
+        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0" "zwave-js-server-python==0.67.1"
         pip install -e ".[dev]" pytest-cov pytest-asyncio
 
     - name: Run test suite
