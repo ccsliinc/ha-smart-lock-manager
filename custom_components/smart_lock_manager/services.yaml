@@ -294,18 +294,6 @@ sync_slot_to_zwave:
             - "enable"
             - "disable"
 
-sync_child_locks:
-  name: Sync Child Locks
-  description: Sync all code slots from a parent lock to its child locks.
-  fields:
-    entity_id:
-      name: Entity
-      description: The parent lock entity to sync from.
-      required: true
-      selector:
-        entity:
-          domain: lock
-
 get_usage_stats:
   name: Get Usage Stats
   description: Retrieve usage statistics for all code slots on a lock.
@@ -344,31 +332,87 @@ update_lock_settings:
           min: 1
           max: 50
           mode: box
-    is_main_lock:
-      name: Is Main Lock
-      description: Whether this is the main/parent lock.
-      required: false
-      selector:
-        boolean:
-    parent_lock_id:
-      name: Parent Lock ID
-      description: Entity ID of the parent lock (empty to clear).
-      required: false
-      selector:
-        entity:
-          domain: lock
 
-remove_child_lock:
-  name: Remove Child Lock
-  description: Remove a child lock association from a parent lock.
+create_zone:
+  name: Create Zone
+  description: Create a new zone, optionally pre-populated with unhomed member locks.
   fields:
-    entity_id:
-      name: Entity
-      description: The child lock entity to remove.
+    name:
+      name: Zone Name
+      description: Display name for the new zone.
+      required: true
+      selector:
+        text:
+    member_lock_entity_ids:
+      name: Initial Members
+      description: Optional list of unhomed lock entity IDs to add to the new zone.
+      required: false
+      selector:
+        object:
+
+delete_zone:
+  name: Delete Zone
+  description: >-
+    Delete a zone, wiping its codes off every member's hardware and returning
+    the members to the unhomed pool. Lock entries are preserved.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The ID of the zone to delete.
+      required: true
+      selector:
+        text:
+
+add_lock_to_zone:
+  name: Add Lock To Zone
+  description: >-
+    Move an unhomed lock into a zone and apply the zone's codes. Rejected if the
+    lock already belongs to another zone.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The target zone ID.
+      required: true
+      selector:
+        text:
+    lock_entity_id:
+      name: Lock Entity
+      description: The unhomed lock entity to add.
       required: true
       selector:
         entity:
           domain: lock
+
+remove_lock_from_zone:
+  name: Remove Lock From Zone
+  description: >-
+    Remove a lock from its zone, wiping the zone's codes off the lock's hardware
+    and returning it to the unhomed pool.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone the lock currently belongs to.
+      required: true
+      selector:
+        text:
+    lock_entity_id:
+      name: Lock Entity
+      description: The member lock entity to remove.
+      required: true
+      selector:
+        entity:
+          domain: lock
+
+apply_zone_codes:
+  name: Apply Zone Codes
+  description: Re-push the zone's canonical code set to all member locks (idempotent).
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone whose codes should be re-applied.
+      required: true
+      selector:
+        text:
 
 clear_all_slots:
   name: Clear All Slots

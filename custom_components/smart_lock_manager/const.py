@@ -88,13 +88,18 @@ SERVICE_READ_ZWAVE_CODES = "read_zwave_codes"
 SERVICE_REFRESH_CODES = "refresh_codes"
 SERVICE_RESET_SLOT_USAGE = "reset_slot_usage"
 SERVICE_RESET_SYNC = "reset_sync"
-SERVICE_REMOVE_CHILD_LOCK = "remove_child_lock"
 SERVICE_RESIZE_SLOTS = "resize_slots"
 SERVICE_SET_CODE = "set_code"
 SERVICE_SET_CODE_ADVANCED = "set_code_advanced"
-SERVICE_SYNC_CHILD_LOCKS = "sync_child_locks"
 SERVICE_UPDATE_GLOBAL_SETTINGS = "update_global_settings"
 SERVICE_UPDATE_LOCK_SETTINGS = "update_lock_settings"
+
+# Zone-management services (replace retired parent/child services)
+SERVICE_CREATE_ZONE = "create_zone"
+SERVICE_DELETE_ZONE = "delete_zone"
+SERVICE_ADD_LOCK_TO_ZONE = "add_lock_to_zone"
+SERVICE_REMOVE_LOCK_FROM_ZONE = "remove_lock_from_zone"
+SERVICE_APPLY_ZONE_CODES = "apply_zone_codes"
 
 # Misc
 LOCK_STATE = [LockState.LOCKED, LockState.UNLOCKED]

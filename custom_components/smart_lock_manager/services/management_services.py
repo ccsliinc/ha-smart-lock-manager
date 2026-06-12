@@ -1,7 +1,6 @@
 """Lock management and analytics services for Smart Lock Manager."""
 
 import logging
-from typing import Optional
 
 from homeassistant.core import HomeAssistant, ServiceCall
 
@@ -12,82 +11,6 @@ _LOGGER = logging.getLogger(__name__)
 
 class ManagementServices:
     """Service handler for lock management and analytics operations."""
-
-    @staticmethod
-    async def sync_child_locks(hass: HomeAssistant, service_call: ServiceCall) -> None:
-        """Sync codes from a main lock to its child locks."""
-        entity_id = service_call.data[ATTR_ENTITY_ID]
-
-        # Find the main lock
-        main_lock = None
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            if isinstance(entry_data, dict):  # Skip global_settings
-                lock = entry_data.get(PRIMARY_LOCK)
-                if lock and lock.lock_entity_id == entity_id:
-                    main_lock = lock
-                    break
-
-        if not main_lock:
-            _LOGGER.error("No lock found for entity_id: %s", entity_id)
-            return
-
-        if not main_lock.is_main_lock:
-            _LOGGER.error(
-                "Lock %s is not configured as a main lock", main_lock.lock_name
-            )
-            return
-
-        if not main_lock.child_lock_ids:
-            _LOGGER.debug(
-                "No child locks configured for main lock %s", main_lock.lock_name
-            )
-            return
-
-        # Find child locks
-        child_locks = []
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            if isinstance(entry_data, dict):  # Skip global_settings
-                lock = entry_data.get(PRIMARY_LOCK)
-                if lock and lock.lock_entity_id in main_lock.child_lock_ids:
-                    child_locks.append(lock)
-
-        if not child_locks:
-            _LOGGER.error("No child locks found for main lock %s", main_lock.lock_name)
-            return
-
-        # Sync codes to child locks
-        synced_count = 0
-        for child_lock in child_locks:
-            try:
-                main_lock.sync_to_child_locks([child_lock])
-                synced_count += 1
-                _LOGGER.debug(
-                    "Synced codes from %s to child lock %s",
-                    main_lock.lock_name,
-                    child_lock.lock_name,
-                )
-
-                # Save child lock data
-                for entry_id, entry_data in hass.data[DOMAIN].items():
-                    if (
-                        isinstance(entry_data, dict)
-                        and entry_data.get(PRIMARY_LOCK) == child_lock
-                    ):
-                        store = entry_data.get("store")
-                        if store:
-                            await store.async_save(child_lock.to_dict())
-                        break
-
-            except Exception as e:
-                _LOGGER.error(
-                    "Failed to sync codes to child lock %s: %s", child_lock.lock_name, e
-                )
-
-        _LOGGER.debug(
-            "Completed sync from main lock %s to %s child locks",
-            main_lock.lock_name,
-            synced_count,
-        )
 
     @staticmethod
     async def get_usage_stats(hass: HomeAssistant, service_call: ServiceCall) -> None:
@@ -154,16 +77,12 @@ class ManagementServices:
         entity_id = service_call.data[ATTR_ENTITY_ID]
         friendly_name = service_call.data.get("friendly_name")
         slot_count = service_call.data.get("slot_count")
-        is_main_lock = service_call.data.get("is_main_lock")
-        parent_lock_id = service_call.data.get("parent_lock_id")
 
         _LOGGER.debug("=== BACKEND DEBUGGING: update_lock_settings called ===")
         _LOGGER.debug(f"🔧 Backend Debug - Service call data: {service_call.data}")
         _LOGGER.debug(f"🔧 Backend Debug - Entity ID: {entity_id}")
         _LOGGER.debug(f"🔧 Backend Debug - Friendly name: '{friendly_name}'")
         _LOGGER.debug(f"🔧 Backend Debug - Slot count: {slot_count}")
-        _LOGGER.debug(f"🔧 Backend Debug - Is main lock: {is_main_lock}")
-        _LOGGER.debug(f"🔧 Backend Debug - Parent lock ID: {parent_lock_id}")
 
         for entry_id, entry_data in hass.data[DOMAIN].items():
             if isinstance(entry_data, dict):  # Skip global_settings
@@ -184,8 +103,6 @@ class ManagementServices:
                         f"  - Current friendly name: '{lock.settings.friendly_name}'"
                     )
                     _LOGGER.debug(f"  - Current slot count: {lock.slots}")
-                    _LOGGER.debug(f"  - Current is_main_lock: {lock.is_main_lock}")
-                    _LOGGER.debug(f"  - Current parent_lock_id: {lock.parent_lock_id}")
 
                     updated = False
 
@@ -246,41 +163,6 @@ class ManagementServices:
                             _LOGGER.error(
                                 "Invalid slot count %s (must be 1-50)", slot_count
                             )
-
-                    # Update parent/child lock settings if provided
-                    if is_main_lock is not None and is_main_lock != lock.is_main_lock:
-                        lock.is_main_lock = is_main_lock
-                        updated = True
-                        _LOGGER.debug(
-                            "Updated lock %s type to: %s",
-                            lock.lock_name,
-                            "Parent Lock" if is_main_lock else "Child Lock",
-                        )
-
-                        # If converting to child lock, clear child lock IDs
-                        if not is_main_lock:
-                            lock.child_lock_ids = []
-
-                    # Update parent lock ID if provided (for child locks)
-                    if (
-                        parent_lock_id is not None
-                        and parent_lock_id != lock.parent_lock_id
-                    ):
-                        old_parent = lock.parent_lock_id
-                        lock.parent_lock_id = parent_lock_id if parent_lock_id else None
-                        updated = True
-
-                        # Update child lock lists on old and new parent locks
-                        await ManagementServices._update_parent_child_relationships(
-                            hass, entity_id, old_parent, parent_lock_id
-                        )
-
-                        _LOGGER.debug(
-                            "Updated parent lock for %s from %s to %s",
-                            lock.lock_name,
-                            old_parent or "None",
-                            parent_lock_id or "None",
-                        )
 
                     # Save changes if any updates were made
                     if updated:
@@ -366,133 +248,6 @@ class ManagementServices:
                     return
 
         _LOGGER.error("No lock found for entity_id: %s", entity_id)
-
-    @staticmethod
-    async def _update_parent_child_relationships(
-        hass: HomeAssistant,
-        child_entity_id: str,
-        old_parent_id: Optional[str],
-        new_parent_id: Optional[str],
-    ) -> None:
-        """Update parent-child lock relationships when parent changes."""
-
-        # Remove child from old parent's child list
-        if old_parent_id:
-            for entry_id, entry_data in hass.data[DOMAIN].items():
-                if isinstance(entry_data, dict):
-                    old_parent_lock = entry_data.get(PRIMARY_LOCK)
-                    if (
-                        old_parent_lock
-                        and old_parent_lock.lock_entity_id == old_parent_id
-                    ):
-                        if child_entity_id in old_parent_lock.child_lock_ids:
-                            old_parent_lock.child_lock_ids.remove(child_entity_id)
-
-                        # Save old parent lock
-                        store = entry_data.get("store")
-                        if store:
-                            await store.async_save(old_parent_lock.to_dict())
-                        break
-
-        # Add child to new parent's child list
-        if new_parent_id:
-            for entry_id, entry_data in hass.data[DOMAIN].items():
-                if isinstance(entry_data, dict):
-                    new_parent_lock = entry_data.get(PRIMARY_LOCK)
-                    if (
-                        new_parent_lock
-                        and new_parent_lock.lock_entity_id == new_parent_id
-                    ):
-                        if child_entity_id not in new_parent_lock.child_lock_ids:
-                            new_parent_lock.child_lock_ids.append(child_entity_id)
-
-                        # Save new parent lock
-                        store = entry_data.get("store")
-                        if store:
-                            await store.async_save(new_parent_lock.to_dict())
-                        break
-
-    @staticmethod
-    async def remove_child_lock(hass: HomeAssistant, service_call: ServiceCall) -> None:
-        """Remove a child lock and convert it back to a main lock."""
-        child_entity_id = service_call.data[ATTR_ENTITY_ID]
-
-        _LOGGER.debug(f"Removing child lock: {child_entity_id}")
-
-        # Find the child lock
-        child_lock = None
-        child_entry_data = None
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            if isinstance(entry_data, dict):
-                lock = entry_data.get(PRIMARY_LOCK)
-                if lock and lock.lock_entity_id == child_entity_id:
-                    child_lock = lock
-                    child_entry_data = entry_data
-                    break
-
-        if not child_lock:
-            _LOGGER.error(f"Child lock not found: {child_entity_id}")
-            return
-
-        # Get the current parent
-        old_parent_id = child_lock.parent_lock_id
-
-        if not old_parent_id:
-            _LOGGER.warning(f"Lock {child_entity_id} is not a child lock")
-            return
-
-        # Convert child back to main lock
-        child_lock.is_main_lock = True
-        child_lock.parent_lock_id = None
-        child_lock.child_lock_ids = []
-
-        # Remove child from parent's child list
-        if old_parent_id:
-            for entry_id, entry_data in hass.data[DOMAIN].items():
-                if isinstance(entry_data, dict):
-                    parent_lock = entry_data.get(PRIMARY_LOCK)
-                    if parent_lock and parent_lock.lock_entity_id == old_parent_id:
-                        if child_entity_id in parent_lock.child_lock_ids:
-                            parent_lock.child_lock_ids.remove(child_entity_id)
-                            _LOGGER.debug(
-                                "Removed %s from parent %s child list",
-                                child_entity_id,
-                                old_parent_id,
-                            )
-
-                        # Save parent lock
-                        parent_store = entry_data.get("store")
-                        if parent_store:
-                            await parent_store.async_save(parent_lock.to_dict())
-                        break
-
-        # Save the now-independent child lock
-        if child_entry_data:
-            child_store = child_entry_data.get("store")
-            if child_store:
-                await child_store.async_save(child_lock.to_dict())
-
-        # Fire event to notify about the change
-        hass.bus.async_fire(
-            "smart_lock_manager_child_removed",
-            {
-                "entity_id": child_entity_id,
-                "former_parent": old_parent_id,
-                "lock_name": child_lock.lock_name,
-            },
-        )
-
-        # Trigger coordinator refresh for both locks
-        if child_entry_data:
-            coordinator = child_entry_data.get("coordinator")
-            if coordinator:
-                await coordinator.async_request_refresh()
-
-        _LOGGER.debug(
-            "Successfully removed child lock %s from parent %s",
-            child_entity_id,
-            old_parent_id,
-        )
 
     @staticmethod
     async def clear_all_slots(hass: HomeAssistant, service_call: ServiceCall) -> None:

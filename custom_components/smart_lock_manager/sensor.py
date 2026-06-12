@@ -212,6 +212,8 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "zone_id": zone.zone_id if zone else None,
             "zone_name": zone.name if zone else None,
             "member_locks": list(zone.member_lock_entity_ids) if zone else [],
+            # Unhomed = loaded lock that belongs to no zone (Phase-3 "+" pool).
+            "is_unhomed": zone is None,
             # Status and counts (perfect for automations!)
             "active_codes_count": lock_to_use.get_active_codes_count(),
             "configured_codes_count": lock_to_use.get_configured_codes_count(),
@@ -438,6 +440,8 @@ class SmartLockManagerZoneSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         """Return zone identity, members, and a per-slot code summary."""
+        from .zone_runtime import get_unhomed_lock_entity_ids
+
         zone = self._get_zone()
         if not zone:
             return {"zone_id": self._zone_id, "deleted": True}
@@ -464,6 +468,8 @@ class SmartLockManagerZoneSensor(CoordinatorEntity, SensorEntity):
             "active_codes_count": zone.get_active_codes_count(),
             "configured_codes_count": zone.get_configured_codes_count(),
             "slot_summary": slot_summary,
+            # Fleet-wide unhomed pool — the locks the "+" picker can add here.
+            "unhomed_locks": get_unhomed_lock_entity_ids(self._hass),
             "integration_version": "1.0.0",
             "architecture": "zone_model",
         }

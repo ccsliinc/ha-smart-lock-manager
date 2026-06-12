@@ -252,24 +252,6 @@ class LockServices:
                     from ..storage.lock_storage import save_lock_data
 
                     await save_lock_data(hass, lock, entry_id)
-
-                    # Propagate metadata to child locks if applicable.
-                    if lock.is_main_lock and lock.child_lock_ids:
-                        try:
-                            from ..const import SERVICE_SYNC_CHILD_LOCKS
-
-                            await hass.services.async_call(
-                                DOMAIN,
-                                SERVICE_SYNC_CHILD_LOCKS,
-                                {ATTR_ENTITY_ID: lock.lock_entity_id},
-                            )
-                        except Exception as e:
-                            _LOGGER.error(
-                                "Failed child sync after metadata-only update "
-                                "for %s: %s",
-                                lock.lock_name,
-                                e,
-                            )
                     return
 
                 # Pre-flight: reject PIN-prefix collisions before any write

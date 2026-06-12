@@ -83,6 +83,31 @@ def get_zone_for_lock(hass: HomeAssistant, entity_id: str) -> Optional[Zone]:
     return None
 
 
+def get_unhomed_lock_entity_ids(hass: HomeAssistant) -> List[str]:
+    """Return entity ids of every loaded lock that is in no zone.
+
+    The "unhomed pool" — locks with a config entry but no zone membership. The
+    Phase-3 "+" picker draws from this. Order follows registry iteration.
+
+    - Inputs: hass (HomeAssistant).
+    - Outputs: sorted list of unhomed lock entity_id strings (may be empty).
+    """
+    homed: set[str] = set()
+    for zone in get_zone_registry(hass).values():
+        homed.update(zone.member_lock_entity_ids)
+    unhomed = [eid for eid in _all_locks(hass) if eid not in homed]
+    return sorted(unhomed)
+
+
+def is_lock_unhomed(hass: HomeAssistant, entity_id: str) -> bool:
+    """Return True if ``entity_id`` is loaded but belongs to no zone.
+
+    - Inputs: hass (HomeAssistant), entity_id (str).
+    - Outputs: bool.
+    """
+    return get_zone_for_lock(hass, entity_id) is None
+
+
 def _all_locks(hass: HomeAssistant) -> Dict[str, SmartLockManagerLock]:
     """Return every loaded lock object keyed by entity_id.
 

@@ -38,21 +38,24 @@ from .const import (
     ISSUE_URL,
     PLATFORMS,
     PRIMARY_LOCK,
+    SERVICE_ADD_LOCK_TO_ZONE,
+    SERVICE_APPLY_ZONE_CODES,
     SERVICE_CLEAR_ALL_SLOTS,
     SERVICE_CLEAR_CODE,
+    SERVICE_CREATE_ZONE,
+    SERVICE_DELETE_ZONE,
     SERVICE_DISABLE_SLOT,
     SERVICE_ENABLE_SLOT,
     SERVICE_GENERATE_PACKAGE,
     SERVICE_GET_USAGE_STATS,
     SERVICE_READ_ZWAVE_CODES,
     SERVICE_REFRESH_CODES,
-    SERVICE_REMOVE_CHILD_LOCK,
+    SERVICE_REMOVE_LOCK_FROM_ZONE,
     SERVICE_RESET_SLOT_USAGE,
     SERVICE_RESET_SYNC,
     SERVICE_RESIZE_SLOTS,
     SERVICE_SET_CODE,
     SERVICE_SET_CODE_ADVANCED,
-    SERVICE_SYNC_CHILD_LOCKS,
     SERVICE_UPDATE_GLOBAL_SETTINGS,
     SERVICE_UPDATE_LOCK_SETTINGS,
     VERSION,
@@ -69,6 +72,7 @@ from .services.lock_services import LockServices
 from .services.management_services import ManagementServices
 from .services.slot_services import SlotServices
 from .services.system_services import SystemServices
+from .services.zone_services import ZoneServices
 from .services.zwave_services import ZWaveServices
 from .zone_runtime import (
     async_ensure_zones_loaded,
@@ -311,11 +315,7 @@ RESIZE_SLOTS_SCHEMA = vol.Schema(
     }
 )
 
-SYNC_CHILD_LOCKS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
-
 GET_USAGE_STATS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
-
-REMOVE_CHILD_LOCK_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
 
 CLEAR_ALL_SLOTS_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
 
@@ -324,8 +324,25 @@ UPDATE_LOCK_SETTINGS_SCHEMA = vol.Schema(
         vol.Required(ATTR_ENTITY_ID): cv.entity_id,
         vol.Optional("friendly_name"): str,
         vol.Optional("slot_count"): vol.All(int, vol.Range(min=1, max=50)),
-        vol.Optional("is_main_lock"): bool,
-        vol.Optional("parent_lock_id"): vol.Any(cv.entity_id, None, ""),
+    }
+)
+
+# Zone-management service schemas.
+CREATE_ZONE_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): str,
+        vol.Optional("member_lock_entity_ids"): [cv.entity_id],
+    }
+)
+
+DELETE_ZONE_SCHEMA = vol.Schema({vol.Required("zone_id"): str})
+
+APPLY_ZONE_CODES_SCHEMA = vol.Schema({vol.Required("zone_id"): str})
+
+ZONE_MEMBER_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_id"): str,
+        vol.Required("lock_entity_id"): cv.entity_id,
     }
 )
 
@@ -662,8 +679,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_RESET_SLOT_USAGE)
             hass.services.async_remove(DOMAIN, SERVICE_RESET_SYNC)
             hass.services.async_remove(DOMAIN, SERVICE_RESIZE_SLOTS)
-            hass.services.async_remove(DOMAIN, SERVICE_SYNC_CHILD_LOCKS)
             hass.services.async_remove(DOMAIN, SERVICE_GET_USAGE_STATS)
+
+            # Zone-management services
+            hass.services.async_remove(DOMAIN, SERVICE_CREATE_ZONE)
+            hass.services.async_remove(DOMAIN, SERVICE_DELETE_ZONE)
+            hass.services.async_remove(DOMAIN, SERVICE_ADD_LOCK_TO_ZONE)
+            hass.services.async_remove(DOMAIN, SERVICE_REMOVE_LOCK_FROM_ZONE)
+            hass.services.async_remove(DOMAIN, SERVICE_APPLY_ZONE_CODES)
 
     return bool(unload_ok)
 
@@ -733,20 +756,29 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     async def sync_slot_to_zwave_wrapper(service_call: ServiceCall) -> None:
         return await ZWaveServices.sync_slot_to_zwave(hass, service_call)
 
-    async def sync_child_locks_wrapper(service_call: ServiceCall) -> None:
-        return await ManagementServices.sync_child_locks(hass, service_call)
-
     async def get_usage_stats_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.get_usage_stats(hass, service_call)
 
     async def update_lock_settings_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.update_lock_settings(hass, service_call)
 
-    async def remove_child_lock_wrapper(service_call: ServiceCall) -> None:
-        return await ManagementServices.remove_child_lock(hass, service_call)
-
     async def clear_all_slots_wrapper(service_call: ServiceCall) -> None:
         return await ManagementServices.clear_all_slots(hass, service_call)
+
+    async def create_zone_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.create_zone(hass, service_call)
+
+    async def delete_zone_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.delete_zone(hass, service_call)
+
+    async def add_lock_to_zone_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.add_lock_to_zone(hass, service_call)
+
+    async def remove_lock_from_zone_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.remove_lock_from_zone(hass, service_call)
+
+    async def apply_zone_codes_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.apply_zone_codes(hass, service_call)
 
     async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
@@ -817,12 +849,6 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     hass.services.async_register(
         DOMAIN,
-        SERVICE_SYNC_CHILD_LOCKS,
-        sync_child_locks_wrapper,
-        schema=SYNC_CHILD_LOCKS_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
         SERVICE_GET_USAGE_STATS,
         get_usage_stats_wrapper,
         schema=GET_USAGE_STATS_SCHEMA,
@@ -835,17 +861,38 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
-        SERVICE_REMOVE_CHILD_LOCK,
-        remove_child_lock_wrapper,
-        schema=REMOVE_CHILD_LOCK_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
         SERVICE_CLEAR_ALL_SLOTS,
         clear_all_slots_wrapper,
         schema=CLEAR_ALL_SLOTS_SCHEMA,
     )
     _LOGGER.debug("Registered management services")
+
+    # Zone-management services (replace retired parent/child services).
+    hass.services.async_register(
+        DOMAIN, SERVICE_CREATE_ZONE, create_zone_wrapper, schema=CREATE_ZONE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_DELETE_ZONE, delete_zone_wrapper, schema=DELETE_ZONE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_LOCK_TO_ZONE,
+        add_lock_to_zone_wrapper,
+        schema=ZONE_MEMBER_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REMOVE_LOCK_FROM_ZONE,
+        remove_lock_from_zone_wrapper,
+        schema=ZONE_MEMBER_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_APPLY_ZONE_CODES,
+        apply_zone_codes_wrapper,
+        schema=APPLY_ZONE_CODES_SCHEMA,
+    )
+    _LOGGER.debug("Registered zone-management services")
 
     hass.services.async_register(
         DOMAIN,
