@@ -18,6 +18,12 @@ from typing import Any
 from homeassistant.core import HomeAssistant, ServiceCall
 
 from ..const import ATTR_CODE_SLOT, ATTR_ENTITY_ID, DOMAIN, PRIMARY_LOCK
+from ..dev_mock import (
+    MOCK_DB,
+    is_dev_mock,
+    mock_get_usercode,
+    mock_node_for_entity,
+)
 from ..models.lock import (
     USER_ID_STATUS_AVAILABLE,
     USER_ID_STATUS_DISABLED,
@@ -104,6 +110,21 @@ async def _set_usercode_with_status(
         usercode: PIN code string (numeric, 4-8 digits).
         node: Z-Wave JS node object (unused, kept for call-site compatibility).
     """
+    if is_dev_mock():
+        # DEV: write into the in-memory MockValueDB instead of Z-Wave. The
+        # MockValueDB raises on an armed fail_next() to simulate supervision
+        # failure, which propagates exactly like a real service-call failure.
+        mock_node = mock_node_for_entity(entity_id)
+        node_id = getattr(mock_node, "node_id", None)
+        if node_id is None:
+            raise ValueError(f"Dev mock: unknown lock entity {entity_id}")
+        MOCK_DB.set_usercode(node_id, code_slot, usercode)
+        _LOGGER.info(
+            "DEV mock set_lock_usercode succeeded for slot %s on %s",
+            code_slot,
+            entity_id,
+        )
+        return
     await hass.services.async_call(
         "zwave_js",
         "set_lock_usercode",
@@ -126,6 +147,60 @@ async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None
     pass
 
 
+def _resolve_node(hass: HomeAssistant, entity_id: str) -> Any:
+    """Return the Z-Wave node for ``entity_id`` (mock-aware).
+
+    - Description: Under ``SLM_DEV_MOCK`` resolve to a fake node via
+      ``mock_node_for_entity``; otherwise call the real
+      ``async_get_node_from_entity_id``.
+    - Inputs: hass (HomeAssistant), entity_id (str).
+    - Outputs: a node-like object (real or mock), or None.
+    """
+    if is_dev_mock():
+        return mock_node_for_entity(entity_id)
+    return async_get_node_from_entity_id(hass, entity_id)
+
+
+def _read_usercode(node: Any, slot: int) -> Any:
+    """Read a cached usercode for ``slot`` on ``node`` (mock-aware).
+
+    - Description: Under ``SLM_DEV_MOCK`` read from the MockValueDB via
+      ``mock_get_usercode``; otherwise call the real sync ``get_usercode``.
+    - Inputs: node (node-like object), slot (int).
+    - Outputs: dict with ``usercode``/``in_use`` keys (same shape both paths).
+    """
+    if is_dev_mock():
+        return mock_get_usercode(node, slot)
+    return get_usercode(node, slot)
+
+
+async def _clear_usercode(hass: HomeAssistant, entity_id: str, code_slot: int) -> None:
+    """Clear a usercode for ``entity_id``/``code_slot`` (mock-aware).
+
+    - Description: Under ``SLM_DEV_MOCK`` clear from the MockValueDB (honoring
+      failure injection); otherwise call the real ``zwave_js.clear_lock_usercode``
+      service.
+    - Inputs: hass (HomeAssistant), entity_id (str), code_slot (int).
+    - Outputs: None.
+    """
+    if is_dev_mock():
+        mock_node = mock_node_for_entity(entity_id)
+        node_id = getattr(mock_node, "node_id", None)
+        if node_id is None:
+            raise ValueError(f"Dev mock: unknown lock entity {entity_id}")
+        MOCK_DB.clear_usercode(node_id, code_slot)
+        _LOGGER.info(
+            "DEV mock clear_lock_usercode for slot %s on %s", code_slot, entity_id
+        )
+        return
+    await hass.services.async_call(
+        "zwave_js",
+        "clear_lock_usercode",
+        {"entity_id": entity_id, "code_slot": code_slot},
+        blocking=True,
+    )
+
+
 class ZWaveServices:
     """Service handler for Z-Wave integration operations."""
 
@@ -143,7 +218,7 @@ class ZWaveServices:
         """
         entity_id = service_call.data[ATTR_ENTITY_ID]
 
-        if not ZWAVE_JS_AVAILABLE:
+        if not ZWAVE_JS_AVAILABLE and not is_dev_mock():
             _LOGGER.error("Z-Wave JS is not available for reading codes")
             return
 
@@ -177,7 +252,7 @@ class ZWaveServices:
         slot_number = service_call.data[ATTR_CODE_SLOT]
         action = service_call.data.get("action", "auto")
 
-        if not ZWAVE_JS_AVAILABLE:
+        if not ZWAVE_JS_AVAILABLE and not is_dev_mock():
             _LOGGER.error("Z-Wave JS is not available for syncing codes")
             return
 
@@ -201,7 +276,7 @@ class ZWaveServices:
 
         # Get Z-Wave node once for cache refresh operations
         try:
-            node = async_get_node_from_entity_id(hass, entity_id)
+            node = _resolve_node(hass, entity_id)
         except Exception as e:
             _LOGGER.debug("Could not get Z-Wave node for %s: %s", entity_id, e)
             node = None
@@ -223,7 +298,7 @@ class ZWaveServices:
                 # Check cached code to avoid unnecessary writes
                 try:
                     if node:
-                        current_code_info = get_usercode(node, slot_number)
+                        current_code_info = _read_usercode(node, slot_number)
                         current_code = (
                             current_code_info.get("usercode")
                             if current_code_info
@@ -247,15 +322,7 @@ class ZWaveServices:
                                 " writing new code",
                                 slot_number,
                             )
-                            await hass.services.async_call(
-                                "zwave_js",
-                                "clear_lock_usercode",
-                                {
-                                    "entity_id": entity_id,
-                                    "code_slot": slot_number,
-                                },
-                                blocking=True,
-                            )
+                            await _clear_usercode(hass, entity_id, slot_number)
                             await asyncio.sleep(2)
                 except Exception as e:
                     _LOGGER.debug(
@@ -280,12 +347,7 @@ class ZWaveServices:
 
             elif action == "disable":
                 # Remove code from Z-Wave lock
-                await hass.services.async_call(
-                    "zwave_js",
-                    "clear_lock_usercode",
-                    {"entity_id": entity_id, "code_slot": slot_number},
-                    blocking=True,
-                )
+                await _clear_usercode(hass, entity_id, slot_number)
                 slot.user_id_status = USER_ID_STATUS_AVAILABLE
                 _LOGGER.info(
                     "Removed code from Z-Wave lock %s slot %s", entity_id, slot_number
@@ -314,7 +376,7 @@ class ZWaveServices:
                     # Check cached code - use sync get_usercode (fast, no network)
                     try:
                         if node:
-                            current_code_info = get_usercode(node, slot_number)
+                            current_code_info = _read_usercode(node, slot_number)
                             current_code = (
                                 current_code_info.get("usercode")
                                 if current_code_info
@@ -340,15 +402,7 @@ class ZWaveServices:
                                     " writing new code",
                                     slot_number,
                                 )
-                                await hass.services.async_call(
-                                    "zwave_js",
-                                    "clear_lock_usercode",
-                                    {
-                                        "entity_id": entity_id,
-                                        "code_slot": slot_number,
-                                    },
-                                    blocking=True,
-                                )
+                                await _clear_usercode(hass, entity_id, slot_number)
                                 await asyncio.sleep(2)
                     except Exception as e:
                         _LOGGER.debug(
@@ -370,12 +424,7 @@ class ZWaveServices:
                         await _refresh_slot_cache(node, slot_number, entity_id)
                 else:
                     # Should not be in lock - remove it
-                    await hass.services.async_call(
-                        "zwave_js",
-                        "clear_lock_usercode",
-                        {"entity_id": entity_id, "code_slot": slot_number},
-                        blocking=True,
-                    )
+                    await _clear_usercode(hass, entity_id, slot_number)
                     slot.user_id_status = USER_ID_STATUS_AVAILABLE
                     _LOGGER.info(
                         "Auto-removed code from Z-Wave lock %s slot %s",
@@ -429,7 +478,7 @@ async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
         entity_id: Lock entity ID to read codes from.
     """
     # async_get_node_from_entity_id is a @callback (sync) - do NOT await
-    node = async_get_node_from_entity_id(hass, entity_id)
+    node = _resolve_node(hass, entity_id)
 
     # Find the lock object so we can update user_id_status on CodeSlots
     lock_obj = None
@@ -453,7 +502,7 @@ async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
         try:
             slots_tested += 1
             # get_usercode is SYNC - reads from cached ValueDB, no network call
-            code_info = get_usercode(node, slot_num)
+            code_info = _read_usercode(node, slot_num)
 
             in_use = code_info.get("in_use") is True if code_info else False
             code_value = code_info.get("usercode") if code_info else None

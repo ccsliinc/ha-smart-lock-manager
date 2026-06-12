@@ -57,6 +57,12 @@ from .const import (
     SERVICE_UPDATE_LOCK_SETTINGS,
     VERSION,
 )
+from .dev_mock import (
+    fire_mock_notification,
+    is_dev_mock,
+    mock_get_usercode,
+    mock_node_for_entity,
+)
 from .frontend.panel import async_register_panel, async_unregister_panel
 from .models.lock import ACCESS_LOG_MAX_ENTRIES, SmartLockManagerLock
 from .services.lock_services import LockServices
@@ -64,6 +70,11 @@ from .services.management_services import ManagementServices
 from .services.slot_services import SlotServices
 from .services.system_services import SystemServices
 from .services.zwave_services import ZWaveServices
+from .zone_runtime import (
+    async_ensure_zones_loaded,
+    async_run_migration_if_needed,
+    mirror_owning_zone_to_member,
+)
 
 
 async def _save_lock_data(
@@ -137,12 +148,14 @@ def _resolve_lock_for_node(
     if node_id is None:
         return None
 
-    try:
-        from homeassistant.components.zwave_js.helpers import (
-            async_get_node_from_entity_id,
-        )
-    except Exception:  # pragma: no cover - zwave_js always present in prod
-        return None
+    dev_mock = is_dev_mock()
+    if not dev_mock:
+        try:
+            from homeassistant.components.zwave_js.helpers import (
+                async_get_node_from_entity_id,
+            )
+        except Exception:  # pragma: no cover - zwave_js always present in prod
+            return None
 
     for entry_data in hass.data.get(DOMAIN, {}).values():
         if not isinstance(entry_data, dict):
@@ -151,8 +164,12 @@ def _resolve_lock_for_node(
         if not lock or not lock.lock_entity_id:
             continue
         try:
-            # async_get_node_from_entity_id is @callback (sync) — do NOT await
-            node = async_get_node_from_entity_id(hass, lock.lock_entity_id)
+            if dev_mock:
+                # DEV: resolve via the seeded entity->node_id table.
+                node = mock_node_for_entity(lock.lock_entity_id)
+            else:
+                # async_get_node_from_entity_id is @callback (sync) — do NOT await
+                node = async_get_node_from_entity_id(hass, lock.lock_entity_id)
         except Exception:
             node = None
         if node is not None and getattr(node, "node_id", None) == node_id:
@@ -537,12 +554,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         _LOGGER.info("Access log: registered zwave_js_notification listener")
 
+    # DEV-ONLY: register a service to fire a mock zwave_js_notification so the
+    # access-log handler can be driven end-to-end without real Z-Wave hardware.
+    # Registered only under SLM_DEV_MOCK and only once per HA process.
+    if is_dev_mock() and not hass.services.has_service(DOMAIN, "dev_fire_notification"):
+
+        async def dev_fire_notification_wrapper(service_call: ServiceCall) -> None:
+            fire_mock_notification(
+                hass,
+                node_id=service_call.data["node_id"],
+                event_code=service_call.data["event"],
+                user_id=service_call.data.get("user_id"),
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            "dev_fire_notification",
+            dev_fire_notification_wrapper,
+            schema=vol.Schema(
+                {
+                    vol.Required("node_id"): vol.Coerce(int),
+                    vol.Required("event"): vol.Coerce(int),
+                    vol.Optional("user_id"): vol.Coerce(int),
+                }
+            ),
+        )
+        _LOGGER.info("DEV: registered smart_lock_manager.dev_fire_notification service")
+
     # Fetch initial data and force full sync on startup
     await coordinator.async_config_entry_first_refresh()
     _LOGGER.info("Completed first refresh for %s coordinator", lock.lock_name)
 
-    # Auto-repair parent-child link inconsistencies after all locks loaded
-    _repair_parent_child_links(hass)
+    # Zone model (Phase 1): hydrate the zone registry from storage once, then
+    # run the one-time parent/child -> zone migration if it has not happened.
+    # The migration is idempotent (guarded by a persisted marker) and builds
+    # zones from whatever locks are currently loaded. Because each lock is its
+    # own config entry, the LAST entry to finish setup is the one that sees all
+    # locks and actually builds every zone; earlier entries either find the
+    # marker already set or build a partial set that the final pass completes.
+    await async_ensure_zones_loaded(hass)
+    await async_run_migration_if_needed(hass)
 
     # NOTE: Initial Z-Wave code reading removed — it was blocking HA startup.
     # hass.services.async_call creates service-call tasks that HA's bootstrap
@@ -805,45 +856,11 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
     _LOGGER.debug("Registered system services")
 
 
-def _repair_parent_child_links(hass: HomeAssistant) -> None:
-    """Auto-repair one-sided parent-child lock relationships.
-
-    Iterates all loaded locks. If a child claims a parent but the parent's
-    child_lock_ids list doesn't contain the child, the child is added.
-    Also warns (but does not remove) if a parent lists a child that doesn't
-    claim it as parent.
-    """
-    all_locks = {}
-    for entry_id, entry_data in hass.data[DOMAIN].items():
-        if isinstance(entry_data, dict):
-            lock_obj = entry_data.get(PRIMARY_LOCK)
-            if lock_obj:
-                all_locks[lock_obj.lock_entity_id] = lock_obj
-
-    for entity_id, lock_obj in all_locks.items():
-        # Forward check: child claims parent -> ensure parent knows about child
-        if lock_obj.parent_lock_id:
-            parent = all_locks.get(lock_obj.parent_lock_id)
-            if parent and entity_id not in parent.child_lock_ids:
-                parent.child_lock_ids.append(entity_id)
-                _LOGGER.warning(
-                    "Auto-repaired: added %s to %s's child_lock_ids",
-                    entity_id,
-                    parent.lock_entity_id,
-                )
-
-        # Reverse check: parent lists child -> warn if child doesn't claim parent
-        if lock_obj.child_lock_ids:
-            for child_id in lock_obj.child_lock_ids:
-                child = all_locks.get(child_id)
-                if child and child.parent_lock_id != entity_id:
-                    _LOGGER.warning(
-                        "Parent %s lists %s as child, but child's parent_lock_id"
-                        " is %s (not removing — may be intentional)",
-                        entity_id,
-                        child_id,
-                        child.parent_lock_id,
-                    )
+# NOTE (Zone model, Phase 1): the legacy ``_repair_parent_child_links`` helper
+# was removed. Parent/child link reconciliation is obsolete now that zones own
+# the canonical code set and each member lock is synced independently from its
+# owning zone. The one-time parent/child -> zone migration lives in
+# ``zone_runtime.async_run_migration_if_needed``.
 
 
 class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
@@ -886,8 +903,19 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 return {}
 
             if lock:
-                # Step 0: Auto-repair parent-child link inconsistencies
-                _repair_parent_child_links(self.hass)
+                # Step 0 (Zone model): mirror the owning zone's canonical code
+                # slots onto this member lock BEFORE computing sync actions, so
+                # the per-lock sync logic below pushes the zone's codes to this
+                # member's Z-Wave node. If the lock is unhomed (no zone), it
+                # keeps its own slots and syncs them as before.
+                owning_zone = mirror_owning_zone_to_member(self.hass, lock)
+                if owning_zone is not None:
+                    _LOGGER.debug(
+                        "Coordinator: %s obeys zone '%s' (%d configured codes)",
+                        lock.lock_entity_id,
+                        owning_zone.name,
+                        owning_zone.get_configured_codes_count(),
+                    )
 
                 # Step 1: Check for slot validity changes and auto-disable expired slots
                 lock.check_and_update_slot_validity()
@@ -909,7 +937,30 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     ent_reg = async_get_entity_registry(self.hass)
                     entity_entry = ent_reg.async_get(lock.lock_entity_id)
 
-                    if not entity_entry:
+                    dev_mock = is_dev_mock()
+
+                    if dev_mock:
+                        # DEV: bypass the zwave_js platform guard and read codes
+                        # from the in-memory MockValueDB via a fake node. The
+                        # dummy locks are template entities (platform != zwave_js),
+                        # so the real guard below would skip all reads.
+                        node = mock_node_for_entity(lock.lock_entity_id)
+                        if node:
+                            for slot in range(1, 11):
+                                try:
+                                    code_data = mock_get_usercode(node, slot)
+                                except Exception:
+                                    code_data = None
+                                if code_data and code_data.get("usercode"):
+                                    in_use = code_data.get("in_use") is True
+                                    zwave_codes[slot] = {
+                                        "code": code_data.get("usercode"),
+                                        "in_use": in_use,
+                                        "status": (
+                                            "occupied" if in_use else "disabled"
+                                        ),
+                                    }
+                    elif not entity_entry:
                         _LOGGER.warning(
                             "Coordinator: entity %s not in registry",
                             lock.lock_entity_id,
@@ -1298,60 +1349,10 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                     },
                                 )
 
-                # Step 6: Auto-sync codes to child locks if this is a main lock
-                if lock.is_main_lock and lock.child_lock_ids:
-                    _LOGGER.debug(
-                        "Main lock %s checking for child lock sync, children: %s",
-                        lock.lock_name,
-                        lock.child_lock_ids,
-                    )
-
-                    # Find child locks
-                    child_locks = []
-                    for entry_id, entry_data in self.hass.data[DOMAIN].items():
-                        if isinstance(entry_data, dict):  # Skip global_settings
-                            child_lock = entry_data.get(PRIMARY_LOCK)
-                            if (
-                                child_lock
-                                and child_lock.lock_entity_id in lock.child_lock_ids
-                            ):
-                                child_locks.append(child_lock)
-
-                    if child_locks:
-                        # Check if main lock codes have changed since last sync
-                        main_lock_changed = False
-                        for slot_num, slot in lock.code_slots.items():
-                            if slot.is_active and (
-                                slot_num in sync_actions.get("add", [])
-                                or slot_num in sync_actions.get("remove", [])
-                            ):
-                                main_lock_changed = True
-                                break
-
-                        # Sync to child locks if main lock changed
-                        if main_lock_changed:
-                            _LOGGER.debug(
-                                "Main lock %s codes changed, syncing to %d child locks",
-                                lock.lock_name,
-                                len(child_locks),
-                            )
-
-                            try:
-                                await self.hass.services.async_call(
-                                    DOMAIN,
-                                    SERVICE_SYNC_CHILD_LOCKS,
-                                    {ATTR_ENTITY_ID: lock.lock_entity_id},
-                                )
-                                _LOGGER.debug(
-                                    "Auto-triggered child lock sync for %s",
-                                    lock.lock_name,
-                                )
-                            except Exception as e:
-                                _LOGGER.error(
-                                    "Failed to auto-sync child locks for %s: %s",
-                                    lock.lock_name,
-                                    e,
-                                )
+                # Step 6 (Zone model): the legacy parent -> child code push is
+                # retired. Every member lock is now synced independently from
+                # its owning zone via the Step 0 mirror above, so there is no
+                # main-lock-to-child fan-out to perform here.
 
             # Persist updated sync status to storage
             if lock:
