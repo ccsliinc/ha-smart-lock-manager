@@ -433,3 +433,92 @@ class ZoneServices:
             {"zone_id": zone_id, "name": zone.name, "writes": total},
         )
         await _refresh_all_coordinators(hass)
+
+    @staticmethod
+    async def update_zone(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Update a zone's editable settings (currently its display name).
+
+        Renames the zone and persists the change. Structured so future
+        zone-level settings (slot geometry, collision-prefix length) can be
+        threaded through the same service by adding optional fields.
+
+        - Inputs (service_call.data): ``zone_id`` (str, required), ``name``
+          (str, required) — the new display name.
+        - Outputs: None.
+        - Raises: HomeAssistantError if the zone id is unknown.
+        """
+        zone_id = service_call.data[ATTR_ZONE_ID]
+        name = service_call.data[ATTR_ZONE_NAME]
+
+        registry = get_zone_registry(hass)
+        zone = registry.get(zone_id)
+        if zone is None:
+            raise HomeAssistantError(f"Unknown zone_id: {zone_id}")
+
+        old_name = zone.name
+        zone.name = name
+        await save_zone(hass, zone)
+
+        _LOGGER.info("Renamed zone %s from '%s' to '%s'", zone_id, old_name, zone.name)
+
+        hass.bus.async_fire(
+            "smart_lock_manager_zone_updated",
+            {"zone_id": zone_id, "name": zone.name, "previous_name": old_name},
+        )
+        await _refresh_all_coordinators(hass)
+
+    @staticmethod
+    async def clear_zone_codes(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Clear EVERY code slot on a zone and wipe them off all members.
+
+        Wipes the zone's PIN codes off every member lock's hardware (mock-aware
+        in dev, mirroring ``remove_lock_from_zone`` / ``delete_zone``), then
+        blanks the zone's own canonical code slots so nothing is re-pushed.
+        Members remain in the zone; only code material is removed.
+
+        - Inputs (service_call.data): ``zone_id`` (str, required).
+        - Outputs: None.
+        - Raises: HomeAssistantError if the zone id is unknown.
+        """
+        zone_id = service_call.data[ATTR_ZONE_ID]
+        registry = get_zone_registry(hass)
+        zone = registry.get(zone_id)
+        if zone is None:
+            raise HomeAssistantError(f"Unknown zone_id: {zone_id}")
+
+        # Wipe the zone's codes off every member's hardware and in-memory copy.
+        wiped = 0
+        for entity_id in list(zone.member_lock_entity_ids):
+            wiped += await _wipe_zone_codes_from_lock(hass, zone, entity_id)
+
+        # Blank the zone's canonical slots so the coordinator does not re-push
+        # the (now cleared) codes back onto members.
+        for slot in zone.code_slots.values():
+            slot.pin_code = None
+            slot.user_name = None
+            slot.is_active = False
+            slot.is_synced = False
+            slot.sync_error = None
+            slot.sync_attempts = 0
+            slot.start_date = None
+            slot.end_date = None
+            slot.allowed_hours = None
+            slot.allowed_days = None
+            slot.max_uses = -1
+            slot.notify_on_use = False
+        await save_zone(hass, zone)
+
+        _LOGGER.info(
+            "Cleared all codes on zone '%s' (%s); wiped %d code(s) across %d "
+            "member(s)",
+            zone.name,
+            zone_id,
+            wiped,
+            len(zone.member_lock_entity_ids),
+        )
+
+        hass.bus.async_fire(
+            "smart_lock_manager_zone_codes_cleared",
+            {"zone_id": zone_id, "name": zone.name, "wiped": wiped},
+        )
+        await _refresh_all_coordinators(hass)

@@ -16,6 +16,14 @@ class SmartLockManagerPanel extends HTMLElement {
     this._currentLockEntityId = null;
     this._settingsModalOpen = false;
     this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
+    this._zones = [];           // Zone model from /api/smart_lock_manager/zones
+    this._unhomedLocks = [];    // Locks in no zone (the "+" picker pool)
+    this._zoneDataLoaded = false;
+    this._openZoneMenu = null;  // zone_id whose header gear menu is open
+    this._openLockMenu = null;  // entity_id whose per-lock gear menu is open
+    this._openPicker = null;    // zone_id whose "+" unhomed picker is open
+    this._editLockModalOpen = false; // per-lock Edit (friendly name) modal
+    this._editLockEntityId = null;   // entity_id being edited in that modal
     this.setupEventListeners();
   }
 
@@ -34,10 +42,16 @@ class SmartLockManagerPanel extends HTMLElement {
     // Force reload lock data if states changed
     if (oldHass && hass && oldHass.states !== hass.states) {
       this.loadLockData();
+      this.loadZoneData();
+    }
+
+    // First time hass becomes available, prime the zone model.
+    if (!oldHass && hass) {
+      this.loadZoneData();
     }
 
     // Don't auto-refresh if modal is open to prevent losing user input
-    if (!this._modalOpen && !this._settingsModalOpen) {
+    if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
       this.requestUpdate();
     }
   }
@@ -52,6 +66,7 @@ class SmartLockManagerPanel extends HTMLElement {
     window.smartLockManagerPanel = this;
     this.render();
     this.loadLockData();
+    this.loadZoneData();
   }
 
   disconnectedCallback() {
@@ -115,10 +130,31 @@ class SmartLockManagerPanel extends HTMLElement {
       }
 
       // Don't auto-refresh if modal is open to prevent losing user input
-      if (!this._modalOpen && !this._settingsModalOpen) {
+      if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
         this.requestUpdate();
       }
     } catch (error) {
+    }
+  }
+
+  // Fetch the full zone model + unhomed lock pool from the authenticated
+  // Phase 3a data endpoint. ``callApi`` injects the HA auth token and prefixes
+  // ``/api/`` automatically, so this works for any logged-in panel user.
+  // - Inputs: none (reads this._hass).
+  // - Outputs: Promise<void>; populates this._zones / this._unhomedLocks then
+  //   re-renders. Failures leave the prior data intact and log to console.
+  async loadZoneData() {
+    if (!this._hass) return;
+    try {
+      const payload = await this._hass.callApi('GET', 'smart_lock_manager/zones');
+      this._zones = Array.isArray(payload?.zones) ? payload.zones : [];
+      this._unhomedLocks = Array.isArray(payload?.unhomed_locks) ? payload.unhomed_locks : [];
+      this._zoneDataLoaded = true;
+      if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
+        this.requestUpdate();
+      }
+    } catch (error) {
+      console.error('[SLM] Failed to load zone data:', error);
     }
   }
 
@@ -219,87 +255,6 @@ class SmartLockManagerPanel extends HTMLElement {
     } catch (e) {
       return iso;
     }
-  }
-
-  // Render the collapsible Access Log section for a lock.
-  // Reads the most-recent-first ``access_log`` attribute surfaced by sensor.py.
-  renderAccessLog(lock) {
-    const lockEntityId = lock?.attributes?.lock_entity_id || lock?.entity_id || '';
-    const lockKey = lockEntityId.replace(/\./g, '_');
-    const bodyId = `access-log-body-${lockKey}`;
-
-    // The card's own friendly name — used as the fallback badge for legacy
-    // entries that predate lock identity fields.
-    const cardLockName = lock?.attributes?.custom_friendly_name
-      || lock?.attributes?.lock_name
-      || lockEntityId;
-
-    // Aggregate this lock's own access log with its child locks' logs so a
-    // parent card shows events from every door in the group on one timeline.
-    // Standalone locks (no children) simply show their own entries.
-    let combined = (lock?.attributes?.access_log || []).map(e => ({
-      ...e,
-      _cardName: e.lock_name || cardLockName,
-    }));
-
-    const childLocks = (lock?.attributes?.is_main_lock !== false)
-      ? this.getChildLocks(lockEntityId)
-      : [];
-    const hasChildren = childLocks.length > 0;
-    childLocks.forEach(child => {
-      const childName = child?.attributes?.custom_friendly_name
-        || child?.attributes?.lock_name
-        || child?.attributes?.lock_entity_id
-        || 'Child Lock';
-      (child?.attributes?.access_log || []).forEach(e => {
-        combined.push({ ...e, _cardName: e.lock_name || childName });
-      });
-    });
-
-    // Time-sort the merged list, most-recent first, and cap surfaced rows.
-    combined.sort((a, b) => {
-      const ta = Date.parse(a.timestamp || '') || 0;
-      const tb = Date.parse(b.timestamp || '') || 0;
-      return tb - ta;
-    });
-    combined = combined.slice(0, 25);
-
-    // Show the per-row lock badge whenever the group spans multiple doors
-    // (parent has children) OR the merged list references more than one lock.
-    const distinctLocks = new Set(combined.map(e => e._cardName));
-    const showBadge = hasChildren || distinctLocks.size > 1;
-
-    const rows = combined.map(entry => {
-      const p = this.getAccessLogPresentation(entry);
-      const badge = showBadge
-        ? `<span class="al-lock-badge"${entry.role === 'child' ? ' data-role="child"' : ''}>${entry._cardName}</span>`
-        : '';
-      return `
-        <div class="access-log-row">
-          <ha-icon class="al-icon" icon="${p.icon}" style="width:18px;height:18px;color:${p.color};"></ha-icon>
-          <div class="al-main">
-            <div class="al-action">${entry.action || 'unknown'}${badge}</div>
-            <div class="al-attr">${p.attr}</div>
-          </div>
-          <div class="al-time">${this.formatAccessLogTime(entry.timestamp)}</div>
-        </div>
-      `;
-    }).join('');
-    const entries = combined;
-
-    return `
-      <div class="access-log-section">
-        <div class="access-log-header" onclick="SmartLockManagerPanel.toggleAccessLog('${bodyId}')">
-          <span>Access Log${entries.length ? ` (${entries.length})` : ''}</span>
-          <ha-icon icon="mdi:chevron-down" style="width:18px;height:18px;"></ha-icon>
-        </div>
-        <div class="access-log-body" id="${bodyId}">
-          ${entries.length
-            ? rows
-            : '<div class="access-log-empty">No access events recorded yet.</div>'}
-        </div>
-      </div>
-    `;
   }
 
   openSlotModal(slotNumber) {
@@ -445,17 +400,6 @@ class SmartLockManagerPanel extends HTMLElement {
     this._settingsModalOpen = true;
 
     this.requestUpdate();
-
-    // Initialize lock type fields after modal renders
-    setTimeout(() => {
-      this.initializeLockTypeFields();
-
-      // Initialize friendly name input
-      const friendlyNameInput = this.shadowRoot.querySelector('#friendly_name');
-      if (friendlyNameInput) {
-        // Input found and will be initialized by initializeLockTypeFields
-      }
-    }, 100);
   }
 
   closeSettingsModal() {
@@ -470,219 +414,6 @@ class SmartLockManagerPanel extends HTMLElement {
       const modal = this.shadowRoot.querySelector('.modal[style*="flex"]');
       // Modal visibility check
     }, 10);
-  }
-
-  getParentLockOptions() {
-    if (!this._locks) return '';
-
-    // Filter out the current lock and only show main/parent locks
-    const parentLocks = this._locks.filter(lock => {
-      const attributes = lock.attributes || {};
-      // Don't include the current lock being edited
-      if (attributes.lock_entity_id === this._currentLockEntityId) {
-        return false;
-      }
-      // Only include main locks (not child locks)
-      return attributes.is_main_lock !== false;
-    });
-
-    return parentLocks.map(lock => {
-      const attributes = lock.attributes || {};
-      const lockName = attributes.friendly_name || attributes.lock_name || attributes.lock_entity_id || lock.entity_id;
-      const entityId = attributes.lock_entity_id || lock.entity_id;
-      return `<option value="${entityId}">${lockName}</option>`;
-    }).join('');
-  }
-
-  getChildLocks(parentLockEntityId) {
-    if (!this._locks) return [];
-
-    return this._locks.filter(lock => {
-      const attributes = lock.attributes || {};
-      return attributes.parent_lock_id === parentLockEntityId;
-    });
-  }
-
-  renderChildLocksSection(parentLockEntityId) {
-    const childLocks = this.getChildLocks(parentLockEntityId);
-
-    if (childLocks.length === 0) {
-      return '';
-    }
-
-    return `
-      <div class="child-locks-section">
-        <div class="child-locks-header">
-          <h4>Child Locks</h4>
-        </div>
-        <div class="child-locks-list">
-          ${childLocks.map(childLock => {
-            const attributes = childLock.attributes || {};
-            const childEntityId = attributes.lock_entity_id || childLock.entity_id;
-            // Use friendly name first, then custom_friendly_name, then lock_name
-            const childName = attributes.custom_friendly_name || attributes.lock_name || 'Child Lock';
-            const isConnected = attributes.is_connected !== false;
-            const syncStatus = this.getChildSyncStatus(childLock, parentLockEntityId);
-
-            return `
-              <div class="child-lock-item">
-                <div class="child-lock-info">
-                  <div class="status-light ${syncStatus.color}" title="${syncStatus.message}"></div>
-                  <span class="child-lock-name">${childName}</span>
-                </div>
-                <div class="child-lock-actions">
-                  <button class="child-remove-btn" onclick="window.smartLockManagerPanel.callService('remove_child_lock', {entity_id: '${childEntityId}'})" title="Remove Child Lock">
-                    <ha-icon icon="mdi:delete-outline"></ha-icon>
-                  </button>
-                  <button class="child-settings-btn" onclick="SmartLockManagerPanel.openSettings('${childEntityId}')" title="Child Lock Settings">
-                    <ha-icon icon="mdi:cog"></ha-icon>
-                  </button>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-    `;
-  }
-
-  getChildSyncStatus(childLock, parentLockEntityId) {
-    const attributes = childLock.attributes || {};
-    const isConnected = attributes.is_connected !== false;
-
-    if (!isConnected) {
-      return { color: 'red', message: 'Child lock offline' };
-    }
-
-    // Get parent lock for comparison
-    const parentLock = this._locks?.find(l =>
-      (l.attributes?.lock_entity_id || l.entity_id) === parentLockEntityId
-    );
-
-    if (!parentLock) {
-      return { color: 'red', message: 'Parent lock not found' };
-    }
-
-    // Get slot details from both locks
-    const childSlots = attributes.slot_details || {};
-    const parentSlots = parentLock.attributes?.slot_details || {};
-
-    const totalSlots = parentLock.attributes?.total_slots || 10;
-    const startFrom = parentLock.attributes?.start_from || 1;
-
-    let syncedCount = 0;
-    let errorCount = 0;
-    let syncingCount = 0;
-    let missingFromChild = 0;
-
-    // Check each slot for sync status
-    for (let i = 0; i < totalSlots; i++) {
-      const slotNumber = startFrom + i;
-      const slotKey = `slot_${slotNumber}`;
-
-      const parentSlot = parentSlots[slotKey];
-      const childSlot = childSlots[slotKey];
-
-      // If parent slot is empty, child should be empty too
-      if (!parentSlot || !parentSlot.is_active) {
-        if (!childSlot || !childSlot.is_active) {
-          syncedCount++; // Both empty = synced
-        } else {
-          errorCount++; // Child has data but parent doesn't = error
-        }
-        continue;
-      }
-
-      // Parent slot is active, check child
-      if (!childSlot || !childSlot.is_active) {
-        // Parent has active slot but child doesn't - this indicates syncing needed
-        missingFromChild++;
-        continue;
-      }
-
-      // Compare slot data
-      const parentPin = parentSlot.usercode;
-      const childPin = childSlot.usercode;
-      const parentUser = parentSlot.user_name;
-      const childUser = childSlot.user_name;
-      const parentActive = parentSlot.is_active;
-      const childActive = childSlot.is_active;
-
-      if (parentPin === childPin &&
-          parentUser === childUser &&
-          parentActive === childActive) {
-        syncedCount++; // Perfect match = synced
-      } else if (childSlot.is_syncing ||
-                 parentSlot.sync_status === 'syncing' ||
-                 childSlot.slot_status === 'Synchronizing' ||
-                 childSlot.status?.name === 'SYNCHRONIZING' ||
-                 parentSlot.slot_status === 'Synchronizing' ||
-                 parentSlot.status?.name === 'SYNCHRONIZING') {
-        syncingCount++; // Currently syncing
-      } else {
-        errorCount++; // Data mismatch = error
-      }
-    }
-
-    // Determine overall status - treat missing slots as syncing if recently updated
-    const childLastUpdate = new Date(attributes.last_updated || attributes.last_update || 0);
-    const parentLastUpdate = new Date(parentLock.attributes?.last_updated || parentLock.attributes?.last_update || 0);
-    const now = new Date();
-    const childTimeSinceUpdate = now - childLastUpdate;
-    const parentTimeSinceUpdate = now - parentLastUpdate;
-    const recentlyUpdated = childTimeSinceUpdate < 120000 || parentTimeSinceUpdate < 120000; // Within last 2 minutes
-
-    if (missingFromChild > 0 && recentlyUpdated) {
-      // Parent was recently updated and child is missing slots - likely syncing
-      return {
-        color: 'yellow',
-        message: `${missingFromChild} slot${missingFromChild > 1 ? 's' : ''} syncing to child...`
-      };
-    } else if (syncingCount > 0) {
-      return {
-        color: 'yellow',
-        message: `${syncingCount} slot${syncingCount > 1 ? 's' : ''} syncing...`
-      };
-    } else if (missingFromChild > 0 && errorCount === 0) {
-      // Only missing slots, no errors - treat as syncing (more optimistic)
-      return {
-        color: 'yellow',
-        message: `${missingFromChild} slot${missingFromChild > 1 ? 's' : ''} syncing to child...`
-      };
-    } else if (errorCount > 0 || missingFromChild > 0) {
-      const totalIssues = errorCount + missingFromChild;
-      return {
-        color: 'red',
-        message: `${totalIssues} slot${totalIssues > 1 ? 's' : ''} out of sync`
-      };
-    } else {
-      return {
-        color: 'green',
-        message: `All ${syncedCount} slots synchronized`
-      };
-    }
-  }
-
-  initializeLockTypeFields() {
-    const currentLock = this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId);
-    if (!currentLock) return;
-
-    const attributes = currentLock.attributes || {};
-    const isMainLockSelect = this.shadowRoot.querySelector('#is_main_lock');
-    const parentLockSelect = this.shadowRoot.querySelector('#parent_lock_id');
-
-    if (isMainLockSelect) {
-      // Set current lock type
-      isMainLockSelect.value = (attributes.is_main_lock !== false) ? 'true' : 'false';
-
-      // Set parent lock if this is a child lock
-      if (parentLockSelect && attributes.parent_lock_id) {
-        parentLockSelect.value = attributes.parent_lock_id;
-      }
-
-      // Initialize field visibility
-      SmartLockManagerPanel.toggleLockTypeFields();
-    }
   }
 
   async saveSettings() {
@@ -722,23 +453,6 @@ class SmartLockManagerPanel extends HTMLElement {
     // Check if slot count changed
     if (newSlotCount !== currentSlotCount) {
       updateData.slot_count = newSlotCount;
-      hasUpdates = true;
-    }
-
-    // Check parent/child lock settings
-    const isMainLock = formData.get('is_main_lock') === 'true';
-    const parentLockId = formData.get('parent_lock_id') || null;
-
-    const currentIsMainLock = currentLock?.attributes?.is_main_lock !== false;
-    const currentParentLockId = currentLock?.attributes?.parent_lock_id || null;
-
-    if (isMainLock !== currentIsMainLock) {
-      updateData.is_main_lock = isMainLock;
-      hasUpdates = true;
-    }
-
-    if (parentLockId !== currentParentLockId) {
-      updateData.parent_lock_id = parentLockId;
       hasUpdates = true;
     }
 
@@ -841,6 +555,28 @@ class SmartLockManagerPanel extends HTMLElement {
     } catch (error) {
       alert(`Service Error: ${error.message}\n\nCheck console for details.`);
     }
+  }
+
+  // Call a service (default domain smart_lock_manager) then refresh the zone
+  // model. Used by every zone-level action (create/delete/add/remove/apply,
+  // clear codes) and the per-member lock toggle so the cards re-render with
+  // fresh state. Closes any open gear menu / picker first.
+  // - Inputs: service (str), serviceData (obj), domain (str, default SLM).
+  // - Outputs: Promise<void>.
+  async callZoneService(service, serviceData, domain = 'smart_lock_manager') {
+    this._openZoneMenu = null;
+    this._openLockMenu = null;
+    this._openPicker = null;
+    try {
+      await this._hass.callService(domain, service, serviceData);
+    } catch (error) {
+      alert(`Service Error: ${error.message}\n\nCheck console for details.`);
+    }
+    // Give the backend a beat to persist, then reload zone + sensor data.
+    await new Promise(r => setTimeout(r, 250));
+    await this.loadZoneData();
+    await this.loadLockData(true);
+    this.requestUpdate();
   }
 
   async saveSlotSettings() {
@@ -1291,10 +1027,348 @@ class SmartLockManagerPanel extends HTMLElement {
   }
 
 
+  // ----- Zone card rendering helpers (Phase 3b) ---------------------------
+
+  // Escape a string for safe interpolation into single-quoted inline JS
+  // handlers and HTML text. Prevents broken markup / handler injection from
+  // user-named zones and locks.
+  // - Inputs: value (any).
+  // - Outputs: HTML/JS-safe string.
+  _esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Map a zone code-slot (from the zones API) to display color/status,
+  // mirroring the backend color hierarchy: grey disabled -> green active.
+  // - Inputs: slot (zone code_slot object).
+  // - Outputs: { color, title, status }.
+  _zoneSlotDisplay(slot) {
+    const name = slot.user_name || '';
+    const title = `Slot ${slot.slot_number}${name ? ': ' + name : ''}`;
+    let color = '#9e9e9e';
+    let status = 'Click to configure';
+    if (slot.has_code) {
+      if (!slot.is_active) {
+        color = '#9e9e9e';
+        status = 'Disabled';
+      } else if (!slot.is_synced) {
+        color = '#cc3333';
+        status = 'Not synced';
+      } else {
+        color = '#4a7c2a';
+        status = 'Active';
+      }
+      if (slot.max_uses != null && slot.max_uses >= 0) {
+        status += ` · ${slot.remaining_uses}/${slot.max_uses} left`;
+      }
+    }
+    return { color, title, status };
+  }
+
+  // Render the fixed-height locks section for a zone: section title with a
+  // "+" add-lock affordance, then a uniform scroll list of member rows.
+  // - Inputs: zone (zone object from the API).
+  // - Outputs: HTML string.
+  renderLocksSection(zone) {
+    const zid = this._esc(zone.zone_id);
+    const members = Array.isArray(zone.members) ? zone.members : [];
+    const rows = members.length
+      ? members.map(m => this.renderLockRow(zone, m)).join('')
+      : '<div class="zone-locks-empty">No locks in this zone yet. Use + to add one.</div>';
+
+    return `
+      <div class="zone-locks-section">
+        <div class="zone-section-head">
+          <span class="zone-section-title">Locks${members.length ? ` (${members.length})` : ''}</span>
+          <button class="zone-add-lock-btn"
+                  onclick="SmartLockManagerPanel.toggleLockPicker('${zid}')"
+                  title="Add an unhomed lock to this zone">
+            <ha-icon icon="mdi:plus" style="width:18px;height:18px;"></ha-icon>
+          </button>
+        </div>
+        <div class="zone-locks-list">${rows}</div>
+        ${this._openPicker === zone.zone_id ? this.renderLockPicker(zone) : ''}
+      </div>
+    `;
+  }
+
+  // Render one member lock row: [action+status icon | name | per-lock gear].
+  // The left icon is ALWAYS clickable (lock/unlock); jammed/offline shown via
+  // color + a small indicator but never disabled.
+  // - Inputs: zone (zone obj), member (member obj).
+  // - Outputs: HTML string.
+  renderLockRow(zone, member) {
+    const eid = this._esc(member.entity_id);
+    const zid = this._esc(zone.zone_id);
+    const state = member.lock_state || 'unknown';
+    const isLocked = state === 'locked';
+    const jammed = !!member.is_jammed;
+    const offline = state === 'unavailable' || state === 'unknown';
+
+    // Action+status icon: green locked / red unlocked; jammed overrides to amber.
+    let icon = isLocked ? 'mdi:lock' : 'mdi:lock-open';
+    let color = isLocked ? '#4a7c2a' : '#cc3333';
+    if (jammed) { icon = 'mdi:lock-alert'; color = '#f0a020'; }
+    if (offline && !jammed) { color = '#9e9e9e'; }
+
+    const subtle = [];
+    if (jammed) subtle.push('jammed');
+    if (offline) subtle.push('offline');
+    if (member.battery_level != null && member.battery_level <= 15) {
+      subtle.push(`battery ${member.battery_level}%`);
+    }
+    const subtitle = subtle.length
+      ? `<span class="zone-lock-substate">${this._esc(subtle.join(' · '))}</span>`
+      : '';
+
+    const name = this._esc(member.friendly_name || member.entity_id);
+
+    return `
+      <div class="zone-lock-row">
+        <button class="zone-lock-action ${offline ? 'is-offline' : ''} ${jammed ? 'is-jammed' : ''}"
+                onclick="SmartLockManagerPanel.toggleLock('${eid}', '${this._esc(state)}')"
+                title="${isLocked ? 'Click to unlock' : 'Click to lock'}${jammed ? ' (jammed)' : ''}${offline ? ' (offline)' : ''}"
+                style="color:${color};">
+          <ha-icon icon="${icon}" style="width:24px;height:24px;"></ha-icon>
+        </button>
+        <div class="zone-lock-name" title="${name}">
+          ${name}${subtitle}
+        </div>
+        <button class="zone-lock-gear"
+                onclick="SmartLockManagerPanel.toggleLockMenu('${eid}', event)"
+                title="Lock actions">
+          <ha-icon icon="mdi:cog" style="width:18px;height:18px;"></ha-icon>
+        </button>
+        ${this._openLockMenu === member.entity_id ? `
+          <div class="zone-menu zone-lock-menu" style="top:${this._lockMenuPos ? this._lockMenuPos.top : 0}px; left:${this._lockMenuPos ? this._lockMenuPos.left : 0}px;">
+            <button class="zone-menu-item"
+                    onclick="SmartLockManagerPanel.editLock('${eid}')">
+              <ha-icon icon="mdi:pencil" style="width:16px;height:16px;"></ha-icon>
+              <span>Edit</span>
+            </button>
+            <div class="zone-menu-sep"></div>
+            <button class="zone-menu-item danger"
+                    onclick="SmartLockManagerPanel.removeLockFromZone('${zid}', '${eid}')">
+              <ha-icon icon="mdi:exit-run" style="width:16px;height:16px;"></ha-icon>
+              <span>Remove from zone</span>
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // Render the unhomed-lock picker dropdown for a zone's "+" button.
+  // - Inputs: zone (zone obj).
+  // - Outputs: HTML string.
+  renderLockPicker(zone) {
+    const zid = this._esc(zone.zone_id);
+    const pool = this._unhomedLocks || [];
+    const items = pool.length
+      ? pool.map(l => {
+          const eid = this._esc(l.entity_id);
+          const name = this._esc(l.friendly_name || l.entity_id);
+          return `
+            <button class="zone-picker-item"
+                    onclick="SmartLockManagerPanel.addLockToZone('${zid}', '${eid}')">
+              <ha-icon icon="mdi:lock-plus" style="width:18px;height:18px;"></ha-icon>
+              <span title="${name}">${name}</span>
+            </button>
+          `;
+        }).join('')
+      : '<div class="zone-picker-empty">No unhomed locks available.</div>';
+    return `<div class="zone-menu zone-picker">${items}</div>`;
+  }
+
+  // Render the zone-level code slot grid from the zone's own code_slots.
+  // Re-points the existing slot grid at zone data; visual layout unchanged.
+  // - Inputs: zone (zone obj).
+  // - Outputs: HTML string.
+  renderZoneSlots(zone) {
+    const zid = this._esc(zone.zone_id);
+    const slots = Array.isArray(zone.code_slots) ? zone.code_slots : [];
+    if (!slots.length) {
+      return '<div class="slots-container"><div class="zone-locks-empty">No code slots.</div></div>';
+    }
+    return `
+      <div class="slots-container">
+        ${slots.map(slot => {
+          const d = this._zoneSlotDisplay(slot);
+          return `
+            <div class="slot-row" onclick="SmartLockManagerPanel.openZoneSlot('${zid}', ${slot.slot_number})">
+              <div class="slot-indicator" style="background-color: ${d.color};"></div>
+              <div class="slot-info">
+                <div class="slot-name">${this._esc(d.title)}</div>
+                <div class="slot-details">${this._esc(d.status)}</div>
+              </div>
+              ${slot.has_code ? `
+                <div class="slot-actions">
+                  <button class="slot-action-btn toggle-btn ${slot.is_active ? 'active' : 'inactive'}"
+                          onclick="event.stopPropagation(); SmartLockManagerPanel.toggleZoneSlot('${zid}', ${slot.slot_number})"
+                          title="${slot.is_active ? 'Disable this slot' : 'Enable this slot'}">
+                    ${slot.is_active ? '⏸' : '▶'}
+                  </button>
+                  <button class="slot-action-btn clear-btn"
+                          onclick="event.stopPropagation(); SmartLockManagerPanel.clearZoneSlot('${zid}', ${slot.slot_number})"
+                          title="Clear slot and remove from locks">🗙</button>
+                  ${slot.use_count > 0 ? `<button class="slot-action-btn reset-btn"
+                          onclick="event.stopPropagation(); SmartLockManagerPanel.resetZoneSlotUsage('${zid}', ${slot.slot_number})"
+                          title="Reset Usage">🔄</button>` : ''}
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  // Render a zone's per-door access log with UNIFORM fixed-height, single-line
+  // rows (long names truncate with ellipsis; full value in the title tooltip).
+  // Merges every member lock's access_log (read from the sensor states) onto
+  // one timeline, most-recent first.
+  // - Inputs: zone (zone obj).
+  // - Outputs: HTML string.
+  renderZoneAccessLog(zone) {
+    const bodyId = `access-log-body-zone-${this._esc(zone.zone_id)}`;
+    const members = Array.isArray(zone.members) ? zone.members : [];
+    const multiDoor = members.length > 1;
+
+    // Pull each member's access_log off its SLM summary sensor.
+    let combined = [];
+    members.forEach(m => {
+      const sensor = this._findSensorForLock(m.entity_id);
+      const log = sensor?.attributes?.access_log || [];
+      const doorName = m.friendly_name || m.entity_id;
+      log.forEach(e => combined.push({ ...e, _doorName: e.lock_name || doorName }));
+    });
+
+    combined.sort((a, b) => (Date.parse(b.timestamp || '') || 0) - (Date.parse(a.timestamp || '') || 0));
+    combined = combined.slice(0, 25);
+
+    const rows = combined.map(entry => {
+      const p = this.getAccessLogPresentation(entry);
+      const badge = multiDoor
+        ? `<span class="al-lock-badge" title="${this._esc(entry._doorName)}">${this._esc(entry._doorName)}</span>`
+        : '';
+      const attr = this._esc(p.attr);
+      const statusText = this._esc(entry.action || 'unknown');
+      return `
+        <div class="access-log-row" title="${statusText} · ${attr}${entry._doorName ? ' · ' + this._esc(entry._doorName) : ''}">
+          <ha-icon class="al-icon" icon="${p.icon}" title="${statusText}" style="width:18px;height:18px;color:${p.color};flex-shrink:0;text-transform:capitalize;"></ha-icon>
+          ${badge}
+          <span class="al-attr-text">${attr}</span>
+          <span class="al-time">${this._esc(this.formatAccessLogTime(entry.timestamp))}</span>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="access-log-section">
+        <div class="access-log-header" onclick="SmartLockManagerPanel.toggleAccessLog('${bodyId}')">
+          <span>Access Log${combined.length ? ` (${combined.length})` : ''}</span>
+          <ha-icon icon="mdi:chevron-down" style="width:18px;height:18px;"></ha-icon>
+        </div>
+        <div class="access-log-body" id="${bodyId}">
+          ${combined.length ? rows : '<div class="access-log-empty">No access events recorded yet.</div>'}
+        </div>
+      </div>
+    `;
+  }
+
+  // Find the SLM summary sensor object for a given lock entity_id (used to read
+  // access_log attributes that the zones API does not carry).
+  // - Inputs: lockEntityId (str).
+  // - Outputs: { entity_id, attributes } lock object, or undefined.
+  _findSensorForLock(lockEntityId) {
+    return (this._locks || []).find(l => l.attributes?.lock_entity_id === lockEntityId);
+  }
+
+  // Render one complete zone card: header (title + refresh + gear menu),
+  // locks section, slots, access log.
+  // - Inputs: zone (zone obj).
+  // - Outputs: HTML string.
+  renderZoneCard(zone) {
+    const zid = this._esc(zone.zone_id);
+    const name = this._esc(zone.name || 'Zone');
+    const menuOpen = this._openZoneMenu === zone.zone_id;
+
+    return `
+      <div class="lock-card zone-card">
+        <div class="lock-header zone-header">
+          <div class="zone-title-wrap">
+            <h3 class="lock-title" title="${name}">${name}</h3>
+            <div class="saving-spinner" id="saving-spinner-zone-${zid}" style="display:none;">
+              <div class="spinner"></div><span>Saving...</span>
+            </div>
+          </div>
+          <div class="lock-header-right">
+            <button class="refresh-btn zone-refresh-btn"
+                    onclick="SmartLockManagerPanel.refreshZone('${zid}')"
+                    title="Refresh this zone"
+                    style="background:none;border:none;cursor:pointer;padding:4px;border-radius:4px;display:flex;align-items:center;color:var(--secondary-text-color);">
+              <ha-icon icon="mdi:sync" style="width:22px;height:22px;"></ha-icon>
+            </button>
+            <div class="zone-gear-wrap">
+              <button class="settings-btn"
+                      onclick="SmartLockManagerPanel.toggleZoneMenu('${zid}')"
+                      title="Zone settings"
+                      style="color:#708090;">
+                <ha-icon icon="mdi:cog" style="width:22px;height:22px;"></ha-icon>
+              </button>
+              ${menuOpen ? `
+                <div class="zone-menu zone-header-menu">
+                  <button class="zone-menu-item" onclick="SmartLockManagerPanel.renameZone('${zid}')">
+                    <ha-icon icon="mdi:rename-box" style="width:16px;height:16px;"></ha-icon><span>Rename zone</span>
+                  </button>
+                  <button class="zone-menu-item" onclick="SmartLockManagerPanel.applyZoneCodes('${zid}')">
+                    <ha-icon icon="mdi:sync" style="width:16px;height:16px;"></ha-icon><span>Re-apply codes</span>
+                  </button>
+                  <button class="zone-menu-item" onclick="SmartLockManagerPanel.clearZoneCodes('${zid}')">
+                    <ha-icon icon="mdi:broom" style="width:16px;height:16px;"></ha-icon><span>Clear codes</span>
+                  </button>
+                  <div class="zone-menu-sep"></div>
+                  <button class="zone-menu-item danger" onclick="SmartLockManagerPanel.deleteZone('${zid}')">
+                    <ha-icon icon="mdi:delete" style="width:16px;height:16px;"></ha-icon><span>Delete entire zone</span>
+                  </button>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="lock-stats">
+          <div class="stat-item">
+            <div class="stat-value">${zone.active_codes_count ?? 0}</div>
+            <div class="stat-label">Active</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${zone.configured_codes_count ?? 0}</div>
+            <div class="stat-label">Configured</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${zone.slots ?? (zone.code_slots ? zone.code_slots.length : 0)}</div>
+            <div class="stat-label">Slots</div>
+          </div>
+        </div>
+
+        ${this.renderLocksSection(zone)}
+        ${this.renderZoneSlots(zone)}
+        ${this.renderZoneAccessLog(zone)}
+      </div>
+    `;
+  }
+
   render() {
     if (!this.shadowRoot) return;
 
     const locks = this._locks || [];
+    const zones = this._zones || [];
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -1556,113 +1630,238 @@ class SmartLockManagerPanel extends HTMLElement {
           transform-origin: center center !important;
         }
 
-        /* Child Locks Section */
-        .child-locks-section {
-          margin: 16px 0;
-          padding: 12px;
+        /* ===== Zone card: Locks section ===== */
+        .zone-card .lock-title {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 100%;
+        }
+
+        .zone-title-wrap {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+          flex: 1;
+        }
+
+        .zone-gear-wrap { position: relative; }
+
+        .zone-locks-section {
+          position: relative;
+          margin: 12px 0 16px 0;
+          padding: 10px 12px;
           background: var(--primary-background-color);
           border-radius: 8px;
           border: 1px solid var(--divider-color);
         }
 
-        .child-locks-header h4 {
-          margin: 0 0 12px 0;
-          font-size: 14px;
-          font-weight: 500;
-          color: var(--primary-text-color);
+        .zone-section-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
         }
 
-        .child-locks-list {
+        .zone-section-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--primary-text-color);
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          opacity: 0.85;
+        }
+
+        .zone-add-lock-btn {
+          background: none;
+          border: 1px solid var(--divider-color);
+          cursor: pointer;
+          padding: 0;
+          width: 26px;
+          height: 26px;
+          border-radius: 6px;
+          color: var(--primary-color);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          line-height: 0;
+          transition: all 0.15s;
+        }
+        .zone-add-lock-btn ha-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          --mdc-icon-size: 18px;
+          line-height: 0;
+        }
+        .zone-add-lock-btn:hover {
+          background: var(--card-background-color);
+          border-color: var(--primary-color);
+        }
+
+        /* Fixed-height list: ~2 rows visible (each row 44px), scroll beyond.
+           Uniform across every zone card regardless of member count. */
+        .zone-locks-list {
+          height: 96px;
+          overflow-y: auto;
           display: flex;
           flex-direction: column;
-          gap: 8px;
+          gap: 6px;
+          padding-right: 2px;
         }
 
-        .child-lock-item {
+        .zone-lock-row {
+          position: relative;
           display: flex;
-          justify-content: space-between;
           align-items: center;
-          padding: 8px 12px;
+          gap: 10px;
+          height: 42px;
+          min-height: 42px;
+          padding: 0 8px;
           background: var(--card-background-color);
-          border-radius: 6px;
           border: 1px solid var(--divider-color);
+          border-radius: 6px;
         }
 
-        .child-lock-info {
+        .zone-lock-action {
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 2px;
           display: flex;
           align-items: center;
-          gap: 12px;
-          flex: 1;
+          justify-content: center;
+          flex-shrink: 0;
+          border-radius: 4px;
+          line-height: 0;
+          transition: filter 0.15s;
+        }
+        .zone-lock-action ha-icon { --mdc-icon-size: 24px; display: flex; }
+        .zone-lock-action:hover { filter: brightness(1.25); }
+        .zone-lock-action.is-offline { opacity: 0.55; }
+        .zone-lock-action.is-jammed { animation: jamPulse 1.4s ease-in-out infinite; }
+
+        @keyframes jamPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.45; }
         }
 
-        .child-lock-name {
+        .zone-lock-name {
+          flex: 1;
+          min-width: 0;
           font-size: 13px;
           font-weight: 500;
           color: var(--primary-text-color);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          line-height: 1.2;
         }
 
-        .status-light {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          margin-right: 8px;
-          flex-shrink: 0;
+        .zone-lock-substate {
+          font-size: 10px;
+          font-weight: 400;
+          color: var(--secondary-text-color);
+          opacity: 0.85;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
-        .status-light.green {
-          background: var(--success-color, #4caf50);
-        }
-
-        .status-light.red {
-          background: var(--error-color, #f44336);
-        }
-
-        .status-light.yellow {
-          background: var(--warning-color, #ff9800);
-        }
-
-        .child-settings-btn {
+        .zone-lock-gear {
           background: none;
           border: none;
           cursor: pointer;
-          padding: 4px;
+          padding: 0;
+          width: 28px;
+          height: 28px;
           border-radius: 4px;
           color: var(--secondary-text-color);
-          transition: all 0.2s;
-        }
-
-        .child-settings-btn:hover {
-          background: var(--primary-background-color);
-          color: var(--primary-color);
-        }
-
-        .child-settings-btn ha-icon {
-          font-size: 14px;
-        }
-
-        .child-lock-actions {
           display: flex;
-          gap: 4px;
           align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          line-height: 0;
+          align-self: center;
+          transition: color 0.15s;
+        }
+        .zone-lock-gear ha-icon { --mdc-icon-size: 18px; display: flex; }
+        .zone-lock-gear:hover { color: var(--primary-color); }
+
+        .zone-locks-empty {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          padding: 12px 4px;
+          text-align: center;
         }
 
-        .child-remove-btn {
+        /* ===== Floating menus (zone gear, per-lock gear, + picker) ===== */
+        .zone-menu {
+          position: absolute;
+          z-index: 30;
+          background: var(--card-background-color);
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          box-shadow: 0 6px 20px rgba(0,0,0,0.28);
+          padding: 6px;
+          min-width: 190px;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .zone-header-menu { top: 36px; right: 0; }
+        /* Fixed so it escapes the locks-list overflow clip; coords set inline
+           from the gear button's viewport rect. */
+        .zone-lock-menu { position: fixed; z-index: 40; }
+        .zone-picker {
+          right: 12px;
+          top: 38px;
+          max-height: 220px;
+          overflow-y: auto;
+        }
+
+        .zone-menu-item, .zone-picker-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
           background: none;
           border: none;
           cursor: pointer;
-          padding: 4px;
-          border-radius: 4px;
-          color: var(--error-color, #f44336);
-          transition: all 0.2s;
+          padding: 7px 9px;
+          border-radius: 6px;
+          font-size: 13px;
+          color: var(--primary-text-color);
+          text-align: left;
+          transition: background 0.12s;
+        }
+        .zone-menu-item:hover, .zone-picker-item:hover {
+          background: var(--primary-background-color);
+        }
+        .zone-menu-item.danger { color: var(--error-color, #f44336); }
+        .zone-menu-item.danger:hover { background: rgba(244,67,54,0.12); }
+        .zone-menu-item ha-icon, .zone-picker-item ha-icon { flex-shrink: 0; }
+        .zone-picker-item span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
-        .child-remove-btn:hover {
-          background: var(--error-color, #f44336);
-          color: white;
+        .zone-menu-sep {
+          height: 1px;
+          background: var(--divider-color);
+          margin: 4px 2px;
         }
 
-        .child-remove-btn ha-icon {
-          font-size: 14px;
+        .zone-picker-empty {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          padding: 10px;
+          text-align: center;
         }
 
         .lock-stats {
@@ -1811,58 +2010,54 @@ class SmartLockManagerPanel extends HTMLElement {
           text-align: center;
         }
 
+        /* Uniform fixed-height, single-line rows. Long lock/user names
+           truncate with ellipsis; full value lives in the row's title. */
         .access-log-row {
           display: flex;
           align-items: center;
-          padding: 6px 12px;
+          gap: 8px;
+          height: 30px;
+          min-height: 30px;
+          padding: 0 12px;
           border-top: 1px solid var(--divider-color);
           font-size: 12px;
+          overflow: hidden;
         }
 
         .access-log-row .al-icon {
-          margin-right: 10px;
           flex-shrink: 0;
         }
 
-        .access-log-row .al-main {
-          flex-grow: 1;
-          min-width: 0;
-        }
-
-        .access-log-row .al-action {
-          font-weight: 500;
-          text-transform: capitalize;
-        }
-
         .access-log-row .al-lock-badge {
-          display: inline-block;
-          margin-left: 8px;
+          flex-shrink: 1;
+          min-width: 0;
+          max-width: 38%;
           padding: 1px 7px;
           border-radius: 10px;
           font-size: 10px;
           font-weight: 600;
           text-transform: none;
-          vertical-align: middle;
           background: var(--primary-color);
           color: var(--text-primary-color);
           opacity: 0.85;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
-        .access-log-row .al-lock-badge[data-role="child"] {
-          background: var(--secondary-background-color, #607d8b);
-          color: var(--primary-text-color);
-        }
-
-        .access-log-row .al-attr {
+        .access-log-row .al-attr-text {
+          flex: 1;
+          min-width: 0;
           color: var(--secondary-text-color);
-          margin-top: 1px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .access-log-row .al-time {
           color: var(--secondary-text-color);
           font-size: 11px;
           white-space: nowrap;
-          margin-left: 8px;
           flex-shrink: 0;
         }
 
@@ -2228,9 +2423,16 @@ class SmartLockManagerPanel extends HTMLElement {
           <h1>Smart Lock Manager</h1>
         </div>
         <div class="header-controls" style="display: flex; gap: 8px;">
+          <button class="refresh-btn new-zone-btn"
+                  onclick="SmartLockManagerPanel.createZone()"
+                  title="Create a new empty zone"
+                  style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: var(--primary-color); opacity: 0.85; transition: opacity 0.2s;">
+            <ha-icon icon="mdi:plus-box" style="margin-right: 3px; width: 24px; height: 24px;"></ha-icon>
+            <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 4px;">New Zone</span>
+          </button>
           <button class="refresh-btn"
                   onclick="SmartLockManagerPanel.forceRefresh()"
-                  title="Refresh all lock data from Home Assistant"
+                  title="Refresh all data from Home Assistant"
                   style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: var(--primary-text-color); opacity: 0.7; transition: opacity 0.2s;">
             <ha-icon icon="mdi:sync" style="margin-right: 3px; width: 25px; height: 25px;"></ha-icon>
             <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 6px;">Refresh All</span>
@@ -2239,141 +2441,21 @@ class SmartLockManagerPanel extends HTMLElement {
       </div>
 
 
-      ${locks.length === 0 ? `
+      ${(!this._zoneDataLoaded && zones.length === 0) ? `
         <div class="no-locks">
           <ha-icon icon="mdi:lock-outline"></ha-icon>
-          <p>No Smart Lock Manager integrations found</p>
-          <p>Add a Smart Lock Manager integration to get started</p>
+          <p>Loading zones…</p>
+        </div>
+      ` : zones.length === 0 ? `
+        <div class="no-locks">
+          <ha-icon icon="mdi:lock-outline"></ha-icon>
+          <p>No zones yet</p>
+          <p>Use "New Zone" above to create your first zone</p>
         </div>
       ` : `
         <div class="locks-grid">
-          ${locks.filter(lock => {
-            const attributes = lock.attributes || {};
-            // Only show parent locks (not child locks) in main view
-            return attributes.is_main_lock !== false;
-          }).sort((a, b) => {
-            // Sort alphabetically by friendly name (or lock name as fallback)
-            const nameA = (a.attributes?.friendly_name || a.attributes?.lock_name || '').toLowerCase();
-            const nameB = (b.attributes?.friendly_name || b.attributes?.lock_name || '').toLowerCase();
-            return nameA.localeCompare(nameB);
-          }).map(lock => {
-            const attributes = lock.attributes || {};
-            const lockEntityId = attributes.lock_entity_id || lock.entity_id;
-            const totalSlots = attributes.total_slots || 10;
-            const startFrom = attributes.start_from || 1;
-
-
-            // Skip this lock if no valid entity ID
-            if (!lockEntityId) {
-              return '';
-            }
-
-            // Get the actual lock entity state for the lock/unlock button
-            const actualLockEntity = this._hass.states[lockEntityId];
-            const actualLockState = actualLockEntity?.state || 'unknown';
-
-            return `
-              <div class="lock-card">
-                <div class="lock-header">
-                  <div class="lock-title-section">
-                    <div class="lock-status-column">
-                      <div class="lock-connection-status" title="${lockEntityId in this._hass.states ? 'Connected' : 'Disconnected'}">
-                        <ha-icon icon="mdi:${lockEntityId in this._hass.states ? 'link' : 'link-off'}" style="width: 16px; height: 16px; color: ${lockEntityId in this._hass.states ? '#4caf50' : '#f44336'};"></ha-icon>
-                      </div>
-                    </div>
-                    <div class="lock-header-column">
-                      <div class="lock-title-row">
-                        <h3 class="lock-title">${attributes.friendly_name || attributes.lock_name || 'Smart Lock'}</h3>
-                        <div class="saving-spinner" id="saving-spinner-${lockEntityId.replace(/\./g, '_')}" style="display: none;">
-                          <div class="spinner"></div>
-                          <span>Saving...</span>
-                        </div>
-                      </div>
-                      <div class="lock-entity-name" style="font-size: 11px; color: var(--secondary-text-color); font-weight: 300; margin-top: 2px; opacity: 0.7;">Entity: ${lockEntityId}</div>
-                    </div>
-                  </div>
-                  <div class="lock-header-right">
-                    <div class="header-buttons" style="display: flex; gap: 6px; align-items: center;">
-                      <button class="lock-toggle-btn"
-                              onclick="SmartLockManagerPanel.toggleLock('${lockEntityId}', '${actualLockState}')"
-                              title="${actualLockState === 'locked' ? 'Click to unlock' : 'Click to lock'}"
-                              style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: ${actualLockState === 'locked' ? '#4a7c2a' : '#cc3333'};">
-                        <ha-icon icon="mdi:${actualLockState === 'locked' ? 'lock' : 'lock-open'}" style="width: 25px; height: 25px;"></ha-icon>
-                      </button>
-                      <button class="clear-all-btn"
-                              onclick="SmartLockManagerPanel.clearAllSlots('${lockEntityId}')"
-                              title="Clear all slots"
-                              style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: #daa520;">
-                        <ha-icon icon="mdi:broom" style="width: 25px; height: 25px;"></ha-icon>
-                      </button>
-                      <button class="settings-btn"
-                              onclick="SmartLockManagerPanel.openSettings('${lockEntityId}')"
-                              title="Lock settings"
-                              style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: #708090;">
-                        <ha-icon icon="mdi:cog" style="width: 25px; height: 25px;"></ha-icon>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="lock-stats">
-                  <div class="stat-item">
-                    <div class="stat-value">${attributes.valid_codes_count || 0}</div>
-                    <div class="stat-label">Active</div>
-                  </div>
-                  <div class="stat-item">
-                    <div class="stat-value">${attributes.configured_codes_count || 0}</div>
-                    <div class="stat-label">Configured</div>
-                  </div>
-                  <div class="stat-item">
-                    <div class="stat-value">${totalSlots}</div>
-                    <div class="stat-label">Slots</div>
-                  </div>
-                </div>
-
-                ${this.renderChildLocksSection(lockEntityId)}
-
-                <div class="slots-container">
-                  ${Array.from({length: totalSlots}, (_, i) => {
-                    const slotNumber = startFrom + i;
-                    const info = this.getSlotDisplayInfo(lock, slotNumber);
-                    const details = attributes.slot_details?.[`slot_${slotNumber}`];
-
-                    return `
-                      <div class="slot-row" onclick="SmartLockManagerPanel.openSlot('${lockEntityId}', ${slotNumber})">
-                        <div class="slot-indicator" style="background-color: ${info.color};"></div>
-                        <div class="slot-info">
-                          <div class="slot-name">${info.title}</div>
-                          <div class="slot-details">${info.status}</div>
-                        </div>
-                        ${details && details.pin_code ? `
-                          <div class="slot-actions">
-                            <button class="slot-action-btn toggle-btn ${details.is_active ? 'active' : 'inactive'}"
-                                    onclick="event.stopPropagation(); SmartLockManagerPanel.toggleSlot('${lockEntityId}', ${slotNumber})"
-                                    title="${details.is_active ? 'Disable this slot' : 'Enable this slot'}">
-                              ${details.is_active ? '⏸' : '▶'}
-                            </button>
-                            <button class="slot-action-btn clear-btn" onclick="event.stopPropagation(); SmartLockManagerPanel.clearSlot('${lockEntityId}', ${slotNumber})" title="Clear slot and remove from lock">🗙</button>
-                            ${details.use_count > 0 ? `<button class="slot-action-btn reset-btn" onclick="event.stopPropagation(); SmartLockManagerPanel.resetUsage('${lockEntityId}', ${slotNumber})" title="Reset Usage">🔄</button>` : ''}
-                          </div>
-                        ` : ''}
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-
-                <div class="lock-actions">
-                  <button class="btn" onclick="SmartLockManagerPanel.refreshLock('${lockEntityId}')" title="Refresh this lock's status and sync with Z-Wave">
-                    Refresh
-                  </button>
-                </div>
-
-                ${this.renderAccessLog(lock)}
-              </div>
-            `;
-          }).join('')}
+          ${zones.map(zone => this.renderZoneCard(zone)).join('')}
         </div>
-
       `}
 
       <!-- Slot Edit Modal -->
@@ -2508,27 +2590,7 @@ class SmartLockManagerPanel extends HTMLElement {
               <small>Custom name for this lock (appears on cards and in lists)</small>
             </div>
 
-            <!-- LOCK TYPE -->
-            <div class="form-group lock-type-section">
-              <label for="is_main_lock">Lock Type</label>
-              <select id="is_main_lock" name="is_main_lock" onchange="SmartLockManagerPanel.toggleLockTypeFields()">
-                <option value="true">Parent Lock</option>
-                <option value="false">Child Lock</option>
-              </select>
-              <small>Parent locks manage codes; child locks inherit from parents</small>
-            </div>
-
-            <!-- PARENT LOCK SELECTION -->
-            <div class="form-group parent-lock-section" style="display: none;">
-              <label for="parent_lock_id">Parent Lock</label>
-              <select id="parent_lock_id" name="parent_lock_id">
-                <option value="">Select Parent Lock</option>
-                ${this.getParentLockOptions()}
-              </select>
-              <small>This child lock will inherit codes from the selected parent</small>
-            </div>
-
-            <!-- MAIN LOCK SETTINGS (HIDDEN FOR CHILD LOCKS) -->
+            <!-- ZONE SETTINGS -->
             <div class="main-lock-settings">
               <!-- NUMBER OF SLOTS -->
               <div class="form-group">
@@ -2604,6 +2666,32 @@ class SmartLockManagerPanel extends HTMLElement {
               <button class="btn" onclick="SmartLockManagerPanel.saveSettings()">Save Settings</button>
             </div>
           </div> <!-- END form-container -->
+        </div>
+      </div>
+
+      <!-- Edit Lock Modal (per-lock friendly name) -->
+      <div class="modal" style="display: ${this._editLockModalOpen ? 'flex' : 'none'};">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title">Edit Lock</h3>
+            <button class="close-btn" onclick="SmartLockManagerPanel.closeEditLock()">×</button>
+          </div>
+          <div class="form-container">
+            <form id="edit-lock-form">
+              <div class="form-group">
+                <label for="edit_lock_friendly_name">Friendly Name</label>
+                <input type="text" id="edit_lock_friendly_name" name="friendly_name"
+                       value="${this._esc(this._memberByEntity(this._editLockEntityId)?.friendly_name || '')}"
+                       placeholder="Lock display name"
+                       onkeypress="if(event.key==='Enter'){event.preventDefault();SmartLockManagerPanel.saveEditLock();}">
+                <small>Custom name for this lock (appears on cards and in the access log)</small>
+              </div>
+            </form>
+            <div class="form-actions">
+              <button class="btn secondary" onclick="SmartLockManagerPanel.closeEditLock()">Cancel</button>
+              <button class="btn" onclick="SmartLockManagerPanel.saveEditLock()">Save</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2732,15 +2820,6 @@ class SmartLockManagerPanel extends HTMLElement {
     });
   }
 
-  static syncChildLocks(lockEntityId) {
-    const panel = window.smartLockManagerPanel;
-    if (!panel) {
-      return;
-    }
-    panel.callService('sync_child_locks', {
-      entity_id: lockEntityId
-    });
-  }
 
   static openSettings(lockEntityId) {
 
@@ -2772,70 +2851,6 @@ class SmartLockManagerPanel extends HTMLElement {
     panel.saveSettings();
   }
 
-  static toggleLockTypeFields() {
-    const panel = window.smartLockManagerPanel;
-    if (!panel) {
-      return;
-    }
-
-    const isMainLockSelect = panel.shadowRoot.querySelector('#is_main_lock');
-    const parentLockSelect = panel.shadowRoot.querySelector('#parent_lock_id');
-    const parentLockSection = panel.shadowRoot.querySelector('.parent-lock-section');
-    const mainLockSettings = panel.shadowRoot.querySelector('.main-lock-settings');
-
-    if (!isMainLockSelect || !parentLockSection || !mainLockSettings) {
-      return;
-    }
-
-    // Check if this lock is currently a child lock
-    const currentLock = panel._locks?.find(l => l.attributes.lock_entity_id === panel._currentLockEntityId);
-    const isCurrentlyChildLock = currentLock?.attributes?.parent_lock_id;
-
-    if (isCurrentlyChildLock) {
-      // Lock is already a child - disable both dropdowns and show informational message
-      isMainLockSelect.disabled = true;
-      if (parentLockSelect) {
-        parentLockSelect.disabled = true;
-      }
-      parentLockSection.style.display = 'block';
-      mainLockSettings.style.display = 'none';
-
-      // Add or update info message
-      let infoMessage = parentLockSection.querySelector('.child-lock-info-message');
-      if (!infoMessage) {
-        infoMessage = document.createElement('small');
-        infoMessage.className = 'child-lock-info-message';
-        infoMessage.style.cssText = 'color: var(--warning-color); font-style: italic; display: block; margin-top: 8px;';
-        parentLockSection.appendChild(infoMessage);
-      }
-      infoMessage.textContent = 'This lock is currently a child lock. Use the "Unlink" button on the main panel to change its status.';
-    } else {
-      // Lock is not currently a child - enable dropdowns and use normal logic
-      isMainLockSelect.disabled = false;
-      if (parentLockSelect) {
-        parentLockSelect.disabled = false;
-      }
-
-      // Remove info message if it exists
-      const infoMessage = parentLockSection.querySelector('.child-lock-info-message');
-      if (infoMessage) {
-        infoMessage.remove();
-      }
-
-      const isMainLock = isMainLockSelect.value === 'true';
-
-      if (isMainLock) {
-        // Show main lock settings, hide parent selection
-        parentLockSection.style.display = 'none';
-        mainLockSettings.style.display = 'block';
-      } else {
-        // Show parent selection, hide main lock settings
-        parentLockSection.style.display = 'block';
-        mainLockSettings.style.display = 'none';
-      }
-    }
-  }
-
   static async forceRefresh() {
     const panel = window.smartLockManagerPanel;
     if (!panel) {
@@ -2854,8 +2869,9 @@ class SmartLockManagerPanel extends HTMLElement {
         });
       }
 
-      // Force data refresh
+      // Force data refresh (sensor states + zone model)
       await panel.loadLockData(true);
+      await panel.loadZoneData();
     } finally {
       // Hide spinners on all lock cards
       lockEntityIds.forEach(entityId => panel.hideCardSpinner(entityId));
@@ -3093,6 +3109,194 @@ class SmartLockManagerPanel extends HTMLElement {
     });
   }
 
+  // ----- Zone helpers + static handlers (Phase 3b) -----------------------
+
+  // Look up an in-memory zone object by its id.
+  _zoneById(zoneId) {
+    return (this._zones || []).find(z => z.zone_id === zoneId);
+  }
+
+  // Resolve a representative member entity_id for a zone. Zone slot services
+  // operate on a member lock entity (the edit then propagates to the whole
+  // zone). Returns null for an empty zone.
+  _zoneTargetEntity(zoneId) {
+    const zone = this._zoneById(zoneId);
+    const members = zone?.members || [];
+    return members.length ? members[0].entity_id : null;
+  }
+
+  // Find a zone member object by its lock entity_id across all zones.
+  // - Inputs: entityId (str).
+  // - Outputs: the member object, or undefined if not found.
+  _memberByEntity(entityId) {
+    for (const zone of (this._zones || [])) {
+      const members = Array.isArray(zone.members) ? zone.members : [];
+      const hit = members.find(m => m.entity_id === entityId);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
+  // --- Header gear menu / per-lock menu / picker toggles (ephemeral UI) ---
+  static toggleZoneMenu(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openZoneMenu = (p._openZoneMenu === zoneId) ? null : zoneId;
+    p._openLockMenu = null; p._openPicker = null;
+    p.requestUpdate();
+  }
+  static toggleLockMenu(entityId, ev) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const willOpen = p._openLockMenu !== entityId;
+    // Anchor a fixed-position menu to the gear so it escapes the locks-list
+    // overflow clip. Capture the gear button's viewport rect now.
+    if (willOpen && ev && ev.currentTarget) {
+      const r = ev.currentTarget.getBoundingClientRect();
+      // Place the menu's top-right just under the gear.
+      p._lockMenuPos = { top: Math.round(r.bottom + 4), left: Math.round(r.right - 190) };
+    }
+    p._openLockMenu = willOpen ? entityId : null;
+    p._openZoneMenu = null; p._openPicker = null;
+    p.requestUpdate();
+  }
+  static toggleLockPicker(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openPicker = (p._openPicker === zoneId) ? null : zoneId;
+    p._openZoneMenu = null; p._openLockMenu = null;
+    p.requestUpdate();
+  }
+
+  // --- Zone lifecycle / membership services ---
+  static async createZone() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const name = prompt('Name for the new zone:');
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await p.callZoneService('create_zone', { name: trimmed });
+  }
+  static async renameZone(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const zone = p._zoneById(zoneId);
+    p._openZoneMenu = null; p.requestUpdate();
+    const name = prompt('New name for this zone:', zone?.name || '');
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === zone?.name) return;
+    await p.callZoneService('update_zone', { zone_id: zoneId, name: trimmed });
+  }
+  static async deleteZone(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const zone = p._zoneById(zoneId);
+    if (!confirm(`Delete zone "${zone?.name || zoneId}"? This wipes its codes from all member locks and returns them to the unhomed pool.`)) return;
+    await p.callZoneService('delete_zone', { zone_id: zoneId });
+  }
+  static async applyZoneCodes(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    await p.callZoneService('apply_zone_codes', { zone_id: zoneId });
+  }
+  static async clearZoneCodes(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const zone = p._zoneById(zoneId);
+    if (!confirm(`Clear all codes from zone "${zone?.name || zoneId}"? This removes every user code from all member locks.`)) return;
+    await p.callZoneService('clear_zone_codes', { zone_id: zoneId });
+  }
+  static async addLockToZone(zoneId, entityId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    await p.callZoneService('add_lock_to_zone', { zone_id: zoneId, lock_entity_id: entityId });
+  }
+  static async removeLockFromZone(zoneId, entityId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    if (!confirm('Remove this lock from the zone? Its zone codes will be wiped from the hardware and it returns to the unhomed pool.')) return;
+    await p.callZoneService('remove_lock_from_zone', { zone_id: zoneId, lock_entity_id: entityId });
+  }
+  static async refreshZone(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openZoneMenu = null; p._openLockMenu = null; p._openPicker = null;
+    await p.loadZoneData();
+    await p.loadLockData(true);
+    p.requestUpdate();
+  }
+
+  // Open the per-lock Edit modal (friendly-name editor) for a member lock.
+  //
+  // Replaces the former inline prompt with a native modal consistent with the
+  // panel's other modals (Slot Edit / Lock Settings). The Save handler writes
+  // SLM's stored settings.friendly_name via update_lock_settings; that name is
+  // now authoritative everywhere (api/zones.py _lock_friendly_name prefers the
+  // SLM name), so lock rows AND access-log door badges follow it.
+  // - Inputs: entityId (str) — the lock entity_id.
+  // - Outputs: void.
+  static editLock(entityId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openLockMenu = null;
+    p._editLockEntityId = entityId;
+    p._editLockModalOpen = true;
+    p.requestUpdate();
+    // Focus the field once rendered.
+    requestAnimationFrame(() => {
+      const input = p.shadowRoot?.querySelector('#edit_lock_friendly_name');
+      if (input) { input.focus(); input.select(); }
+    });
+  }
+
+  // Close the per-lock Edit modal without saving.
+  // - Outputs: void.
+  static closeEditLock() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._editLockModalOpen = false;
+    p._editLockEntityId = null;
+    p.requestUpdate();
+  }
+
+  // Save the per-lock Edit modal: persist the new SLM friendly name, then close
+  // and reload so every lock row and access-log badge reflects the new name.
+  // - Outputs: Promise<void>.
+  static async saveEditLock() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const entityId = p._editLockEntityId;
+    if (!entityId) { SmartLockManagerPanel.closeEditLock(); return; }
+    const input = p.shadowRoot?.querySelector('#edit_lock_friendly_name');
+    const trimmed = (input?.value || '').trim();
+    const current = p._memberByEntity(entityId)?.friendly_name || '';
+    // Close first so the modal doesn't block the post-save refresh.
+    SmartLockManagerPanel.closeEditLock();
+    if (!trimmed || trimmed === current) return;
+    // Write SLM's stored friendly name (SLM name wins in the zones API), then
+    // callZoneService reloads zone + lock data so cards/badges re-render.
+    await p.callZoneService('update_lock_settings', { entity_id: entityId, friendly_name: trimmed });
+  }
+
+  // --- Zone-level code slot operations (target zone's first member; the edit
+  //     propagates to the whole zone server-side) ---
+  static openZoneSlot(zoneId, slotNumber) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const entity = p._zoneTargetEntity(zoneId);
+    if (!entity) { alert('Add a lock to this zone before configuring codes.'); return; }
+    p._currentZoneId = zoneId;
+    p._currentLockEntityId = entity;
+    p.openSlotModal(slotNumber);
+  }
+  static toggleZoneSlot(zoneId, slotNumber) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const entity = p._zoneTargetEntity(zoneId);
+    if (!entity) return;
+    p._currentLockEntityId = entity;
+    p.toggleSlot(slotNumber);
+  }
+  static clearZoneSlot(zoneId, slotNumber) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const entity = p._zoneTargetEntity(zoneId);
+    if (!entity) return;
+    p._currentLockEntityId = entity;
+    p.clearSlot(slotNumber);
+  }
+  static resetZoneSlotUsage(zoneId, slotNumber) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const entity = p._zoneTargetEntity(zoneId);
+    if (!entity) return;
+    p._currentLockEntityId = entity;
+    p.resetSlotUsage(slotNumber);
+  }
 
 }
 

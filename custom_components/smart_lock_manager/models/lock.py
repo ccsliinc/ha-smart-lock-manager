@@ -335,12 +335,16 @@ class SmartLockManagerLock:
         # Validate PIN code format for Z-Wave locks
         if pin_code:
             if not pin_code.isdigit():
-                _LOGGER.error("PIN code must be numeric only: %s", pin_code)
+                _LOGGER.error(
+                    "PIN code for slot %s must be numeric only (length: %d)",
+                    slot_number,
+                    len(pin_code),
+                )
                 return False
             if len(pin_code) < 4 or len(pin_code) > 8:
                 _LOGGER.error(
-                    "PIN code must be 4-8 digits: %s (length: %d)",
-                    pin_code,
+                    "PIN code for slot %s must be 4-8 digits (length: %d)",
+                    slot_number,
                     len(pin_code),
                 )
                 return False

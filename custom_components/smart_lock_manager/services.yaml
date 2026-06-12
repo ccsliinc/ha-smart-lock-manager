@@ -414,6 +414,36 @@ apply_zone_codes:
       selector:
         text:
 
+update_zone:
+  name: Update Zone
+  description: Update a zone's settings (currently its display name).
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The ID of the zone to update.
+      required: true
+      selector:
+        text:
+    name:
+      name: Zone Name
+      description: The new display name for the zone.
+      required: true
+      selector:
+        text:
+
+clear_zone_codes:
+  name: Clear Zone Codes
+  description: >-
+    Clear every code slot on a zone and wipe those codes off every member
+    lock's hardware. Members remain in the zone.
+  fields:
+    zone_id:
+      name: Zone ID
+      description: The zone whose codes should be cleared.
+      required: true
+      selector:
+        text:
+
 clear_all_slots:
   name: Clear All Slots
   description: Clear all code slots on a lock.

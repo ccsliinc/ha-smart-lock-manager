@@ -285,7 +285,10 @@ class ZWaveServices:
             if action == "enable" and slot.is_active and slot.pin_code:
                 # Validate PIN code before sending to Z-Wave
                 if not slot.pin_code.isdigit():
-                    raise ValueError(f"PIN code must be numeric only: {slot.pin_code}")
+                    raise ValueError(
+                        "PIN code must be numeric only"
+                        f" (length: {len(slot.pin_code)})"
+                    )
                 if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
                     raise ValueError(
                         f"PIN code must be 4-8 digits (length: {len(slot.pin_code)})"
@@ -361,7 +364,8 @@ class ZWaveServices:
                     # Validate PIN code before sending to Z-Wave
                     if not slot.pin_code.isdigit():
                         raise ValueError(
-                            f"PIN code must be numeric only: {slot.pin_code}"
+                            "PIN code must be numeric only"
+                            f" (length: {len(slot.pin_code)})"
                         )
                     if len(slot.pin_code) < 4 or len(slot.pin_code) > 8:
                         raise ValueError(

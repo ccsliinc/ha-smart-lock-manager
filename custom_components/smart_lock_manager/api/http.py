@@ -7,6 +7,8 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
+from .zones import SmartLockManagerZonesView
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -71,6 +73,9 @@ async def async_register_http_views(hass: HomeAssistant) -> None:
 
     # Register the frontend view
     hass.http.register_view(SmartLockManagerFrontendView(hass))
+
+    # Register the authenticated zone DATA API the redesigned panel consumes.
+    hass.http.register_view(SmartLockManagerZonesView(hass))
 
     _LOGGER.info("Smart Lock Manager HTTP views registered")
 

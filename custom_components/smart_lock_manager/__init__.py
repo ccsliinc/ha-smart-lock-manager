@@ -42,6 +42,7 @@ from .const import (
     SERVICE_APPLY_ZONE_CODES,
     SERVICE_CLEAR_ALL_SLOTS,
     SERVICE_CLEAR_CODE,
+    SERVICE_CLEAR_ZONE_CODES,
     SERVICE_CREATE_ZONE,
     SERVICE_DELETE_ZONE,
     SERVICE_DISABLE_SLOT,
@@ -58,6 +59,7 @@ from .const import (
     SERVICE_SET_CODE_ADVANCED,
     SERVICE_UPDATE_GLOBAL_SETTINGS,
     SERVICE_UPDATE_LOCK_SETTINGS,
+    SERVICE_UPDATE_ZONE,
     VERSION,
 )
 from .dev_mock import (
@@ -339,6 +341,15 @@ DELETE_ZONE_SCHEMA = vol.Schema({vol.Required("zone_id"): str})
 
 APPLY_ZONE_CODES_SCHEMA = vol.Schema({vol.Required("zone_id"): str})
 
+CLEAR_ZONE_CODES_SCHEMA = vol.Schema({vol.Required("zone_id"): str})
+
+UPDATE_ZONE_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_id"): str,
+        vol.Required("name"): str,
+    }
+)
+
 ZONE_MEMBER_SCHEMA = vol.Schema(
     {
         vol.Required("zone_id"): str,
@@ -424,7 +435,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Restoring slot %s: user=%s, pin=%s, active=%s",
                 slot_num,
                 user_name,
-                pin_code[:4] + "***" if pin_code else None,
+                "****" if pin_code else None,
                 is_active,
             )
 
@@ -687,6 +698,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_ADD_LOCK_TO_ZONE)
             hass.services.async_remove(DOMAIN, SERVICE_REMOVE_LOCK_FROM_ZONE)
             hass.services.async_remove(DOMAIN, SERVICE_APPLY_ZONE_CODES)
+            hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE)
+            hass.services.async_remove(DOMAIN, SERVICE_CLEAR_ZONE_CODES)
 
     return bool(unload_ok)
 
@@ -779,6 +792,12 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     async def apply_zone_codes_wrapper(service_call: ServiceCall) -> None:
         return await ZoneServices.apply_zone_codes(hass, service_call)
+
+    async def update_zone_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.update_zone(hass, service_call)
+
+    async def clear_zone_codes_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneServices.clear_zone_codes(hass, service_call)
 
     async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
@@ -891,6 +910,15 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         SERVICE_APPLY_ZONE_CODES,
         apply_zone_codes_wrapper,
         schema=APPLY_ZONE_CODES_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UPDATE_ZONE, update_zone_wrapper, schema=UPDATE_ZONE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_ZONE_CODES,
+        clear_zone_codes_wrapper,
+        schema=CLEAR_ZONE_CODES_SCHEMA,
     )
     _LOGGER.debug("Registered zone-management services")
 
@@ -1059,11 +1087,16 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                                     and slot in lock.code_slots
                                     and lock.code_slots[slot].pin_code
                                 ):
+                                    _raw_usercode = code_data.get("usercode")
                                     _LOGGER.debug(
                                         "Coordinator: raw get_usercode slot %s:"
                                         " usercode=%s, in_use=%s",
                                         slot,
-                                        repr(code_data.get("usercode", "MISSING"))[:10],
+                                        (
+                                            "MISSING"
+                                            if _raw_usercode is None
+                                            else "<set>"
+                                        ),
                                         code_data.get("in_use"),
                                     )
 
@@ -1121,10 +1154,12 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                     if sl.is_active and sl.pin_code:
                         zw = zwave_codes.get(sn, {}).get("code")
                         _LOGGER.debug(
-                            "Coordinator: slot %s sync: pin=%s vs zwave=%s -> %s",
+                            "Coordinator: slot %s sync: pin=%s vs zwave=%s"
+                            " (match=%s) -> %s",
                             sn,
-                            sl.pin_code[:4] + "..." if sl.pin_code else None,
-                            str(zw)[:4] + "..." if zw else None,
+                            "<set>" if sl.pin_code else None,
+                            "<set>" if zw else None,
+                            str(zw) == str(sl.pin_code),
                             "synced" if sl.is_synced else "NOT synced",
                         )
 

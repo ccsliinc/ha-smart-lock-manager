@@ -100,6 +100,8 @@ SERVICE_DELETE_ZONE = "delete_zone"
 SERVICE_ADD_LOCK_TO_ZONE = "add_lock_to_zone"
 SERVICE_REMOVE_LOCK_FROM_ZONE = "remove_lock_from_zone"
 SERVICE_APPLY_ZONE_CODES = "apply_zone_codes"
+SERVICE_UPDATE_ZONE = "update_zone"
+SERVICE_CLEAR_ZONE_CODES = "clear_zone_codes"
 
 # Misc
 LOCK_STATE = [LockState.LOCKED, LockState.UNLOCKED]
