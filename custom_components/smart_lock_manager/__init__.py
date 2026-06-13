@@ -18,6 +18,7 @@ from .api.http import async_register_http_views, async_unregister_http_views
 # ``custom_components.smart_lock_manager`` (not ``.const``).
 _LOGGER = logging.getLogger(__name__)
 
+from .alert_engine import ALERT_ENGINE_KEY, AlertEngine
 from .const import (
     ATTR_ALLOWED_DAYS,
     ATTR_ALLOWED_HOURS,
@@ -623,6 +624,57 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_ensure_zones_loaded(hass)
     await async_run_migration_if_needed(hass)
 
+    # DEV-ONLY: OBSERVE-ONLY alert detection engine. Instantiated exactly once
+    # per HA process and ONLY under SLM_DEV_MOCK, so it never runs in
+    # production alongside the live pyscripts. It records alerts but sends ZERO
+    # notifications. Started after zones are loaded so it can enumerate every
+    # member lock. The companion dev_simulate_alert service lets each alert
+    # type be triggered on demand without waiting for real conditions.
+    if is_dev_mock() and ALERT_ENGINE_KEY not in hass.data:
+        engine = AlertEngine(hass)
+        hass.data[ALERT_ENGINE_KEY] = engine
+        await engine.async_start()
+
+        if not hass.services.has_service(DOMAIN, "dev_simulate_alert"):
+
+            async def dev_simulate_alert_wrapper(service_call: ServiceCall) -> None:
+                active = hass.data.get(ALERT_ENGINE_KEY)
+                if active is None:
+                    return
+                data = dict(service_call.data)
+                active.dev_simulate(
+                    data.pop("alert_type"),
+                    data.pop("entity_id"),
+                    **data,
+                )
+
+            hass.services.async_register(
+                DOMAIN,
+                "dev_simulate_alert",
+                dev_simulate_alert_wrapper,
+                schema=vol.Schema(
+                    {
+                        vol.Required("alert_type"): vol.In(
+                            [
+                                "outside_hours",
+                                "sustained_unlock",
+                                "jam",
+                                "low_battery",
+                                "offline",
+                            ]
+                        ),
+                        vol.Required("entity_id"): cv.entity_id,
+                        vol.Optional("recover"): cv.boolean,
+                        vol.Optional("seconds"): vol.Coerce(int),
+                        vol.Optional("percent"): vol.Coerce(int),
+                    }
+                ),
+            )
+            _LOGGER.info(
+                "DEV: registered smart_lock_manager.dev_simulate_alert service "
+                "(observe-only alert engine)"
+            )
+
     # NOTE: Initial Z-Wave code reading removed — it was blocking HA startup.
     # hass.services.async_call creates service-call tasks that HA's bootstrap
     # waits on, even when wrapped in async_create_background_task. With 7 locks
@@ -675,6 +727,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if unsub:
                 unsub()
                 _LOGGER.info("Access log: removed zwave_js_notification listener")
+
+            # Tear down the dev-only alert engine (only ever present under
+            # SLM_DEV_MOCK) so its state listeners + timers are released.
+            engine = hass.data.pop(ALERT_ENGINE_KEY, None)
+            if engine is not None:
+                engine.async_stop()
 
         # Remove services only if this is the last instance
         if not hass.data[DOMAIN]:

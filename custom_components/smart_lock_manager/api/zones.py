@@ -19,12 +19,15 @@ the PIN-safety pre-commit guard stays satisfied.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, State
 
+from ..alert_engine import ALERT_ENGINE_KEY
+from ..const import MAX_SYNC_ATTEMPTS
+from ..dev_mock import is_dev_mock
 from ..models.lock import CodeSlot, SmartLockManagerLock
 from ..models.zone import Zone
 from ..zone_runtime import (
@@ -33,6 +36,17 @@ from ..zone_runtime import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Per-slot sync-status values the API reports to the panel. Derived LIVE from
+# member locks every request (never the zone's frozen mirror copy):
+#   - "synced":  every member that carries this slot has confirmed it synced.
+#   - "pending": at least one member has not synced yet, with NO failure (an
+#                in-flight write — must NOT raise a warning in the panel).
+#   - "error":   a member reported a genuine sync failure (``sync_error`` set,
+#                or ``sync_attempts`` reached the retry cap without success).
+SYNC_STATUS_SYNCED = "synced"
+SYNC_STATUS_PENDING = "pending"
+SYNC_STATUS_ERROR = "error"
 
 # Lock entity states Home Assistant reports. Anything else is passed through
 # verbatim so the panel can render unexpected values without guessing.
@@ -169,14 +183,94 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
-def _serialize_slot(slot: CodeSlot) -> Dict[str, Any]:
+def _member_slot_is_error(member_slot: CodeSlot) -> bool:
+    """Return True if a member's slot is in a GENUINE sync-failure state.
+
+    A real failure — distinct from an in-flight pending write — is when the
+    member recorded a ``sync_error`` OR exhausted the retry cap
+    (``sync_attempts`` >= :data:`MAX_SYNC_ATTEMPTS`) without confirming sync.
+
+    - Inputs: member_slot (CodeSlot) — the member lock's copy of the slot.
+    - Outputs: bool — True only for a hard failure, never for pending writes.
+    """
+    if member_slot.is_synced:
+        return False
+    if member_slot.sync_error:
+        return True
+    return member_slot.sync_attempts >= MAX_SYNC_ATTEMPTS
+
+
+def _derive_slot_sync(
+    zone: Zone,
+    slot_number: int,
+    member_locks: List[SmartLockManagerLock],
+) -> Dict[str, Any]:
+    """Derive a zone slot's LIVE sync status from its member locks.
+
+    Fixes the stale-mirror bug: the zone's own ``code_slots[n].is_synced`` is a
+    frozen copy written when the code was last applied and is never refreshed as
+    members sync. This computes the slot's true status from the member locks'
+    live per-lock state in ``hass.data`` instead.
+
+    Only members that actually CARRY this slot's code (matching pin + active
+    intent) count toward the aggregate; a member that does not yet have the code
+    mirrored is treated as pending, not synced.
+
+    Aggregation rule:
+      - ERROR  if ANY contributing member is in a hard sync-failure state.
+      - SYNCED if no error AND every contributing member confirmed synced.
+      - PENDING otherwise (in-flight, no failure).
+    An empty/codeless zone slot reports SYNCED (nothing to push).
+
+    - Inputs: zone (Zone), slot_number (int), member_locks (live lock objects).
+    - Outputs: dict {status, sync_error} where status is one of
+      ``SYNC_STATUS_*`` and sync_error is the first member failure detail (or
+      None).
+    """
+    zone_slot = zone.code_slots.get(slot_number)
+    if zone_slot is None or not zone_slot.pin_code:
+        return {"status": SYNC_STATUS_SYNCED, "sync_error": None}
+
+    has_member = False
+    all_synced = True
+    first_error: Optional[str] = None
+    for lock in member_locks:
+        member_slot = lock.code_slots.get(slot_number)
+        if member_slot is None:
+            # Member has not even allocated this slot yet -> pending.
+            all_synced = False
+            continue
+        has_member = True
+        if _member_slot_is_error(member_slot):
+            if first_error is None:
+                first_error = (
+                    member_slot.sync_error
+                    or f"Failed to sync after {MAX_SYNC_ATTEMPTS} attempts"
+                )
+        if not member_slot.is_synced:
+            all_synced = False
+
+    if first_error is not None:
+        return {"status": SYNC_STATUS_ERROR, "sync_error": first_error}
+    if has_member and all_synced:
+        return {"status": SYNC_STATUS_SYNCED, "sync_error": None}
+    return {"status": SYNC_STATUS_PENDING, "sync_error": None}
+
+
+def _serialize_slot(slot: CodeSlot, sync: Dict[str, Any]) -> Dict[str, Any]:
     """Serialize one zone code slot WITHOUT exposing the PIN.
 
     Emits ``has_code`` (whether a PIN is configured) plus non-sensitive
     scheduling/limit metadata. The raw PIN value is intentionally never
     referenced here.
 
-    - Inputs: slot (CodeSlot).
+    The slot's sync state is supplied by :func:`_derive_slot_sync` (computed
+    LIVE from member locks) rather than read off the zone's frozen mirror.
+    ``is_synced`` is retained as a derived boolean for backward compatibility;
+    ``sync_status`` (synced/pending/error) is the authoritative field and
+    ``sync_error`` carries the failure detail when present.
+
+    - Inputs: slot (CodeSlot), sync (dict from :func:`_derive_slot_sync`).
     - Outputs: JSON-safe dict, PIN-free.
     """
     has_code = bool(slot.pin_code)
@@ -184,12 +278,15 @@ def _serialize_slot(slot: CodeSlot) -> Dict[str, Any]:
     if slot.max_uses is not None and slot.max_uses >= 0:
         remaining_uses = max(slot.max_uses - slot.use_count, 0)
 
+    status = sync["status"]
     return {
         "slot_number": slot.slot_number,
         "user_name": slot.user_name,
         "has_code": has_code,
         "is_active": slot.is_active,
-        "is_synced": slot.is_synced,
+        "is_synced": status == SYNC_STATUS_SYNCED,
+        "sync_status": status,
+        "sync_error": sync["sync_error"],
         "start_date": slot.start_date.isoformat() if slot.start_date else None,
         "end_date": slot.end_date.isoformat() if slot.end_date else None,
         "allowed_hours": slot.allowed_hours,
@@ -249,9 +346,22 @@ def _serialize_zone(
         _serialize_member(hass, entity_id, locks)
         for entity_id in zone.member_lock_entity_ids
     ]
-    code_slots = [
-        _serialize_slot(zone.code_slots[num]) for num in sorted(zone.code_slots)
+    # Live member lock objects backing this zone, used to DERIVE each slot's
+    # true sync state (the zone's own slot copy is a frozen mirror).
+    member_locks = [
+        locks[entity_id]
+        for entity_id in zone.member_lock_entity_ids
+        if entity_id in locks
     ]
+
+    code_slots: List[Dict[str, Any]] = []
+    error_slots: List[int] = []
+    for num in sorted(zone.code_slots):
+        sync = _derive_slot_sync(zone, num, member_locks)
+        if sync["status"] == SYNC_STATUS_ERROR:
+            error_slots.append(num)
+        code_slots.append(_serialize_slot(zone.code_slots[num], sync))
+
     return {
         "zone_id": zone.zone_id,
         "name": zone.name,
@@ -261,6 +371,8 @@ def _serialize_zone(
         "configured_codes_count": zone.get_configured_codes_count(),
         "members": members,
         "code_slots": code_slots,
+        "error_slots": error_slots,
+        "has_sync_errors": bool(error_slots),
     }
 
 
@@ -302,27 +414,62 @@ def _all_locks(hass: HomeAssistant) -> Dict[str, SmartLockManagerLock]:
     return locks
 
 
+def _all_dev_alerts(hass: HomeAssistant) -> List[Dict[str, Any]]:
+    """Return every recorded dev alert (most-recent first), or empty.
+
+    - Description: Reads the OBSERVE-ONLY alert engine's recorded alerts. The
+      engine is only present under ``SLM_DEV_MOCK``; outside dev this is always
+      empty. Records are already PIN-free by construction (the engine never
+      stores PINs).
+    - Inputs: hass (HomeAssistant).
+    - Outputs: list of alert record dicts (may be empty).
+    """
+    engine = hass.data.get(ALERT_ENGINE_KEY)
+    if engine is None:
+        return []
+    return cast(List[Dict[str, Any]], engine.serialize())
+
+
 def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
-    """Build the full zones DATA payload (zones + unhomed pool).
+    """Build the full zones DATA payload (zones + unhomed pool + dev alerts).
 
     - Description: Serializes the entire in-memory zone registry (including
       empty zones) plus the unhomed lock pool, enriching each member with live
-      hardware state. Never includes raw PIN codes.
+      hardware state. Also attaches the OBSERVE-ONLY dev alert log (top-level
+      and per-zone) plus an ``observe_only`` flag — present only under
+      ``SLM_DEV_MOCK``; always empty in production. Never includes raw PINs.
     - Inputs: hass (HomeAssistant).
-    - Outputs: dict with ``zones`` (list) and ``unhomed_locks`` (list).
+    - Outputs: dict with ``zones``, ``unhomed_locks``, ``dev_alerts`` and
+      ``observe_only``.
     """
     locks = _all_locks(hass)
     registry = get_zone_registry(hass)
+    dev_alerts = _all_dev_alerts(hass)
 
-    zones: List[Dict[str, Any]] = [
-        _serialize_zone(hass, zone, locks)
-        for zone in sorted(registry.values(), key=lambda z: z.name.lower())
-    ]
+    # Bucket alerts by zone_id so each zone card can show its own slice.
+    # Alerts whose member is unhomed (zone_id is None) only appear top-level.
+    alerts_by_zone: Dict[str, List[Dict[str, Any]]] = {}
+    for alert in dev_alerts:
+        zone_id = alert.get("zone_id")
+        if zone_id is not None:
+            alerts_by_zone.setdefault(zone_id, []).append(alert)
+
+    zones: List[Dict[str, Any]] = []
+    for zone in sorted(registry.values(), key=lambda z: z.name.lower()):
+        serialized = _serialize_zone(hass, zone, locks)
+        serialized["dev_alerts"] = alerts_by_zone.get(zone.zone_id, [])
+        zones.append(serialized)
+
     unhomed = [
         _serialize_unhomed(hass, entity_id, locks)
         for entity_id in get_unhomed_lock_entity_ids(hass)
     ]
-    return {"zones": zones, "unhomed_locks": unhomed}
+    return {
+        "zones": zones,
+        "unhomed_locks": unhomed,
+        "dev_alerts": dev_alerts,
+        "observe_only": is_dev_mock(),
+    }
 
 
 class SmartLockManagerZonesView(HomeAssistantView):

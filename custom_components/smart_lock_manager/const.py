@@ -68,6 +68,12 @@ CONF_SENSOR_NAME = "sensor_name"
 CONF_SLOTS = "slots"
 CONF_START = "start_from"
 
+# Maximum Z-Wave write dispatches for a slot before it is treated as a hard
+# sync failure (``sync_error`` is set). Used by the per-lock sync planner and
+# the zone API's member-derived sync-status aggregation so both agree on what
+# counts as a genuine error vs. an in-flight pending write.
+MAX_SYNC_ATTEMPTS = 10
+
 # Defaults
 DEFAULT_CODE_SLOTS = 10
 DEFAULT_DOOR_SENSOR = "binary_sensor.fake"

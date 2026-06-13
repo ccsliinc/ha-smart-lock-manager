@@ -18,12 +18,19 @@ class SmartLockManagerPanel extends HTMLElement {
     this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
     this._zones = [];           // Zone model from /api/smart_lock_manager/zones
     this._unhomedLocks = [];    // Locks in no zone (the "+" picker pool)
+    this._observeOnly = false;  // True under SLM_DEV_MOCK (gates Dev Alerts UI)
+    this._devAlerts = [];       // OBSERVE-ONLY recorded dev alerts
     this._zoneDataLoaded = false;
     this._openZoneMenu = null;  // zone_id whose header gear menu is open
     this._openLockMenu = null;  // entity_id whose per-lock gear menu is open
     this._openPicker = null;    // zone_id whose "+" unhomed picker is open
     this._editLockModalOpen = false; // per-lock Edit (friendly name) modal
     this._editLockEntityId = null;   // entity_id being edited in that modal
+    // Per-zone, per-section collapse state. Keyed "<zoneId>:<section>" -> bool
+    // (true = expanded). Absent key means "use computed default" (see
+    // _isSectionExpanded). Survives re-render so a data refresh doesn't reset
+    // what the user opened/closed.
+    this._sectionState = {};
     this.setupEventListeners();
   }
 
@@ -149,6 +156,10 @@ class SmartLockManagerPanel extends HTMLElement {
       const payload = await this._hass.callApi('GET', 'smart_lock_manager/zones');
       this._zones = Array.isArray(payload?.zones) ? payload.zones : [];
       this._unhomedLocks = Array.isArray(payload?.unhomed_locks) ? payload.unhomed_locks : [];
+      // OBSERVE-ONLY dev alert log. ``observe_only`` is true only under
+      // SLM_DEV_MOCK; the Dev Alerts section renders only then.
+      this._observeOnly = !!payload?.observe_only;
+      this._devAlerts = Array.isArray(payload?.dev_alerts) ? payload.dev_alerts : [];
       this._zoneDataLoaded = true;
       if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
         this.requestUpdate();
@@ -1053,12 +1064,19 @@ class SmartLockManagerPanel extends HTMLElement {
     let color = '#9e9e9e';
     let status = 'Click to configure';
     if (slot.has_code) {
+      // sync_status (synced/pending/error) is the authoritative live field
+      // derived from member locks; fall back to is_synced for older payloads.
+      const syncStatus = slot.sync_status
+        || (slot.is_synced ? 'synced' : 'pending');
       if (!slot.is_active) {
         color = '#9e9e9e';
         status = 'Disabled';
-      } else if (!slot.is_synced) {
+      } else if (syncStatus === 'error') {
         color = '#cc3333';
-        status = 'Not synced';
+        status = 'Sync failed';
+      } else if (syncStatus === 'pending') {
+        color = '#f0a020';
+        status = 'Syncing…';
       } else {
         color = '#4a7c2a';
         status = 'Active';
@@ -1070,8 +1088,23 @@ class SmartLockManagerPanel extends HTMLElement {
     return { color, title, status };
   }
 
-  // Render the fixed-height locks section for a zone: section title with a
-  // "+" add-lock affordance, then a uniform scroll list of member rows.
+  // Resolve whether a collapsible section is currently expanded.
+  // Reads the user's stored toggle if present; otherwise falls back to the
+  // computed per-zone default (so populated sections start collapsed but the
+  // user's explicit choice persists across re-renders/refreshes).
+  // - Inputs: zoneId (str), section (str: 'locks'|'slots'|'log'),
+  //   defaultExpanded (bool).
+  // - Outputs: bool (true = expanded).
+  _isSectionExpanded(zoneId, section, defaultExpanded) {
+    const key = `${zoneId}:${section}`;
+    const stored = this._sectionState[key];
+    return (stored === undefined) ? !!defaultExpanded : !!stored;
+  }
+
+  // Render the fixed-height locks section for a zone: a clickable collapse
+  // header (with chevron + "+" add-lock affordance) over a uniform scroll list
+  // of member rows. Collapsed by default when the zone has >= 1 member lock;
+  // expanded when empty so the "+" affordance is visible.
   // - Inputs: zone (zone object from the API).
   // - Outputs: HTML string.
   renderLocksSection(zone) {
@@ -1081,18 +1114,26 @@ class SmartLockManagerPanel extends HTMLElement {
       ? members.map(m => this.renderLockRow(zone, m)).join('')
       : '<div class="zone-locks-empty">No locks in this zone yet. Use + to add one.</div>';
 
+    const expanded = this._isSectionExpanded(zone.zone_id, 'locks', members.length === 0);
+    const chevron = expanded ? 'mdi:chevron-down' : 'mdi:chevron-up';
+
     return `
       <div class="zone-locks-section">
-        <div class="zone-section-head">
+        <div class="zone-section-head" onclick="SmartLockManagerPanel.toggleSection('${zid}', 'locks')">
           <span class="zone-section-title">Locks${members.length ? ` (${members.length})` : ''}</span>
-          <button class="zone-add-lock-btn"
-                  onclick="SmartLockManagerPanel.toggleLockPicker('${zid}')"
-                  title="Add an unhomed lock to this zone">
-            <ha-icon icon="mdi:plus" style="width:18px;height:18px;"></ha-icon>
-          </button>
+          <div class="zone-section-head-right">
+            <button class="zone-add-lock-btn"
+                    onclick="event.stopPropagation(); SmartLockManagerPanel.toggleLockPicker('${zid}')"
+                    title="Add an unhomed lock to this zone">
+              <ha-icon icon="mdi:plus" style="width:18px;height:18px;"></ha-icon>
+            </button>
+            <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+          </div>
         </div>
-        <div class="zone-locks-list">${rows}</div>
-        ${this._openPicker === zone.zone_id ? this.renderLockPicker(zone) : ''}
+        <div class="zone-locks-body" style="${expanded ? '' : 'display:none;'}">
+          <div class="zone-locks-list">${rows}</div>
+          ${this._openPicker === zone.zone_id ? this.renderLockPicker(zone) : ''}
+        </div>
       </div>
     `;
   }
@@ -1192,10 +1233,35 @@ class SmartLockManagerPanel extends HTMLElement {
   renderZoneSlots(zone) {
     const zid = this._esc(zone.zone_id);
     const slots = Array.isArray(zone.code_slots) ? zone.code_slots : [];
+    // "Configured" = slots that actually hold a code (has_code), matching the
+    // zone stat. Collapse by default only when at least one is configured.
+    const configuredCount = slots.filter(s => s.has_code).length;
+    const expanded = this._isSectionExpanded(zone.zone_id, 'slots', configuredCount === 0);
+    const chevron = expanded ? 'mdi:chevron-down' : 'mdi:chevron-up';
+
+    const header = `
+      <div class="zone-section-head" onclick="SmartLockManagerPanel.toggleSection('${zid}', 'slots')">
+        <span class="zone-section-title">Slots${configuredCount ? ` (${configuredCount})` : ''}</span>
+        <div class="zone-section-head-right">
+          <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+        </div>
+      </div>
+    `;
+
     if (!slots.length) {
-      return '<div class="slots-container"><div class="zone-locks-empty">No code slots.</div></div>';
+      return `
+        <div class="zone-slots-section">
+          ${header}
+          <div class="zone-slots-body" style="${expanded ? '' : 'display:none;'}">
+            <div class="slots-container"><div class="zone-locks-empty">No code slots.</div></div>
+          </div>
+        </div>
+      `;
     }
     return `
+      <div class="zone-slots-section">
+        ${header}
+        <div class="zone-slots-body" style="${expanded ? '' : 'display:none;'}">
       <div class="slots-container">
         ${slots.map(slot => {
           const d = this._zoneSlotDisplay(slot);
@@ -1224,6 +1290,8 @@ class SmartLockManagerPanel extends HTMLElement {
             </div>
           `;
         }).join('')}
+      </div>
+        </div>
       </div>
     `;
   }
@@ -1257,25 +1325,102 @@ class SmartLockManagerPanel extends HTMLElement {
         ? `<span class="al-lock-badge" title="${this._esc(entry._doorName)}">${this._esc(entry._doorName)}</span>`
         : '';
       const attr = this._esc(p.attr);
-      const statusText = this._esc(entry.action || 'unknown');
+      // Status word, Title Case (the icon already capitalizes visually).
+      const rawStatus = entry.action || 'unknown';
+      const statusText = this._esc(rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1));
+      // Whole-row tooltip: status - door/zone - event/method (incl. user/slot) - time.
+      const tooltipParts = [statusText];
+      if (entry._doorName) tooltipParts.push(this._esc(entry._doorName));
+      if (attr) tooltipParts.push(attr);
+      const ts = this._esc(this.formatAccessLogTime(entry.timestamp));
+      if (ts) tooltipParts.push(ts);
+      const rowTooltip = tooltipParts.join(' - ');
       return `
-        <div class="access-log-row" title="${statusText} · ${attr}${entry._doorName ? ' · ' + this._esc(entry._doorName) : ''}">
-          <ha-icon class="al-icon" icon="${p.icon}" title="${statusText}" style="width:18px;height:18px;color:${p.color};flex-shrink:0;text-transform:capitalize;"></ha-icon>
+        <div class="access-log-row" title="${rowTooltip}">
+          <ha-icon class="al-icon" icon="${p.icon}" title="${rowTooltip}" style="width:18px;height:18px;color:${p.color};flex-shrink:0;text-transform:capitalize;"></ha-icon>
           ${badge}
           <span class="al-attr-text">${attr}</span>
-          <span class="al-time">${this._esc(this.formatAccessLogTime(entry.timestamp))}</span>
+          <span class="al-time">${ts}</span>
         </div>
       `;
     }).join('');
 
+    // Access Log is expanded by default.
+    const expanded = this._isSectionExpanded(zone.zone_id, 'log', true);
+    const chevron = expanded ? 'mdi:chevron-down' : 'mdi:chevron-up';
+
     return `
       <div class="access-log-section">
-        <div class="access-log-header" onclick="SmartLockManagerPanel.toggleAccessLog('${bodyId}')">
+        <div class="access-log-header" onclick="SmartLockManagerPanel.toggleSection('${this._esc(zone.zone_id)}', 'log')">
           <span>Access Log${combined.length ? ` (${combined.length})` : ''}</span>
-          <ha-icon icon="mdi:chevron-down" style="width:18px;height:18px;"></ha-icon>
+          <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
         </div>
-        <div class="access-log-body" id="${bodyId}">
+        <div class="access-log-body" id="${bodyId}" style="${expanded ? '' : 'display:none;'}">
           ${combined.length ? rows : '<div class="access-log-empty">No access events recorded yet.</div>'}
+        </div>
+      </div>
+    `;
+  }
+
+  // Resolve the severity icon + color + recovery styling for one dev alert.
+  // - Inputs: alert (alert record from the zones API).
+  // - Outputs: { icon, color, label } for the row marker.
+  getDevAlertPresentation(alert) {
+    if (alert.is_recovery) {
+      return { icon: 'mdi:check-circle', color: '#4a7c2a', label: 'Recovery' };
+    }
+    const sev = (alert.severity || '').toUpperCase();
+    if (sev === 'CRIT') {
+      return { icon: 'mdi:alert-octagon', color: '#cc3333', label: 'Critical' };
+    }
+    return { icon: 'mdi:alert', color: '#f0a020', label: 'Warning' };
+  }
+
+  // Render a zone's OBSERVE-ONLY "Dev Alerts" section: a collapsible header
+  // over uniform single-line rows (severity marker / door / type / message /
+  // time), recovery rows styled distinctly. Only shown under SLM_DEV_MOCK
+  // (the API only carries dev_alerts then). Clearly labeled observe-only —
+  // NO notifications are sent by the engine that records these.
+  // - Inputs: zone (zone obj with dev_alerts[]).
+  // - Outputs: HTML string ('' when not in observe-only mode).
+  renderZoneDevAlerts(zone) {
+    if (!this._observeOnly) return '';
+    const zid = this._esc(zone.zone_id);
+    const alerts = Array.isArray(zone.dev_alerts) ? zone.dev_alerts : [];
+
+    const rows = alerts.map(alert => {
+      const p = this.getDevAlertPresentation(alert);
+      const door = this._esc(alert.door_name || alert.member_entity_id || '');
+      const type = this._esc((alert.alert_type || '').replace(/_/g, ' '));
+      const msg = this._esc(alert.message || '');
+      const ts = this._esc(this.formatAccessLogTime(alert.timestamp));
+      const tooltip = [p.label, door, type, msg, ts].filter(Boolean).join(' - ');
+      const recoveryCls = alert.is_recovery ? ' dev-alert-recovery' : '';
+      return `
+        <div class="access-log-row dev-alert-row${recoveryCls}" title="${tooltip}">
+          <ha-icon class="al-icon" icon="${p.icon}" style="width:18px;height:18px;color:${p.color};flex-shrink:0;"></ha-icon>
+          <span class="al-lock-badge" title="${door}">${door}</span>
+          <span class="al-attr-text">${type ? `[${type}] ` : ''}${msg}</span>
+          <span class="al-time">${ts}</span>
+        </div>
+      `;
+    }).join('');
+
+    // Collapsed by default (secondary diagnostic info).
+    const expanded = this._isSectionExpanded(zone.zone_id, 'alerts', false);
+    const chevron = expanded ? 'mdi:chevron-down' : 'mdi:chevron-up';
+
+    return `
+      <div class="access-log-section dev-alerts-section">
+        <div class="access-log-header" onclick="SmartLockManagerPanel.toggleSection('${zid}', 'alerts')">
+          <span>Dev Alerts${alerts.length ? ` (${alerts.length})` : ''}</span>
+          <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+        </div>
+        <div class="dev-alerts-banner" style="${expanded ? '' : 'display:none;'}">
+          Dev / observe-only — no notifications sent
+        </div>
+        <div class="access-log-body" style="${expanded ? '' : 'display:none;'}">
+          ${alerts.length ? rows : '<div class="access-log-empty">No dev alerts recorded yet.</div>'}
         </div>
       </div>
     `;
@@ -1293,6 +1438,26 @@ class SmartLockManagerPanel extends HTMLElement {
   // locks section, slots, access log.
   // - Inputs: zone (zone obj).
   // - Outputs: HTML string.
+  // Render a compact amber warning banner when a zone has slot(s) whose code
+  // genuinely FAILED to sync on a member lock. Pending/in-flight slots never
+  // appear here (only error_slots from the API). Returns '' when no errors so
+  // healthy zones show no banner.
+  // - Inputs: zone (zone object from the API).
+  // - Outputs: HTML string (possibly empty).
+  renderZoneSyncWarning(zone) {
+    const errs = Array.isArray(zone.error_slots) ? zone.error_slots : [];
+    if (!errs.length) return '';
+    const label = errs.length === 1
+      ? `Slot ${this._esc(errs[0])} failed to sync`
+      : `Slots ${this._esc(errs.join(', '))} failed to sync`;
+    return `
+      <div class="zone-sync-warning" role="alert">
+        <ha-icon icon="mdi:alert" style="width:18px;height:18px;flex:0 0 auto;"></ha-icon>
+        <span>${label}</span>
+      </div>
+    `;
+  }
+
   renderZoneCard(zone) {
     const zid = this._esc(zone.zone_id);
     const name = this._esc(zone.name || 'Zone');
@@ -1357,9 +1522,11 @@ class SmartLockManagerPanel extends HTMLElement {
           </div>
         </div>
 
+        ${this.renderZoneSyncWarning(zone)}
         ${this.renderLocksSection(zone)}
         ${this.renderZoneSlots(zone)}
         ${this.renderZoneAccessLog(zone)}
+        ${this.renderZoneDevAlerts(zone)}
       </div>
     `;
   }
@@ -1648,6 +1815,24 @@ class SmartLockManagerPanel extends HTMLElement {
 
         .zone-gear-wrap { position: relative; }
 
+        .zone-sync-warning {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 12px 0 0 0;
+          padding: 8px 12px;
+          border-radius: 8px;
+          background: rgba(240, 160, 32, 0.12);
+          border: 1px solid rgba(240, 160, 32, 0.55);
+          color: #b9770e;
+          font-size: 13px;
+          font-weight: 500;
+          line-height: 1.3;
+        }
+        .zone-sync-warning ha-icon {
+          color: #f0a020;
+        }
+
         .zone-locks-section {
           position: relative;
           margin: 12px 0 16px 0;
@@ -1662,6 +1847,29 @@ class SmartLockManagerPanel extends HTMLElement {
           align-items: center;
           justify-content: space-between;
           margin-bottom: 8px;
+          cursor: pointer;
+          user-select: none;
+        }
+        .zone-section-head:hover .zone-section-title {
+          opacity: 1;
+        }
+
+        .zone-section-head-right {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: var(--secondary-text-color);
+        }
+
+        /* Slots section wrapper mirrors the locks section framing so its
+           collapse header lines up visually. */
+        .zone-slots-section {
+          position: relative;
+          margin: 12px 0 16px 0;
+          padding: 10px 12px;
+          background: var(--primary-background-color);
+          border-radius: 8px;
+          border: 1px solid var(--divider-color);
         }
 
         .zone-section-title {
@@ -2059,6 +2267,29 @@ class SmartLockManagerPanel extends HTMLElement {
           font-size: 11px;
           white-space: nowrap;
           flex-shrink: 0;
+        }
+
+        /* OBSERVE-ONLY Dev Alerts section. */
+        .dev-alerts-banner {
+          padding: 5px 12px;
+          font-size: 11px;
+          font-style: italic;
+          color: var(--secondary-text-color);
+          background: var(--secondary-background-color);
+          border-top: 1px solid var(--divider-color);
+        }
+
+        .dev-alert-row .al-attr-text {
+          color: var(--primary-text-color);
+        }
+
+        .dev-alert-row.dev-alert-recovery {
+          opacity: 0.7;
+        }
+
+        .dev-alert-row.dev-alert-recovery .al-attr-text {
+          font-style: italic;
+          color: var(--secondary-text-color);
         }
 
         .btn {
@@ -2731,16 +2962,33 @@ class SmartLockManagerPanel extends HTMLElement {
     panel.closeModal();
   }
 
-  // Collapse/expand an access-log body by element id (ephemeral UI state).
-  static toggleAccessLog(bodyId) {
+  // Collapse/expand a zone's collapsible section ('locks' | 'slots' | 'log').
+  // Flips the persisted per-zone/per-section state and re-renders so the choice
+  // survives data refreshes and doesn't disturb other cards/sections.
+  static toggleSection(zoneId, section) {
     const panel = window.smartLockManagerPanel;
-    if (!panel || !panel.shadowRoot) {
+    if (!panel) {
       return;
     }
-    const body = panel.shadowRoot.getElementById(bodyId);
-    if (body) {
-      body.style.display = (body.style.display === 'none') ? '' : 'none';
+    const key = `${zoneId}:${section}`;
+    // Resolve current effective state (stored or computed default) then invert.
+    const zone = (panel._zones || []).find(z => String(z.zone_id) === String(zoneId));
+    let current;
+    if (panel._sectionState[key] !== undefined) {
+      current = panel._sectionState[key];
+    } else if (section === 'locks') {
+      const members = Array.isArray(zone?.members) ? zone.members : [];
+      current = members.length === 0;
+    } else if (section === 'slots') {
+      const slots = Array.isArray(zone?.code_slots) ? zone.code_slots : [];
+      current = slots.filter(s => s.has_code).length === 0;
+    } else if (section === 'alerts') {
+      current = false; // dev alerts default collapsed
+    } else {
+      current = true; // access log default expanded
     }
+    panel._sectionState[key] = !current;
+    panel.requestUpdate();
   }
 
   static saveSlot() {
