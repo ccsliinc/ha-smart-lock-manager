@@ -424,7 +424,9 @@ def _all_dev_alerts(hass: HomeAssistant) -> List[Dict[str, Any]]:
     - Description: Reads the OBSERVE-ONLY alert engine's recorded alerts. The
       engine is only present under ``SLM_DEV_MOCK``; outside dev this is always
       empty. Records are already PIN-free by construction (the engine never
-      stores PINs).
+      stores PINs). Each record may carry a ``notify_intents`` list — the
+      DRY-RUN "would-notify" intents ({channel, recipients|targets, subject})
+      rendered by the notification layer; nothing was actually sent.
     - Inputs: hass (HomeAssistant).
     - Outputs: list of alert record dicts (may be empty).
     """

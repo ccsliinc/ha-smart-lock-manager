@@ -1398,6 +1398,7 @@ class SmartLockManagerPanel extends HTMLElement {
       const ts = this._esc(this.formatAccessLogTime(alert.timestamp));
       const tooltip = [p.label, door, type, msg, ts].filter(Boolean).join(' - ');
       const recoveryCls = alert.is_recovery ? ' dev-alert-recovery' : '';
+      const intentLine = this.renderNotifyIntents(alert);
       return `
         <div class="access-log-row dev-alert-row${recoveryCls}" title="${tooltip}">
           <ha-icon class="al-icon" icon="${p.icon}" style="width:18px;height:18px;color:${p.color};flex-shrink:0;"></ha-icon>
@@ -1405,6 +1406,7 @@ class SmartLockManagerPanel extends HTMLElement {
           <span class="al-attr-text">${type ? `[${type}] ` : ''}${msg}</span>
           <span class="al-time">${ts}</span>
         </div>
+        ${intentLine}
       `;
     }).join('');
 
@@ -1424,6 +1426,34 @@ class SmartLockManagerPanel extends HTMLElement {
         <div class="access-log-body" style="${expanded ? '' : 'display:none;'}">
           ${alerts.length ? rows : '<div class="access-log-empty">No dev alerts recorded yet.</div>'}
         </div>
+      </div>
+    `;
+  }
+
+  // Render the DRY-RUN "would-notify" sub-line for one dev alert. Shows what
+  // the notification layer WOULD have sent (email recipients / mobile targets)
+  // without anything actually being sent. Recipient emails are non-secret user
+  // config (safe to show); PINs are never present in intents.
+  // - Inputs: alert (dev alert record with optional notify_intents[]).
+  // - Outputs: HTML string ('' when there are no intents).
+  renderNotifyIntents(alert) {
+    const intents = Array.isArray(alert.notify_intents) ? alert.notify_intents : [];
+    if (!intents.length) return '';
+    const parts = intents.map(intent => {
+      if (intent.channel === 'email') {
+        const to = Array.isArray(intent.recipients) ? intent.recipients.join(', ') : '';
+        return `✉ would email ${this._esc(to)}`;
+      }
+      if (intent.channel === 'mobile') {
+        const tg = Array.isArray(intent.targets) ? intent.targets.join(', ') : '';
+        return `📱 would push ${this._esc(tg)}`;
+      }
+      return '';
+    }).filter(Boolean);
+    if (!parts.length) return '';
+    return `
+      <div class="dev-alert-intents" title="DRY-RUN — nothing actually sent">
+        ${parts.join(' &nbsp;·&nbsp; ')}
       </div>
     `;
   }
@@ -2295,6 +2325,16 @@ class SmartLockManagerPanel extends HTMLElement {
         .dev-alert-row.dev-alert-recovery .al-attr-text {
           font-style: italic;
           color: var(--secondary-text-color);
+        }
+
+        /* DRY-RUN "would-notify" sub-line under a dev alert row. */
+        .dev-alert-intents {
+          padding: 1px 12px 4px 36px;
+          font-size: 10.5px;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .btn {

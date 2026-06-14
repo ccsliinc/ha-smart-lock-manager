@@ -47,6 +47,7 @@ from homeassistant.helpers.event import (
 )
 
 from .const import DOMAIN
+from .dev_mock import is_dev_mock
 from .models.zone import Zone
 from .models.zone_settings import (
     DEFAULT_CLOSE_TIME,
@@ -60,6 +61,7 @@ from .models.zone_settings import (
     DEFAULT_WEEKDAYS,
     DEFAULT_WORKDAY_ENTITY,
 )
+from .notifications import NotificationDispatcher
 from .storage import load_alert_log, save_alert_log
 from .zone_runtime import get_zone_for_lock, get_zone_registry
 
@@ -174,6 +176,10 @@ class AlertEngine:
         """
         self.hass = hass
         self.alerts: List[Dict[str, Any]] = []
+        # DRY-RUN notification dispatcher. dry_run is forced ON under dev-mock
+        # (this engine only ever runs there), so it renders + records "would
+        # notify" intents and sends NOTHING. See notifications.py.
+        self._dispatcher = NotificationDispatcher(hass, dry_run=is_dev_mock())
         # Episode flags: key f"{entity_id}|{kind}" -> dict with at least
         # {"alerted": bool}. Sustained additionally tracks "max_tier".
         self._alerted: Dict[str, Dict[str, Any]] = {}
@@ -735,6 +741,10 @@ class AlertEngine:
             "severity": severity,
             "message": message,
             "is_recovery": is_recovery,
+            # Filled asynchronously by the DRY-RUN dispatcher (see _notify). The
+            # engine still records ZERO real sends; these are "would-notify"
+            # intents surfaced to the API/panel for parity checking.
+            "notify_intents": [],
         }
         self.alerts.append(record)
         if len(self.alerts) > MAX_ALERTS:
@@ -748,7 +758,33 @@ class AlertEngine:
             door_name,
             zone_name,
         )
-        self.hass.async_create_task(self._persist())
+        # Route to the DRY-RUN dispatcher for the owning zone (records intents,
+        # sends nothing), then persist. The dispatch is async and mutates the
+        # record in place before the final persist.
+        self.hass.async_create_task(self._notify(entity_id, record))
+
+    async def _notify(self, entity_id: str, record: Dict[str, Any]) -> None:
+        """Run the DRY-RUN dispatcher for a record, then persist.
+
+        - Description: Resolves the owning zone's ``settings.notify`` config and,
+          if email and/or mobile is enabled, asks the dispatcher to render the
+          "would-notify" intents (no real send in dev). The intents are written
+          back onto the record so the API/panel can show them. Always persists,
+          even when no channel is enabled (intents stays empty).
+        - Inputs: entity_id (str member lock id), record (dict alert record).
+        - Outputs: None.
+        """
+        zone = self._zone_settings_for(entity_id)
+        if zone is not None:
+            notify = zone.settings.notify
+            if notify.email.enabled or notify.mobile.enabled:
+                try:
+                    record["notify_intents"] = await self._dispatcher.dispatch(
+                        record, notify
+                    )
+                except Exception as exc:  # noqa: BLE001 - never crash recording
+                    _LOGGER.error("AlertEngine: dispatch failed: %s", exc)
+        await self._persist()
 
     async def _persist(self) -> None:
         """Persist the current alert log + alerted-state to storage.
