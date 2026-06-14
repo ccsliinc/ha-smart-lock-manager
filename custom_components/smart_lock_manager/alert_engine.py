@@ -3,13 +3,18 @@
 This is the FIRST push of folding the office/home pyscript alerting into the
 SLM integration. It is deliberately constrained:
 
-* **OBSERVE-ONLY** — it DETECTS and RECORDS alerts only. It sends ZERO
-  notifications: no email, no ``notify`` service, no ``persistent_notification``.
-  There is intentionally no import of, or call into, any notification path.
-* **DEV-GATED** — the engine is only ever instantiated when ``is_dev_mock()``
-  is true (see ``async_setup_entry`` in ``__init__.py``). In production the
-  class is never constructed, so it cannot run alongside the live pyscripts and
-  production behavior is 100% unchanged.
+* **OBSERVE-ONLY detection** — it DETECTS and RECORDS alerts only. Notification
+  is delegated to the DRY-RUN dispatcher (see :mod:`.notifications`), which sends
+  NOTHING unless the independent ``SLM_ENABLE_REAL_NOTIFY`` flag is set AND we
+  are not in dev. In dev and in PROD OBSERVE it only records "would-notify"
+  intents.
+* **MODE-GATED construction** (Phase 4d) — the engine is instantiated when
+  ``is_dev_mock() OR engines_enabled()`` (see :func:`.gating.engines_active` and
+  ``async_setup_entry`` in ``__init__.py``). With both flags off (production
+  default) the class is never constructed, so it cannot run alongside the live
+  pyscripts and production behavior is 100% unchanged. Under ``SLM_ENABLE_ENGINES``
+  (dev-mock off) it runs in PROD OBSERVE against the REAL office entities,
+  detecting + recording in parallel with the pyscripts but sending nothing.
 * **Pyscripts untouched** — the detection thresholds here MIRROR the existing
   pyscripts so the two can be compared, but the pyscripts are not modified or
   imported.
@@ -48,6 +53,7 @@ from homeassistant.helpers.event import (
 
 from .const import DOMAIN
 from .dev_mock import is_dev_mock
+from .gating import current_engine_mode, real_notify_enabled
 from .models.zone import Zone
 from .models.zone_settings import (
     DEFAULT_CLOSE_TIME,
@@ -176,10 +182,15 @@ class AlertEngine:
         """
         self.hass = hass
         self.alerts: List[Dict[str, Any]] = []
-        # DRY-RUN notification dispatcher. dry_run is forced ON under dev-mock
-        # (this engine only ever runs there), so it renders + records "would
-        # notify" intents and sends NOTHING. See notifications.py.
-        self._dispatcher = NotificationDispatcher(hass, dry_run=is_dev_mock())
+        # DRY-RUN notification dispatcher. dry_run is forced ON whenever we are
+        # NOT cleared for a real send: always under dev-mock, and in PROD OBSERVE
+        # unless the independent SLM_ENABLE_REAL_NOTIFY flag is explicitly set.
+        # In dry-run it renders + records "would notify" intents and sends
+        # NOTHING. Only (observe mode AND real-notify) lets a real send through.
+        # See notifications.py and gating.py.
+        self._dispatcher = NotificationDispatcher(
+            hass, dry_run=is_dev_mock() or not real_notify_enabled()
+        )
         # Episode flags: key f"{entity_id}|{kind}" -> dict with at least
         # {"alerted": bool}. Sustained additionally tracks "max_tier".
         self._alerted: Dict[str, Dict[str, Any]] = {}
@@ -215,7 +226,9 @@ class AlertEngine:
             )
         self._started = True
         _LOGGER.info(
-            "AlertEngine (observe-only) started: monitoring %d entit(y/ies)",
+            "AlertEngine started: mode=%s real_notify=%s monitoring %d entit(y/ies)",
+            current_engine_mode(),
+            real_notify_enabled(),
             len(entities),
         )
 

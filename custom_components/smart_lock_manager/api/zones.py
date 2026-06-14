@@ -28,7 +28,12 @@ from homeassistant.core import HomeAssistant, State
 from ..alert_engine import ALERT_ENGINE_KEY
 from ..auto_lock import AUTO_LOCK_ENGINE_KEY
 from ..const import MAX_SYNC_ATTEMPTS
-from ..dev_mock import is_dev_mock
+from ..gating import (
+    MODE_OFF,
+    current_engine_mode,
+    real_autolock_enabled,
+    real_notify_enabled,
+)
 from ..models.lock import CodeSlot, SmartLockManagerLock
 from ..models.zone import Zone
 from ..zone_runtime import (
@@ -442,13 +447,19 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
 
     - Description: Serializes the entire in-memory zone registry (including
       empty zones) plus the unhomed lock pool, enriching each member with live
-      hardware state. Also attaches the OBSERVE-ONLY dev alert log (top-level
-      and per-zone) plus an ``observe_only`` flag — present only under
-      ``SLM_DEV_MOCK``; always empty in production. Never includes raw PINs.
+      hardware state. Also attaches the recorded alert log (top-level and
+      per-zone) and the auto-lock outcome records, plus the engine-mode surface:
+      ``engine_mode`` (``dev`` | ``observe`` | ``off``), the independent
+      ``real_notify`` / ``real_autolock`` booleans, and the legacy
+      ``observe_only`` flag (true whenever an engine is constructed). When the
+      engines are off (production default) the alert/record lists are empty and
+      ``engine_mode`` is ``off``. Never includes raw PINs.
     - Inputs: hass (HomeAssistant).
-    - Outputs: dict with ``zones``, ``unhomed_locks``, ``dev_alerts`` and
-      ``observe_only``.
+    - Outputs: dict with ``zones``, ``unhomed_locks``, ``dev_alerts``,
+      ``auto_lock_records``, ``engine_mode``, ``real_notify``,
+      ``real_autolock`` and ``observe_only``.
     """
+    mode = current_engine_mode()
     locks = _all_locks(hass)
     registry = get_zone_registry(hass)
     dev_alerts = _all_dev_alerts(hass)
@@ -476,7 +487,14 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
         "unhomed_locks": unhomed,
         "dev_alerts": dev_alerts,
         "auto_lock_records": _all_auto_lock_records(hass),
-        "observe_only": is_dev_mock(),
+        # Phase 4d engine-mode surface. ``engine_mode`` drives the panel banner;
+        # the real-flag booleans tell the user whether a real send / real
+        # auto-lock could fire. ``observe_only`` (legacy) gates the alerts UI and
+        # is true whenever an engine is constructed (dev OR observe).
+        "engine_mode": mode,
+        "real_notify": real_notify_enabled(),
+        "real_autolock": real_autolock_enabled(),
+        "observe_only": mode != MODE_OFF,
     }
 
 

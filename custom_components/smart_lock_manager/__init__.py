@@ -72,6 +72,7 @@ from .dev_mock import (
     mock_node_for_entity,
 )
 from .frontend.panel import async_register_panel, async_unregister_panel
+from .gating import engines_active
 from .models.lock import ACCESS_LOG_MAX_ENTRIES, SmartLockManagerLock
 from .services.lock_services import LockServices
 from .services.management_services import ManagementServices
@@ -637,18 +638,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_ensure_zones_loaded(hass)
     await async_run_migration_if_needed(hass)
 
-    # DEV-ONLY: OBSERVE-ONLY alert detection engine. Instantiated exactly once
-    # per HA process and ONLY under SLM_DEV_MOCK, so it never runs in
-    # production alongside the live pyscripts. It records alerts but sends ZERO
-    # notifications. Started after zones are loaded so it can enumerate every
-    # member lock. The companion dev_simulate_alert service lets each alert
-    # type be triggered on demand without waiting for real conditions.
-    if is_dev_mock() and ALERT_ENGINE_KEY not in hass.data:
+    # OBSERVE/DRY-RUN alert detection engine (Phase 4d). Instantiated exactly
+    # once per HA process when ``engines_active()`` (dev-mock OR the explicit
+    # SLM_ENABLE_ENGINES flag). With both off (production default) it is never
+    # constructed and stays fully inert. In dev it drives mock locks; in PROD
+    # OBSERVE it detects + records against the REAL office entities in parallel
+    # with the live pyscripts. It sends ZERO notifications unless the
+    # independent SLM_ENABLE_REAL_NOTIFY flag is set (and not dev). Started
+    # after zones load so it can enumerate every member lock. The companion
+    # dev_simulate_alert service is DEV-MOCK-ONLY (see its own guard below).
+    if engines_active() and ALERT_ENGINE_KEY not in hass.data:
         engine = AlertEngine(hass)
         hass.data[ALERT_ENGINE_KEY] = engine
         await engine.async_start()
 
-        if not hass.services.has_service(DOMAIN, "dev_simulate_alert"):
+        if is_dev_mock() and not hass.services.has_service(
+            DOMAIN, "dev_simulate_alert"
+        ):
 
             async def dev_simulate_alert_wrapper(service_call: ServiceCall) -> None:
                 active = hass.data.get(ALERT_ENGINE_KEY)
@@ -688,20 +694,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "(observe-only alert engine)"
             )
 
-    # DEV-ONLY: AUTO-LOCK engine (Phase 4c). Constructed exactly once per HA
-    # process and ONLY under SLM_DEV_MOCK, so it never runs in production
-    # alongside the live pyscripts. Even in dev it issues lock.lock only against
-    # the dummy template locks; a real lock.lock in production additionally
-    # requires the explicit SLM_ENABLE_REAL_AUTOLOCK flag (default OFF). Started
-    # after zones load so it can schedule COB triggers + idle timers per zone.
-    # The companion dev_trigger_autolock service forces a COB run / idle expiry
-    # on demand and can force a verify-failure to exercise the retry+alert path.
-    if is_dev_mock() and AUTO_LOCK_ENGINE_KEY not in hass.data:
+    # AUTO-LOCK engine (Phase 4c construction, Phase 4d mode-gating). Built once
+    # per HA process when ``engines_active()`` (dev-mock OR SLM_ENABLE_ENGINES);
+    # with both off (production default) it is never constructed. In dev it
+    # issues lock.lock against the dummy template locks. In PROD OBSERVE it
+    # RECORDS "would auto-lock" intents and issues NO lock.lock; a real lock.lock
+    # requires the independent SLM_ENABLE_REAL_AUTOLOCK flag (default OFF).
+    # Started after zones load so it can schedule COB triggers + idle timers per
+    # zone. The companion dev_trigger_autolock service is DEV-MOCK-ONLY (guard
+    # below).
+    if engines_active() and AUTO_LOCK_ENGINE_KEY not in hass.data:
         auto_lock_engine = AutoLockEngine(hass)
         hass.data[AUTO_LOCK_ENGINE_KEY] = auto_lock_engine
         await auto_lock_engine.async_start()
 
-        if not hass.services.has_service(DOMAIN, "dev_trigger_autolock"):
+        if is_dev_mock() and not hass.services.has_service(
+            DOMAIN, "dev_trigger_autolock"
+        ):
 
             async def dev_trigger_autolock_wrapper(service_call: ServiceCall) -> None:
                 active = hass.data.get(AUTO_LOCK_ENGINE_KEY)
@@ -783,15 +792,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 unsub()
                 _LOGGER.info("Access log: removed zwave_js_notification listener")
 
-            # Tear down the dev-only alert engine (only ever present under
-            # SLM_DEV_MOCK) so its state listeners + timers are released.
+            # Tear down the alert engine (present under dev-mock OR
+            # SLM_ENABLE_ENGINES) so its state listeners + timers are released.
             engine = hass.data.pop(ALERT_ENGINE_KEY, None)
             if engine is not None:
                 engine.async_stop()
 
-            # Tear down the dev-only auto-lock engine (only ever present under
-            # SLM_DEV_MOCK) so its time triggers, listeners + idle timers are
-            # released.
+            # Tear down the auto-lock engine (present under dev-mock OR
+            # SLM_ENABLE_ENGINES) so its time triggers, listeners + idle timers
+            # are released.
             auto_lock_engine = hass.data.pop(AUTO_LOCK_ENGINE_KEY, None)
             if auto_lock_engine is not None:
                 auto_lock_engine.async_stop()

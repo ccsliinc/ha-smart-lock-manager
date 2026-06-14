@@ -16,19 +16,25 @@ runs two modes per zone, driven entirely by the zone's ``settings``:
   from ``sun.sun`` ``next_dusk`` / ``next_dawn``. The timer is cancelled/reset
   on re-lock or re-unlock.
 
-Two layers of gating make this safe to run beside the user's live pyscripts:
+Two ORTHOGONAL layers of gating make this safe to run beside the live pyscripts:
 
-* **DEV-GATED construction.** The engine is only ever instantiated under
-  ``is_dev_mock()`` (see ``async_setup_entry`` in ``__init__.py``), exactly like
-  :class:`~.alert_engine.AlertEngine`. In production the class is never built,
-  so production behaviour is 100% unchanged.
-* **Execution gating.** Issuing an ACTUAL ``lock.lock`` is permitted only when
-  :func:`is_dev_mock` is true (the lock entities are dev template locks backed
-  by ``input_boolean`` — never hardware) OR the single explicit env flag
-  :data:`REAL_AUTOLOCK_ENV` (``SLM_ENABLE_REAL_AUTOLOCK``, default OFF) is set.
-  With both off the engine NEVER calls ``lock.lock``. This phase ships the real
-  flag OFF, so the engine drives only the dev mocks and cannot double-lock a
-  real door alongside the live pyscripts.
+* **MODE-GATED construction** (Phase 4d). The engine is instantiated when
+  ``is_dev_mock() OR engines_enabled()`` (see :func:`.gating.engines_active` and
+  ``async_setup_entry`` in ``__init__.py``), exactly like
+  :class:`~.alert_engine.AlertEngine`. With both flags off (production default)
+  the class is never built, so production behaviour is 100% unchanged. Under
+  ``SLM_ENABLE_ENGINES`` (dev-mock off) it runs in PROD OBSERVE against the real
+  office zones.
+* **Execution gating** (INDEPENDENT of construction). Issuing an ACTUAL
+  ``lock.lock`` is permitted only when :func:`is_dev_mock` is true (the lock
+  entities are dev template locks backed by ``input_boolean`` — never hardware)
+  OR the single explicit env flag :data:`REAL_AUTOLOCK_ENV`
+  (``SLM_ENABLE_REAL_AUTOLOCK``, default OFF) is set. When NEITHER holds the
+  engine is in OBSERVE posture: it RECORDS a "would auto-lock" intent (members +
+  scheduled time/mode) for parity and issues NO ``lock.lock``, and it does NOT
+  read boltStatus / verify (nothing was locked). This phase ships the real flag
+  OFF, so in PROD OBSERVE the engine records intents only and cannot double-lock
+  a real door alongside the live pyscripts.
 
 The engine only acts on zones whose corresponding mode is ``enabled`` in
 settings — it respects the opt-in and never auto-locks a zone that did not.
@@ -56,6 +62,7 @@ from homeassistant.util import dt as dt_util
 from .alert_engine import ALERT_ENGINE_KEY, SEV_CRIT
 from .const import DOMAIN
 from .dev_mock import MOCK_BOLT, is_dev_mock
+from .gating import current_engine_mode
 from .models.zone import Zone
 from .zone_runtime import get_zone_for_lock, get_zone_registry
 
@@ -142,7 +149,8 @@ class AutoLockEngine:
         self._subscribe_idle()
         self._started = True
         _LOGGER.info(
-            "AutoLockEngine started: real_exec=%s (dev_mock=%s, real_flag=%s)",
+            "AutoLockEngine started: mode=%s real_exec=%s (dev_mock=%s, real_flag=%s)",
+            current_engine_mode(),
             self._may_execute(),
             is_dev_mock(),
             real_autolock_enabled(),
@@ -387,6 +395,14 @@ class AutoLockEngine:
         - Outputs: outcome dict {timestamp, zone, member, mode, result,
           attempts, method, state}.
         """
+        # OBSERVE posture: engine is running but NOT cleared to issue a real
+        # lock (PROD OBSERVE with SLM_ENABLE_REAL_AUTOLOCK off). Record a
+        # "would auto-lock" intent for parity and return WITHOUT issuing
+        # lock.lock, sleeping, or reading boltStatus/verify — nothing was
+        # locked, so there is nothing to verify and no failure to alert on.
+        if not self._may_execute():
+            return self._record_would_lock(zone, entity_id, mode, cfg)
+
         max_attempts = max(1, int(getattr(cfg, "max_attempts", 3)))
         settle = max(0, int(getattr(cfg, "settle_seconds", 5)))
         verify_bolt = bool(getattr(cfg, "verify_boltstatus", True))
@@ -593,6 +609,52 @@ class AutoLockEngine:
             zone.name,
             attempts,
             method,
+        )
+        return record
+
+    def _record_would_lock(
+        self, zone: Zone, entity_id: str, mode: str, cfg: Any
+    ) -> Dict[str, Any]:
+        """Record a PROD-OBSERVE "would auto-lock" intent (no real action).
+
+        - Description: The OBSERVE-mode counterpart to :meth:`_secure_member`'s
+          execute path. Appends an outcome record with ``result="would_lock"``
+          carrying the member, mode, the scheduled time, and the live lock
+          state at decision time, so the API/panel can show what WOULD have been
+          locked. Issues NO ``lock.lock``, performs NO verify, and raises NO
+          failure alert (nothing was attempted). Degrades gracefully if the
+          member entity is missing (state -> "unknown").
+        - Inputs: zone (Zone), entity_id (str), mode (str), cfg
+          (ScheduledAutoLock carrying the configured ``time``).
+        - Outputs: the appended outcome dict.
+        """
+        state = self.hass.states.get(entity_id)
+        last_state = (state.state if state is not None else "unknown") or "unknown"
+        scheduled_time = str(getattr(cfg, "time", "") or "")
+        record: Dict[str, Any] = {
+            "timestamp": datetime.now().isoformat(),
+            "zone_id": zone.zone_id,
+            "zone_name": zone.name,
+            "member_entity_id": entity_id,
+            "door_name": self._friendly_name(entity_id),
+            "mode": mode,
+            "result": "would_lock",
+            "attempts": 0,
+            "method": "observe",
+            "state": str(last_state).lower(),
+            "scheduled_time": scheduled_time,
+        }
+        self.records.append(record)
+        if len(self.records) > MAX_RECORDS:
+            self.records = self.records[-MAX_RECORDS:]
+        _LOGGER.info(
+            "AutoLockEngine OBSERVE: WOULD %s auto-lock %s (zone '%s') "
+            "scheduled=%s state=%s — no lock.lock issued",
+            mode,
+            record["door_name"],
+            zone.name,
+            scheduled_time or "(idle)",
+            record["state"],
         )
         return record
 

@@ -18,8 +18,11 @@ class SmartLockManagerPanel extends HTMLElement {
     this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
     this._zones = [];           // Zone model from /api/smart_lock_manager/zones
     this._unhomedLocks = [];    // Locks in no zone (the "+" picker pool)
-    this._observeOnly = false;  // True under SLM_DEV_MOCK (gates Dev Alerts UI)
+    this._observeOnly = false;  // True when an engine is constructed (gates Dev Alerts UI)
     this._devAlerts = [];       // OBSERVE-ONLY recorded dev alerts
+    this._engineMode = 'off';   // 'dev' | 'observe' | 'off' (Phase 4d engine-mode banner)
+    this._realNotify = false;   // SLM_ENABLE_REAL_NOTIFY — real sends possible
+    this._realAutolock = false; // SLM_ENABLE_REAL_AUTOLOCK — real lock.lock possible
     this._zoneDataLoaded = false;
     this._openZoneMenu = null;  // zone_id whose header gear menu is open
     this._openLockMenu = null;  // entity_id whose per-lock gear menu is open
@@ -158,10 +161,14 @@ class SmartLockManagerPanel extends HTMLElement {
       const payload = await this._hass.callApi('GET', 'smart_lock_manager/zones');
       this._zones = Array.isArray(payload?.zones) ? payload.zones : [];
       this._unhomedLocks = Array.isArray(payload?.unhomed_locks) ? payload.unhomed_locks : [];
-      // OBSERVE-ONLY dev alert log. ``observe_only`` is true only under
-      // SLM_DEV_MOCK; the Dev Alerts section renders only then.
+      // OBSERVE recorded alert log. ``observe_only`` is true whenever an engine
+      // is constructed (dev OR observe); the Dev Alerts section renders then.
       this._observeOnly = !!payload?.observe_only;
       this._devAlerts = Array.isArray(payload?.dev_alerts) ? payload.dev_alerts : [];
+      // Phase 4d engine-mode surface for the header banner.
+      this._engineMode = payload?.engine_mode || 'off';
+      this._realNotify = !!payload?.real_notify;
+      this._realAutolock = !!payload?.real_autolock;
       this._zoneDataLoaded = true;
       if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen && !this._zoneSettingsModalOpen) {
         this.requestUpdate();
@@ -1490,6 +1497,39 @@ class SmartLockManagerPanel extends HTMLElement {
     `;
   }
 
+  // Render the Phase 4d engine-mode banner under the page header. Reflects the
+  // backend ``engine_mode`` (dev | observe | off) plus whether the independent
+  // real-action flags are armed. Hidden entirely when the engines are off
+  // (production default), so the panel looks exactly as before in that case.
+  // - Inputs: none (reads this._engineMode / _realNotify / _realAutolock).
+  // - Outputs: HTML string (empty when mode is 'off').
+  _renderEngineBanner() {
+    const mode = this._engineMode || 'off';
+    if (mode === 'off') return '';
+
+    const sends = this._realNotify ? 'real sends ON' : 'no sends';
+    const locks = this._realAutolock ? 'real auto-lock ON' : 'no auto-locks';
+    let label;
+    let cls;
+    if (mode === 'dev') {
+      label = `Engines: DEV (mock locks) — ${sends}, ${locks}`;
+      cls = 'engine-banner engine-banner--dev';
+    } else {
+      // observe
+      label = `Engines: OBSERVE — ${sends}, ${locks}`;
+      cls = 'engine-banner engine-banner--observe';
+    }
+    // Warn styling if any real action is armed.
+    if (this._realNotify || this._realAutolock) cls += ' engine-banner--armed';
+
+    return `
+      <div class="${cls}" role="status">
+        <ha-icon icon="mdi:eye-outline" style="width:18px;height:18px;flex:0 0 auto;"></ha-icon>
+        <span>${this._esc(label)}</span>
+      </div>
+    `;
+  }
+
   renderZoneCard(zone) {
     const zid = this._esc(zone.zone_id);
     const name = this._esc(zone.name || 'Zone');
@@ -1867,6 +1907,38 @@ class SmartLockManagerPanel extends HTMLElement {
         .zone-sync-warning ha-icon {
           color: #f0a020;
         }
+        /* Phase 4d engine-mode banner under the page header. */
+        .engine-banner {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 4px 0 12px 0;
+          padding: 7px 12px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 1.3;
+          letter-spacing: 0.02em;
+        }
+        .engine-banner--observe {
+          background: rgba(33, 150, 243, 0.12);
+          border: 1px solid rgba(33, 150, 243, 0.55);
+          color: #1565c0;
+        }
+        .engine-banner--observe ha-icon { color: #2196f3; }
+        .engine-banner--dev {
+          background: rgba(120, 120, 130, 0.12);
+          border: 1px solid rgba(120, 120, 130, 0.45);
+          color: var(--secondary-text-color, #607d8b);
+        }
+        .engine-banner--dev ha-icon { color: var(--secondary-text-color, #607d8b); }
+        /* Any real action armed -> amber to draw attention. */
+        .engine-banner--armed {
+          background: rgba(240, 160, 32, 0.14);
+          border-color: rgba(240, 160, 32, 0.6);
+          color: #b9770e;
+        }
+        .engine-banner--armed ha-icon { color: #f0a020; }
 
         .zone-locks-section {
           position: relative;
@@ -2797,6 +2869,7 @@ class SmartLockManagerPanel extends HTMLElement {
         </div>
       </div>
 
+      ${this._renderEngineBanner()}
 
       ${(!this._zoneDataLoaded && zones.length === 0) ? `
         <div class="no-locks">
