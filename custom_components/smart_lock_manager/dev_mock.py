@@ -229,6 +229,50 @@ def mock_node_for_entity(entity_id: str) -> Optional[SimpleNamespace]:
     return SimpleNamespace(node_id=node_id)
 
 
+def dev_inject_sync_error(
+    hass: Any, entity_id: str, code_slot: int, message: Optional[str] = None
+) -> bool:
+    """Force a member lock's CodeSlot into a hard sync-error state (dev only).
+
+    - Description: DEV-ONLY entrypoint (called from the ``dev_inject_sync_error``
+      service) that drives a member lock's slot into the same hard-failure state
+      a real Z-Wave supervision failure would leave it in, so the LIVE zone
+      sync-status derivation (:func:`api.zones._derive_slot_sync`) reports the
+      slot as ``error`` and the panel raises its warning banner. It sets the
+      member slot's ``sync_error`` and marks it unsynced for an IMMEDIATE effect
+      on the next ``/zones`` read, and ALSO arms :data:`MOCK_DB` ``fail_next`` so
+      the very next coordinator write to any node raises — exercising the real
+      error-recording path end-to-end. The caller must already have verified
+      ``is_dev_mock()``.
+    - Inputs:
+        hass: HomeAssistant instance.
+        entity_id: target member lock entity id.
+        code_slot: slot number to fault.
+        message: optional sync_error detail (defaults to a generic dev message).
+    - Outputs: True if the member slot was found and faulted, else False.
+    """
+    from .const import DOMAIN, PRIMARY_LOCK
+
+    detail = message or "Dev-injected sync error"
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        if not isinstance(entry_data, dict):
+            continue
+        lock = entry_data.get(PRIMARY_LOCK)
+        if lock is None or getattr(lock, "lock_entity_id", None) != entity_id:
+            continue
+        slot = lock.code_slots.get(code_slot)
+        if slot is None:
+            return False
+        slot.is_synced = False
+        slot.sync_error = detail
+        # Arm the mock ValueDB so the NEXT real coordinator write also fails,
+        # proving the live error-recording path (not just the injected flag).
+        MOCK_DB.fail_next(True)
+        _LOGGER.info("DEV: injected sync error on %s slot %s", entity_id, code_slot)
+        return True
+    return False
+
+
 def fire_mock_notification(
     hass: Any, node_id: int, event_code: int, user_id: Optional[int] = None
 ) -> None:
