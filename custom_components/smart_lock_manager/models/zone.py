@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .lock import CodeSlot, SmartLockManagerLock
+from .zone_settings import ZoneSettings, settings_from_dict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -143,6 +144,11 @@ class Zone:
         start_from: first slot number.
         code_collision_prefix_length: vendor PIN-prefix guard length, mirrored
             onto members so the existing collision check keeps working.
+        settings: per-zone operational config (business hours, auto-lock,
+            alerts, notify). All-default/OFF for migrated or freshly-created
+            zones; edited via the ``update_zone_settings`` service. Backward
+            compatible — zones persisted before Phase 4a hydrate with full
+            defaults (see :func:`models.zone_settings.settings_from_dict`).
     """
 
     zone_id: str
@@ -153,6 +159,7 @@ class Zone:
     start_from: int = DEFAULT_ZONE_START_FROM
     code_collision_prefix_length: int = 4
     created_at: Optional[datetime] = None
+    settings: ZoneSettings = field(default_factory=ZoneSettings)
 
     def __post_init__(self) -> None:
         """Populate empty code slots for the configured geometry if missing."""
@@ -267,6 +274,7 @@ class Zone:
             "code_slots": {
                 str(num): _slot_to_dict(slot) for num, slot in self.code_slots.items()
             },
+            "settings": self.settings.to_dict(),
         }
 
     @classmethod
@@ -291,6 +299,9 @@ class Zone:
             start_from=data.get("start_from", DEFAULT_ZONE_START_FROM),
             code_collision_prefix_length=data.get("code_collision_prefix_length", 4),
             created_at=datetime.fromisoformat(created_raw) if created_raw else None,
+            # Tolerant rebuild: a wholly-absent "settings" key (zone persisted
+            # before Phase 4a) hydrates to all-default/OFF settings.
+            settings=settings_from_dict(data.get("settings")),
         )
         return zone
 

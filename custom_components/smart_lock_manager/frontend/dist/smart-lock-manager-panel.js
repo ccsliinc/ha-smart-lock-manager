@@ -26,6 +26,8 @@ class SmartLockManagerPanel extends HTMLElement {
     this._openPicker = null;    // zone_id whose "+" unhomed picker is open
     this._editLockModalOpen = false; // per-lock Edit (friendly name) modal
     this._editLockEntityId = null;   // entity_id being edited in that modal
+    this._zoneSettingsModalOpen = false; // Zone Settings modal (Phase 4a)
+    this._zoneSettingsZoneId = null;     // zone_id whose settings are being edited
     // Per-zone, per-section collapse state. Keyed "<zoneId>:<section>" -> bool
     // (true = expanded). Absent key means "use computed default" (see
     // _isSectionExpanded). Survives re-render so a data refresh doesn't reset
@@ -58,7 +60,7 @@ class SmartLockManagerPanel extends HTMLElement {
     }
 
     // Don't auto-refresh if modal is open to prevent losing user input
-    if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
+    if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen && !this._zoneSettingsModalOpen) {
       this.requestUpdate();
     }
   }
@@ -137,7 +139,7 @@ class SmartLockManagerPanel extends HTMLElement {
       }
 
       // Don't auto-refresh if modal is open to prevent losing user input
-      if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
+      if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen && !this._zoneSettingsModalOpen) {
         this.requestUpdate();
       }
     } catch (error) {
@@ -161,7 +163,7 @@ class SmartLockManagerPanel extends HTMLElement {
       this._observeOnly = !!payload?.observe_only;
       this._devAlerts = Array.isArray(payload?.dev_alerts) ? payload.dev_alerts : [];
       this._zoneDataLoaded = true;
-      if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen) {
+      if (!this._modalOpen && !this._settingsModalOpen && !this._editLockModalOpen && !this._zoneSettingsModalOpen) {
         this.requestUpdate();
       }
     } catch (error) {
@@ -1491,6 +1493,9 @@ class SmartLockManagerPanel extends HTMLElement {
                   <button class="zone-menu-item" onclick="SmartLockManagerPanel.renameZone('${zid}')">
                     <ha-icon icon="mdi:rename-box" style="width:16px;height:16px;"></ha-icon><span>Rename zone</span>
                   </button>
+                  <button class="zone-menu-item" onclick="SmartLockManagerPanel.openZoneSettings('${zid}')">
+                    <ha-icon icon="mdi:tune" style="width:16px;height:16px;"></ha-icon><span>Settings</span>
+                  </button>
                   <button class="zone-menu-item" onclick="SmartLockManagerPanel.applyZoneCodes('${zid}')">
                     <ha-icon icon="mdi:sync" style="width:16px;height:16px;"></ha-icon><span>Re-apply codes</span>
                   </button>
@@ -2646,6 +2651,87 @@ class SmartLockManagerPanel extends HTMLElement {
           background: rgba(244, 67, 54, 0.1);
           color: #F44336;
         }
+
+        /* --- Zone Settings modal (Phase 4a) --- */
+        .zone-settings-modal { max-width: 560px; }
+
+        .zs-form {
+          align-items: stretch;
+          padding: 0 8px;
+        }
+
+        .zs-note {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          background: rgba(33, 150, 243, 0.08);
+          border: 1px solid var(--divider-color);
+          border-radius: 6px;
+          padding: 8px 10px;
+          margin: 4px 0 16px;
+          line-height: 1.4;
+        }
+
+        .zs-section {
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          padding: 12px 14px;
+          margin-bottom: 16px;
+        }
+
+        .zs-section-title {
+          margin: 0 0 10px;
+          font-size: 13px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          color: var(--primary-text-color);
+          border-bottom: 1px solid var(--divider-color);
+          padding-bottom: 6px;
+        }
+
+        .zs-toggle {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-weight: 500;
+          color: var(--primary-text-color);
+          margin: 8px 0;
+          cursor: pointer;
+        }
+        .zs-toggle input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+
+        .zs-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+        }
+        .zs-row .form-group { flex: 1 1 120px; margin-bottom: 12px; }
+
+        .zs-days {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .zs-day {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--primary-text-color);
+          border: 1px solid var(--divider-color);
+          border-radius: 4px;
+          padding: 4px 8px;
+          cursor: pointer;
+        }
+        .zs-day input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; }
+
+        .zs-alert-block {
+          padding: 8px 0;
+          border-bottom: 1px dashed var(--divider-color);
+        }
+        .zs-alert-block:last-child { border-bottom: none; }
+        .zs-alert-block .form-group { margin-bottom: 4px; }
       </style>
 
       <div class="header">
@@ -2925,6 +3011,9 @@ class SmartLockManagerPanel extends HTMLElement {
           </div>
         </div>
       </div>
+
+      <!-- Zone Settings Modal (Phase 4a) -->
+      ${this._renderZoneSettingsModal()}
 
     `;
   }
@@ -3364,6 +3453,207 @@ class SmartLockManagerPanel extends HTMLElement {
     return (this._zones || []).find(z => z.zone_id === zoneId);
   }
 
+  // ----- Zone Settings modal (Phase 4a) ----------------------------------
+  // Day labels for the Mon..Sun (0..6) checkbox rows used by Business Hours
+  // and Scheduled Auto-Lock. Centralized so both blocks render identically.
+  static get _ZS_DAYS() {
+    return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  }
+
+  // Render a Mon..Sun checkbox row bound to a given field prefix.
+  // - Inputs: idPrefix (str, e.g. "zs_bh_day"), selected (number[] of 0..6).
+  // - Outputs: HTML string of 7 inline day checkboxes.
+  _zsDayChecks(idPrefix, selected) {
+    const sel = Array.isArray(selected) ? selected : [];
+    return SmartLockManagerPanel._ZS_DAYS.map((label, i) => `
+      <label class="zs-day">
+        <input type="checkbox" id="${idPrefix}_${i}" ${sel.includes(i) ? 'checked' : ''}>
+        <span>${label}</span>
+      </label>`).join('');
+  }
+
+  // Build the Zone Settings modal markup from the active zone's `settings`.
+  //
+  // Reads the current zone's settings (tolerant of missing blocks/keys — every
+  // field falls back to the backend's mirror default) and lays out the five
+  // config sections. When the modal is closed, renders an empty (display:none)
+  // shell so the markup is always present for the show/hide toggle.
+  // - Outputs: HTML string for the modal.
+  _renderZoneSettingsModal() {
+    const open = this._zoneSettingsModalOpen;
+    const zone = open ? this._zoneById(this._zoneSettingsZoneId) : null;
+    if (!open || !zone) {
+      return `<div class="modal" style="display:none;"></div>`;
+    }
+    const s = zone.settings || {};
+    const bh = s.business_hours || {};
+    const sal = s.scheduled_auto_lock || {};
+    const idle = s.idle_auto_lock || {};
+    const al = s.alerts || {};
+    const oh = al.outside_hours || {};
+    const su = al.sustained_unlock || {};
+    const jam = al.jam || {};
+    const lb = al.low_battery || {};
+    const off = al.offline || {};
+    const notify = s.notify || {};
+    const email = notify.email || {};
+    const mobile = notify.mobile || {};
+    const v = (x, d) => (x === undefined || x === null ? d : x);
+    const ck = (x) => (x ? 'checked' : '');
+    const tiers = Array.isArray(su.tiers) ? su.tiers.join(', ') : '';
+    const recips = Array.isArray(email.recipients_override) ? email.recipients_override.join(', ') : '';
+    const targets = Array.isArray(mobile.targets) ? mobile.targets.join(', ') : '';
+
+    return `
+      <div class="modal" style="display:flex;">
+        <div class="modal-content zone-settings-modal">
+          <div class="modal-header">
+            <h3 class="modal-title">Zone Settings — ${this._esc(zone.name || 'Zone')}</h3>
+            <button class="close-btn" onclick="SmartLockManagerPanel.closeZoneSettings()">×</button>
+          </div>
+          <div class="form-container zs-form">
+            <p class="zs-note">
+              <ha-icon icon="mdi:information-outline" style="width:16px;height:16px;vertical-align:-3px;"></ha-icon>
+              Alerts and notifications are <strong>observe-only</strong> in the current build — these
+              settings persist now and will drive delivery once wiring lands.
+            </p>
+
+            <!-- Business Hours -->
+            <div class="zs-section">
+              <h4 class="zs-section-title">Business Hours</h4>
+              <label class="zs-toggle"><input type="checkbox" id="zs_bh_enabled" ${ck(bh.enabled)}> Enabled</label>
+              <div class="zs-row">
+                <div class="form-group">
+                  <label for="zs_bh_open">Open time</label>
+                  <input type="time" id="zs_bh_open" value="${this._esc(v(bh.open_time, '08:30'))}">
+                </div>
+                <div class="form-group">
+                  <label for="zs_bh_close">Close time</label>
+                  <input type="time" id="zs_bh_close" value="${this._esc(v(bh.close_time, '17:30'))}">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Days</label>
+                <div class="zs-days">${this._zsDayChecks('zs_bh_day', bh.days)}</div>
+              </div>
+              <label class="zs-toggle"><input type="checkbox" id="zs_bh_use_workday" ${ck(bh.use_workday_sensor)}> Use workday sensor</label>
+              <div class="form-group">
+                <label for="zs_bh_workday_entity">Workday entity</label>
+                <input type="text" id="zs_bh_workday_entity" value="${this._esc(v(bh.workday_entity, 'binary_sensor.workday_sensor'))}" placeholder="binary_sensor.workday_sensor">
+              </div>
+            </div>
+
+            <!-- Scheduled Auto-Lock (COB) -->
+            <div class="zs-section">
+              <h4 class="zs-section-title">Auto-Lock — Scheduled (COB)</h4>
+              <label class="zs-toggle"><input type="checkbox" id="zs_sal_enabled" ${ck(sal.enabled)}> Enabled</label>
+              <div class="zs-row">
+                <div class="form-group">
+                  <label for="zs_sal_time">Time</label>
+                  <input type="time" id="zs_sal_time" value="${this._esc(v(sal.time, '17:30'))}">
+                </div>
+                <div class="form-group">
+                  <label for="zs_sal_max_attempts">Max attempts</label>
+                  <input type="number" id="zs_sal_max_attempts" min="1" value="${this._esc(v(sal.max_attempts, 3))}">
+                </div>
+                <div class="form-group">
+                  <label for="zs_sal_settle">Settle seconds</label>
+                  <input type="number" id="zs_sal_settle" min="0" value="${this._esc(v(sal.settle_seconds, 5))}">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Days</label>
+                <div class="zs-days">${this._zsDayChecks('zs_sal_day', sal.days)}</div>
+              </div>
+              <label class="zs-toggle"><input type="checkbox" id="zs_sal_verify" ${ck(v(sal.verify_boltstatus, true))}> Verify bolt status after lock</label>
+            </div>
+
+            <!-- Idle Auto-Lock -->
+            <div class="zs-section">
+              <h4 class="zs-section-title">Auto-Lock — Idle</h4>
+              <label class="zs-toggle"><input type="checkbox" id="zs_idle_enabled" ${ck(idle.enabled)}> Enabled</label>
+              <div class="form-group">
+                <label for="zs_idle_minutes">Idle minutes</label>
+                <input type="number" id="zs_idle_minutes" min="0" value="${this._esc(v(idle.minutes, 5))}">
+              </div>
+              <label class="zs-toggle"><input type="checkbox" id="zs_idle_sun" ${ck(idle.sun_aware)}> Sun-aware (use day/night minutes)</label>
+              <div class="zs-row">
+                <div class="form-group">
+                  <label for="zs_idle_night">Night minutes</label>
+                  <input type="number" id="zs_idle_night" min="0" value="${this._esc(v(idle.night_minutes, 15))}">
+                </div>
+                <div class="form-group">
+                  <label for="zs_idle_day">Day minutes</label>
+                  <input type="number" id="zs_idle_day" min="0" value="${this._esc(v(idle.day_minutes, 5))}">
+                </div>
+              </div>
+            </div>
+
+            <!-- Alerts -->
+            <div class="zs-section">
+              <h4 class="zs-section-title">Alerts</h4>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_al_oh_enabled" ${ck(oh.enabled)}> Outside hours</label>
+                <div class="form-group">
+                  <label for="zs_al_oh_severity">Severity</label>
+                  <input type="text" id="zs_al_oh_severity" value="${this._esc(v(oh.severity, 'CRIT'))}" placeholder="CRIT">
+                </div>
+              </div>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_al_su_enabled" ${ck(su.enabled)}> Sustained unlock</label>
+                <div class="form-group">
+                  <label for="zs_al_su_tiers">Escalation tiers (seconds, comma-separated)</label>
+                  <input type="text" id="zs_al_su_tiers" value="${this._esc(tiers)}" placeholder="15, 30, 45">
+                </div>
+              </div>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_al_jam_enabled" ${ck(jam.enabled)}> Jam / lock failure</label>
+                <div class="form-group">
+                  <label for="zs_al_jam_severity">Severity</label>
+                  <input type="text" id="zs_al_jam_severity" value="${this._esc(v(jam.severity, 'CRIT'))}" placeholder="CRIT">
+                </div>
+              </div>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_al_lb_enabled" ${ck(lb.enabled)}> Low battery</label>
+                <div class="form-group">
+                  <label for="zs_al_lb_threshold">Threshold (%)</label>
+                  <input type="number" id="zs_al_lb_threshold" min="0" max="100" value="${this._esc(v(lb.threshold, 20))}">
+                </div>
+              </div>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_al_off_enabled" ${ck(off.enabled)}> Offline / unavailable member</label>
+              </div>
+            </div>
+
+            <!-- Notifications -->
+            <div class="zs-section">
+              <h4 class="zs-section-title">Notifications</h4>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_email_enabled" ${ck(email.enabled)}> Email</label>
+                <div class="form-group">
+                  <label for="zs_email_recipients">Recipients override (comma-separated, blank = default routing)</label>
+                  <input type="text" id="zs_email_recipients" value="${this._esc(recips)}" placeholder="alerts@example.com, ops@example.com">
+                </div>
+              </div>
+              <div class="zs-alert-block">
+                <label class="zs-toggle"><input type="checkbox" id="zs_mobile_enabled" ${ck(mobile.enabled)}> Mobile / persistent notification</label>
+                <div class="form-group">
+                  <label for="zs_mobile_targets">Targets (comma-separated notify.* services, blank = default)</label>
+                  <input type="text" id="zs_mobile_targets" value="${this._esc(targets)}" placeholder="notify.mobile_app_phone, notify.persistent_notification">
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn secondary" onclick="SmartLockManagerPanel.closeZoneSettings()">Cancel</button>
+              <button class="btn" onclick="SmartLockManagerPanel.saveZoneSettings()">Save Settings</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   // Resolve a representative member entity_id for a zone. Zone slot services
   // operate on a member lock entity (the edit then propagates to the whole
   // zone). Returns null for an empty zone.
@@ -3512,6 +3802,124 @@ class SmartLockManagerPanel extends HTMLElement {
     // Write SLM's stored friendly name (SLM name wins in the zones API), then
     // callZoneService reloads zone + lock data so cards/badges re-render.
     await p.callZoneService('update_lock_settings', { entity_id: entityId, friendly_name: trimmed });
+  }
+
+  // --- Zone Settings modal (Phase 4a) ---
+  // Open the Zone Settings modal for a zone. Closes the gear menu first.
+  // - Inputs: zoneId (str).
+  // - Outputs: void.
+  static openZoneSettings(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openZoneMenu = null;
+    p._zoneSettingsZoneId = zoneId;
+    p._zoneSettingsModalOpen = true;
+    p.requestUpdate();
+  }
+
+  // Close the Zone Settings modal without saving.
+  // - Outputs: void.
+  static closeZoneSettings() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._zoneSettingsModalOpen = false;
+    p._zoneSettingsZoneId = null;
+    p.requestUpdate();
+  }
+
+  // Scrape the Zone Settings form, build the full settings object, persist it
+  // via update_zone_settings, then close + reload zone data. Sending the full
+  // object is safe (backend deep-merges per block); empty/partial fields fall
+  // back to sane parsed values and never throw.
+  // - Outputs: Promise<void>.
+  static async saveZoneSettings() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const zoneId = p._zoneSettingsZoneId;
+    const root = p.shadowRoot;
+    if (!zoneId || !root) { SmartLockManagerPanel.closeZoneSettings(); return; }
+
+    // --- DOM scrape helpers (null-safe) ---
+    const bool = (id) => !!root.getElementById(id)?.checked;
+    const str = (id) => (root.getElementById(id)?.value ?? '').trim();
+    const intOr = (id, dflt) => {
+      const raw = str(id);
+      if (raw === '') return dflt;
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) ? n : dflt;
+    };
+    const days = (prefix) => {
+      const out = [];
+      for (let i = 0; i < 7; i++) { if (bool(`${prefix}_${i}`)) out.push(i); }
+      return out;
+    };
+    const intList = (id) => str(id)
+      .split(',')
+      .map(t => parseInt(t.trim(), 10))
+      .filter(n => Number.isFinite(n));
+    const strList = (id) => str(id)
+      .split(',')
+      .map(t => t.trim())
+      .filter(t => t !== '');
+
+    const settings = {
+      business_hours: {
+        enabled: bool('zs_bh_enabled'),
+        open_time: str('zs_bh_open') || '08:30',
+        close_time: str('zs_bh_close') || '17:30',
+        days: days('zs_bh_day'),
+        use_workday_sensor: bool('zs_bh_use_workday'),
+        workday_entity: str('zs_bh_workday_entity') || 'binary_sensor.workday_sensor',
+      },
+      scheduled_auto_lock: {
+        enabled: bool('zs_sal_enabled'),
+        time: str('zs_sal_time') || '17:30',
+        days: days('zs_sal_day'),
+        max_attempts: intOr('zs_sal_max_attempts', 3),
+        settle_seconds: intOr('zs_sal_settle', 5),
+        verify_boltstatus: bool('zs_sal_verify'),
+      },
+      idle_auto_lock: {
+        enabled: bool('zs_idle_enabled'),
+        minutes: intOr('zs_idle_minutes', 5),
+        sun_aware: bool('zs_idle_sun'),
+        night_minutes: intOr('zs_idle_night', 15),
+        day_minutes: intOr('zs_idle_day', 5),
+      },
+      alerts: {
+        outside_hours: {
+          enabled: bool('zs_al_oh_enabled'),
+          severity: str('zs_al_oh_severity') || 'CRIT',
+        },
+        sustained_unlock: {
+          enabled: bool('zs_al_su_enabled'),
+          tiers: intList('zs_al_su_tiers'),
+        },
+        jam: {
+          enabled: bool('zs_al_jam_enabled'),
+          severity: str('zs_al_jam_severity') || 'CRIT',
+        },
+        low_battery: {
+          enabled: bool('zs_al_lb_enabled'),
+          threshold: intOr('zs_al_lb_threshold', 20),
+        },
+        offline: {
+          enabled: bool('zs_al_off_enabled'),
+        },
+      },
+      notify: {
+        email: {
+          enabled: bool('zs_email_enabled'),
+          recipients_override: strList('zs_email_recipients'),
+        },
+        mobile: {
+          enabled: bool('zs_mobile_enabled'),
+          targets: strList('zs_mobile_targets'),
+        },
+      },
+    };
+
+    // Close first so the modal doesn't block the post-save refresh, then
+    // persist + reload. callZoneService reloads zone data on completion.
+    SmartLockManagerPanel.closeZoneSettings();
+    await p.callZoneService('update_zone_settings', { zone_id: zoneId, settings });
   }
 
   // --- Zone-level code slot operations (target zone's first member; the edit

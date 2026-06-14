@@ -373,6 +373,10 @@ def _serialize_zone(
         "code_slots": code_slots,
         "error_slots": error_slots,
         "has_sync_errors": bool(error_slots),
+        # Per-zone operational config for the settings editor. Contains only
+        # non-secret config (toggles, thresholds, business hours, notify
+        # targets the user typed) — never PIN material.
+        "settings": zone.settings.to_dict(),
     }
 
 

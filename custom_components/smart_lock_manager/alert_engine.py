@@ -47,8 +47,21 @@ from homeassistant.helpers.event import (
 )
 
 from .const import DOMAIN
+from .models.zone import Zone
+from .models.zone_settings import (
+    DEFAULT_CLOSE_TIME,
+)
+from .models.zone_settings import (
+    DEFAULT_LOW_BATTERY_THRESHOLD as SETTINGS_LOW_BATTERY_THRESHOLD,
+)
+from .models.zone_settings import (
+    DEFAULT_OPEN_TIME,
+    DEFAULT_SUSTAINED_TIERS,
+    DEFAULT_WEEKDAYS,
+    DEFAULT_WORKDAY_ENTITY,
+)
 from .storage import load_alert_log, save_alert_log
-from .zone_runtime import get_zone_registry
+from .zone_runtime import get_zone_for_lock, get_zone_registry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,25 +69,73 @@ _LOGGER = logging.getLogger(__name__)
 ALERT_ENGINE_KEY = f"{DOMAIN}_alert_engine"
 
 # --- Dev defaults (mirror the pyscripts) -----------------------------------
-# These are documented DEV DEFAULTS used until the Phase 4a zone settings
-# editor lands. They intentionally match the legacy pyscript thresholds so the
-# observe-only engine can be compared against the live alerts.
+# These DEV DEFAULTS are now SOURCED from models.zone_settings so the zone
+# config schema and the observe-only engine share ONE source of truth — turning
+# a zone's setting on reproduces exactly the engine's fallback behaviour.
+#
+# RECONCILIATION (default-OFF config vs. the dev observe-only engine):
+#   The Phase-4a zone settings default every alert toggle to enabled=False so a
+#   migrated zone changes nothing in PRODUCTION. But this engine only ever runs
+#   under SLM_DEV_MOCK and is OBSERVE-ONLY (records, never notifies). To keep
+#   dev continuity, the engine treats an UNCONFIGURED / disabled toggle as
+#   "observe anyway using the mirror defaults" (see ``_detector_enabled`` ->
+#   ``_OBSERVE_ALL_IN_DEV``). It still READS any per-zone overrides the user set
+#   (business-hours window/gate, sustained tiers, low-battery threshold) so
+#   editing config is reflected live; it just does not go silent merely because
+#   ``enabled`` defaults to False. A future non-dev engine (Phase 4d) will honor
+#   the enable flags strictly before sending real notifications.
 
-# Outside-hours window + gate (mirror unlocked_outside_business.py).
-DEFAULT_BUSINESS_OPEN = time(8, 30)
-DEFAULT_BUSINESS_CLOSE = time(17, 30)
-DEFAULT_WORKDAY_SENSOR = "binary_sensor.workday_sensor"
-
-# Sustained-unlock tiers as (seconds, severity) (mirror front_middle_lock.py).
-DEFAULT_SUSTAINED_TIERS = ((15, "WARN"), (30, "CRIT"), (45, "CRIT"))
-
-# Low-battery threshold (percent) and offline-debounce window (seconds).
-DEFAULT_LOW_BATTERY_THRESHOLD = 20
-DEFAULT_OFFLINE_DEBOUNCE_SECONDS = 60
+# When True (always, in this dev-gated engine) every detector observes
+# regardless of the per-zone enable flag, using config thresholds when present
+# and the mirror defaults otherwise. Flip to False to make the engine honor the
+# per-zone enable flags strictly (intended for the future production engine).
+_OBSERVE_ALL_IN_DEV = True
 
 # Severity vocabulary (mirrors the pyscripts' send_alert vocabulary).
 SEV_WARN = "WARN"
 SEV_CRIT = "CRIT"
+
+
+def _parse_hhmm(value: str, fallback: time) -> time:
+    """Parse an ``HH:MM`` string into a ``time``, falling back on error.
+
+    - Inputs: value (str like "08:30"), fallback (time used on parse failure).
+    - Outputs: datetime.time.
+    """
+    try:
+        hour, minute = (int(part) for part in value.split(":", 1))
+        return time(hour, minute)
+    except (TypeError, ValueError, AttributeError):
+        return fallback
+
+
+def _tiers_with_severity(seconds_list: List[int]) -> tuple:
+    """Map a list of tier seconds to ``(seconds, severity)`` pairs.
+
+    - Description: First tier is WARN, all later tiers CRIT — the legacy
+      front_middle_lock.py escalation shape.
+    - Inputs: seconds_list (list[int]).
+    - Outputs: tuple of (int seconds, str severity).
+    """
+    return tuple(
+        (seconds, SEV_WARN if index == 0 else SEV_CRIT)
+        for index, seconds in enumerate(seconds_list)
+    )
+
+
+# Outside-hours window + gate (mirror unlocked_outside_business.py), sourced
+# from the shared zone-settings defaults.
+DEFAULT_BUSINESS_OPEN = _parse_hhmm(DEFAULT_OPEN_TIME, time(8, 30))
+DEFAULT_BUSINESS_CLOSE = _parse_hhmm(DEFAULT_CLOSE_TIME, time(17, 30))
+DEFAULT_WORKDAY_SENSOR = DEFAULT_WORKDAY_ENTITY
+
+# Sustained-unlock tiers as (seconds, severity), derived from the shared tier
+# seconds (mirror front_middle_lock.py: first tier WARN, later tiers CRIT).
+DEFAULT_SUSTAINED_TIERS_WITH_SEV = _tiers_with_severity(DEFAULT_SUSTAINED_TIERS)
+
+# Low-battery threshold (percent) and offline-debounce window (seconds).
+DEFAULT_LOW_BATTERY_THRESHOLD = SETTINGS_LOW_BATTERY_THRESHOLD
+DEFAULT_OFFLINE_DEBOUNCE_SECONDS = 60
 
 # Alert-type identifiers used in records + the alerted-state map.
 ALERT_OUTSIDE_HOURS = "outside_hours"
@@ -206,6 +267,31 @@ class AlertEngine:
         object_id = lock_entity_id.split(".", 1)[-1]
         return f"sensor.{object_id}_battery"
 
+    # -- zone config resolution --------------------------------------------
+
+    def _zone_settings_for(self, entity_id: str) -> Optional[Zone]:
+        """Return the owning Zone for a member entity, or None if unhomed.
+
+        - Inputs: entity_id (str lock entity id).
+        - Outputs: the owning Zone (carrying ``settings``), or None.
+        """
+        return get_zone_for_lock(self.hass, entity_id)
+
+    def _detector_enabled(self, entity_id: str, configured: bool) -> bool:
+        """Decide whether a detector should observe for this member.
+
+        - Description: In this dev-gated observe-only engine, observation is
+          kept on for ALL types (``_OBSERVE_ALL_IN_DEV``) so dev continuity is
+          preserved even though per-zone toggles default to False. When that
+          flag is False (the future production engine) the per-zone ``enabled``
+          flag is honored strictly.
+        - Inputs: entity_id (str), configured (bool — the zone's enable flag).
+        - Outputs: bool.
+        """
+        if _OBSERVE_ALL_IN_DEV:
+            return True
+        return configured
+
     def _zone_for(self, entity_id: str) -> tuple[Optional[str], Optional[str], str]:
         """Return (zone_id, zone_name, door_name) for a member entity.
 
@@ -299,6 +385,14 @@ class AlertEngine:
         - Inputs: entity_id (str), value (str normalized lock state).
         - Outputs: None (records alerts).
         """
+        zone = self._zone_settings_for(entity_id)
+        oh = zone.settings.alerts.outside_hours if zone is not None else None
+        severity = oh.severity if oh is not None else SEV_CRIT
+        if not self._detector_enabled(
+            entity_id, bool(oh.enabled) if oh is not None else False
+        ):
+            return
+
         flag = self._flag(entity_id, ALERT_OUTSIDE_HOURS)
 
         # Recovery: locked again after a prior alert (any time of day).
@@ -306,7 +400,7 @@ class AlertEngine:
             self._record(
                 entity_id,
                 ALERT_OUTSIDE_HOURS,
-                SEV_CRIT,
+                severity,
                 "Locked again after outside-hours unlock alert",
                 is_recovery=True,
             )
@@ -315,34 +409,58 @@ class AlertEngine:
 
         if value != "unlocked":
             return
-        if self._in_business_hours():
+        if self._in_business_hours(zone):
             return
         if flag.get("alerted"):
             return
         self._record(
             entity_id,
             ALERT_OUTSIDE_HOURS,
-            SEV_CRIT,
+            severity,
             "Unlocked outside business hours",
         )
         flag["alerted"] = True
 
-    def _in_business_hours(self) -> bool:
-        """Return True if NOW is inside the default business window.
+    def _in_business_hours(self, zone: Optional[Zone] = None) -> bool:
+        """Return True if NOW is inside the zone's business window.
 
-        - Description: Mirrors ``unlocked_outside_business.py``: inside the
-          08:30-17:30 window AND a workday. Uses ``binary_sensor.workday_sensor``
-          when it exists, else falls back to a Mon-Fri weekday check.
-        - Inputs: none (reads the clock + workday sensor).
+        - Description: Mirrors ``unlocked_outside_business.py`` — inside the
+          open/close window AND a workday. Reads the owning zone's
+          ``business_hours`` config when present (open/close times, the
+          workday-sensor toggle + entity, or an explicit day-of-week list),
+          FALLING BACK to the mirror-the-pyscript defaults (08:30-17:30,
+          ``binary_sensor.workday_sensor``, Mon-Fri) for any absent field.
+        - Inputs: zone (Zone or None) — the owning zone whose config is read.
         - Outputs: bool.
         """
         now = datetime.now()
-        in_window = DEFAULT_BUSINESS_OPEN < now.time() < DEFAULT_BUSINESS_CLOSE
-        workday_state = self.hass.states.get(DEFAULT_WORKDAY_SENSOR)
-        if workday_state is not None:
-            is_workday = (workday_state.state or "").lower() == "on"
+        bh = zone.settings.business_hours if zone is not None else None
+
+        open_t = (
+            _parse_hhmm(bh.open_time, DEFAULT_BUSINESS_OPEN)
+            if bh is not None
+            else DEFAULT_BUSINESS_OPEN
+        )
+        close_t = (
+            _parse_hhmm(bh.close_time, DEFAULT_BUSINESS_CLOSE)
+            if bh is not None
+            else DEFAULT_BUSINESS_CLOSE
+        )
+        in_window = open_t < now.time() < close_t
+
+        # Day gate: workday sensor when the zone opts into it (or when no zone
+        # config exists, preserving the legacy default), else day-of-week list.
+        use_sensor = bh.use_workday_sensor if bh is not None else True
+        if bh is not None and not use_sensor:
+            days = bh.days or DEFAULT_WEEKDAYS
+            is_workday = now.weekday() in days
         else:
-            is_workday = now.weekday() < 5  # Mon-Fri
+            sensor_id = bh.workday_entity if bh is not None else DEFAULT_WORKDAY_SENSOR
+            workday_state = self.hass.states.get(sensor_id)
+            if workday_state is not None:
+                is_workday = (workday_state.state or "").lower() == "on"
+            else:
+                is_workday = now.weekday() < 5  # Mon-Fri fallback
         return in_window and is_workday
 
     def _eval_sustained(self, entity_id: str, value: str) -> None:
@@ -354,6 +472,15 @@ class AlertEngine:
         - Inputs: entity_id (str), value (str normalized lock state).
         - Outputs: None (records alerts; schedules timers).
         """
+        su = None
+        zone = self._zone_settings_for(entity_id)
+        if zone is not None:
+            su = zone.settings.alerts.sustained_unlock
+        if not self._detector_enabled(
+            entity_id, bool(su.enabled) if su is not None else False
+        ):
+            return
+
         flag = self._flag(entity_id, ALERT_SUSTAINED)
 
         if value == "unlocked":
@@ -375,18 +502,34 @@ class AlertEngine:
                 flag["alerted"] = False
                 flag["max_tier"] = 0
 
+    def _sustained_tiers_for(self, entity_id: str) -> tuple:
+        """Resolve the (seconds, severity) tier chain for a member.
+
+        - Description: Reads the owning zone's
+          ``alerts.sustained_unlock.tiers`` (seconds list) and maps it to
+          (seconds, severity) pairs, FALLING BACK to the mirror default tiers
+          (15s WARN / 30s CRIT / 45s CRIT) when no zone config is present.
+        - Inputs: entity_id (str).
+        - Outputs: tuple of (int seconds, str severity).
+        """
+        zone = self._zone_settings_for(entity_id)
+        if zone is not None and zone.settings.alerts.sustained_unlock.tiers:
+            return _tiers_with_severity(zone.settings.alerts.sustained_unlock.tiers)
+        return DEFAULT_SUSTAINED_TIERS_WITH_SEV
+
     def _schedule_tier(self, entity_id: str, tier_index: int) -> None:
         """Arm the timer for one sustained-unlock tier.
 
-        - Inputs: entity_id (str), tier_index (int into DEFAULT_SUSTAINED_TIERS).
+        - Inputs: entity_id (str), tier_index (int into the resolved tier list).
         - Outputs: None.
         """
-        if tier_index >= len(DEFAULT_SUSTAINED_TIERS):
+        tiers = self._sustained_tiers_for(entity_id)
+        if tier_index >= len(tiers):
             return
-        seconds, severity = DEFAULT_SUSTAINED_TIERS[tier_index]
+        seconds, severity = tiers[tier_index]
         # Delay between tiers is the DELTA from the previous tier's elapsed
-        # time so the cumulative elapsed matches 15/30/45s.
-        prev = DEFAULT_SUSTAINED_TIERS[tier_index - 1][0] if tier_index else 0
+        # time so the cumulative elapsed matches the configured tier seconds.
+        prev = tiers[tier_index - 1][0] if tier_index else 0
         delay = seconds - prev
 
         @callback
@@ -433,18 +576,26 @@ class AlertEngine:
           attributes (lock entity attributes; unused but kept for parity).
         - Outputs: None (records alerts).
         """
+        zone = self._zone_settings_for(entity_id)
+        jam_cfg = zone.settings.alerts.jam if zone is not None else None
+        severity = jam_cfg.severity if jam_cfg is not None else SEV_CRIT
+        if not self._detector_enabled(
+            entity_id, bool(jam_cfg.enabled) if jam_cfg is not None else False
+        ):
+            return
+
         flag = self._flag(entity_id, ALERT_JAM)
         jammed = value == "jammed" or self._jam_sensor_on(entity_id)
 
         if jammed and not flag.get("alerted"):
-            self._record(entity_id, ALERT_JAM, SEV_CRIT, "Lock jammed")
+            self._record(entity_id, ALERT_JAM, severity, "Lock jammed")
             flag["alerted"] = True
             return
         if not jammed and flag.get("alerted") and value == "locked":
             self._record(
                 entity_id,
                 ALERT_JAM,
-                SEV_CRIT,
+                severity,
                 "Recovered from jam (locked)",
                 is_recovery=True,
             )
@@ -470,9 +621,18 @@ class AlertEngine:
             percent = int(float(raw_value))
         except (TypeError, ValueError):
             return
+
+        zone = self._zone_settings_for(lock_entity_id)
+        lb = zone.settings.alerts.low_battery if zone is not None else None
+        threshold = lb.threshold if lb is not None else DEFAULT_LOW_BATTERY_THRESHOLD
+        if not self._detector_enabled(
+            lock_entity_id, bool(lb.enabled) if lb is not None else False
+        ):
+            return
+
         flag = self._flag(lock_entity_id, ALERT_LOW_BATTERY)
 
-        if percent < DEFAULT_LOW_BATTERY_THRESHOLD and not flag.get("alerted"):
+        if percent < threshold and not flag.get("alerted"):
             self._record(
                 lock_entity_id,
                 ALERT_LOW_BATTERY,
@@ -481,7 +641,7 @@ class AlertEngine:
             )
             flag["alerted"] = True
         # Small hysteresis on recovery to avoid flapping at the threshold.
-        elif percent >= DEFAULT_LOW_BATTERY_THRESHOLD + 5 and flag.get("alerted"):
+        elif percent >= threshold + 5 and flag.get("alerted"):
             self._record(
                 lock_entity_id,
                 ALERT_LOW_BATTERY,
@@ -501,6 +661,13 @@ class AlertEngine:
         - Inputs: entity_id (str), value (str normalized lock state).
         - Outputs: None (records alerts; schedules a debounce timer).
         """
+        zone = self._zone_settings_for(entity_id)
+        off_cfg = zone.settings.alerts.offline if zone is not None else None
+        if not self._detector_enabled(
+            entity_id, bool(off_cfg.enabled) if off_cfg is not None else False
+        ):
+            return
+
         flag = self._flag(entity_id, ALERT_OFFLINE)
 
         if value in _OFFLINE_STATES:

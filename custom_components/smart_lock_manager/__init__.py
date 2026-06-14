@@ -61,6 +61,7 @@ from .const import (
     SERVICE_UPDATE_GLOBAL_SETTINGS,
     SERVICE_UPDATE_LOCK_SETTINGS,
     SERVICE_UPDATE_ZONE,
+    SERVICE_UPDATE_ZONE_SETTINGS,
     VERSION,
 )
 from .dev_mock import (
@@ -76,6 +77,7 @@ from .services.management_services import ManagementServices
 from .services.slot_services import SlotServices
 from .services.system_services import SystemServices
 from .services.zone_services import ZoneServices
+from .services.zone_settings_service import ZoneSettingsService
 from .services.zwave_services import ZWaveServices
 from .zone_runtime import (
     async_ensure_zones_loaded,
@@ -355,6 +357,16 @@ ZONE_MEMBER_SCHEMA = vol.Schema(
     {
         vol.Required("zone_id"): str,
         vol.Required("lock_entity_id"): cv.entity_id,
+    }
+)
+
+# The settings payload is a free-form nested dict of config blocks; the service
+# merges per-block and the model rebuilds tolerantly, so deep validation lives
+# in models.zone_settings rather than the voluptuous schema.
+UPDATE_ZONE_SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Required("zone_id"): str,
+        vol.Required("settings"): dict,
     }
 )
 
@@ -758,6 +770,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_APPLY_ZONE_CODES)
             hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE)
             hass.services.async_remove(DOMAIN, SERVICE_CLEAR_ZONE_CODES)
+            hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE_SETTINGS)
 
     return bool(unload_ok)
 
@@ -856,6 +869,9 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     async def clear_zone_codes_wrapper(service_call: ServiceCall) -> None:
         return await ZoneServices.clear_zone_codes(hass, service_call)
+
+    async def update_zone_settings_wrapper(service_call: ServiceCall) -> None:
+        return await ZoneSettingsService.update_zone_settings(hass, service_call)
 
     async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
@@ -977,6 +993,12 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         SERVICE_CLEAR_ZONE_CODES,
         clear_zone_codes_wrapper,
         schema=CLEAR_ZONE_CODES_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_ZONE_SETTINGS,
+        update_zone_settings_wrapper,
+        schema=UPDATE_ZONE_SETTINGS_SCHEMA,
     )
     _LOGGER.debug("Registered zone-management services")
 
