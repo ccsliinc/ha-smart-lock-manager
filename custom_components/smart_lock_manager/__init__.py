@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -20,6 +20,10 @@ _LOGGER = logging.getLogger(__name__)
 
 from .alert_engine import ALERT_ENGINE_KEY, AlertEngine
 from .auto_lock import AUTO_LOCK_ENGINE_KEY, AutoLockEngine
+
+# hass.data key holding the unsub for the zone-settings-changed event listener
+# that drives live engine re-subscription (Task 2). Registered once per process.
+ENGINE_REFRESH_LISTENER_KEY = "smart_lock_manager_engine_refresh_listener"
 from .const import (
     ATTR_ALLOWED_DAYS,
     ATTR_ALLOWED_HOURS,
@@ -739,6 +743,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "(auto-lock engine)"
             )
 
+    # Live re-subscribe: when a zone's settings change (via update_zone_settings,
+    # which fires ``smart_lock_manager_zone_settings_updated``), tell both engines
+    # to rebuild their per-zone subscriptions so a newly enabled detector / idle
+    # auto-lock / COB schedule takes effect WITHOUT an HA restart. Registered once
+    # per process and only when the engines are active. ``async_refresh`` is
+    # idempotent (cancels old listeners/timers first), so repeated edits never
+    # accumulate duplicate timers.
+    if engines_active() and ENGINE_REFRESH_LISTENER_KEY not in hass.data:
+
+        @callback
+        def _on_zone_settings_updated(event: Any) -> None:
+            alert_engine = hass.data.get(ALERT_ENGINE_KEY)
+            if alert_engine is not None:
+                alert_engine.async_refresh()
+            auto_engine = hass.data.get(AUTO_LOCK_ENGINE_KEY)
+            if auto_engine is not None:
+                auto_engine.async_refresh()
+
+        hass.data[ENGINE_REFRESH_LISTENER_KEY] = hass.bus.async_listen(
+            "smart_lock_manager_zone_settings_updated", _on_zone_settings_updated
+        )
+        _LOGGER.info(
+            "Registered engine live-refresh listener for zone settings changes"
+        )
+
     # NOTE: Initial Z-Wave code reading removed — it was blocking HA startup.
     # hass.services.async_call creates service-call tasks that HA's bootstrap
     # waits on, even when wrapped in async_create_background_task. With 7 locks
@@ -804,6 +833,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             auto_lock_engine = hass.data.pop(AUTO_LOCK_ENGINE_KEY, None)
             if auto_lock_engine is not None:
                 auto_lock_engine.async_stop()
+
+            # Remove the engine live-refresh event listener.
+            refresh_unsub = hass.data.pop(ENGINE_REFRESH_LISTENER_KEY, None)
+            if refresh_unsub is not None:
+                refresh_unsub()
 
         # Remove services only if this is the last instance
         if not hass.data[DOMAIN]:
