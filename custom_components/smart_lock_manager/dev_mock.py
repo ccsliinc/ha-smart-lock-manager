@@ -139,6 +139,60 @@ class MockValueDB:
 MOCK_DB = MockValueDB()
 
 
+class MockBoltStatus:
+    """In-memory stand-in for Door Lock CC (98) ``boltStatus`` reads.
+
+    The production auto-lock verify path reads ``boltStatus`` via
+    ``zwave_js.invoke_cc_api``. There is no real Z-Wave in dev, so the
+    :class:`~..auto_lock.AutoLockEngine` reads boltStatus from THIS registry
+    instead (gated by ``is_dev_mock()``). By default a lock's boltStatus tracks
+    its HA entity state (the engine passes the live state in), but a per-entity
+    OVERRIDE can be set to force a verify-failure (``"unlocked"``) so the
+    retry + CRIT-alert path is exercised deterministically.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty, thread-safe boltStatus override store."""
+        self._overrides: Dict[str, str] = {}
+        self._lock = Lock()
+
+    def set_override(self, entity_id: str, bolt_status: Optional[str]) -> None:
+        """Force (or clear) the boltStatus a verify read returns for a lock.
+
+        - Inputs: entity_id (str lock entity id), bolt_status (str like
+          ``"unlocked"`` / ``"locked"``, or None to clear the override).
+        - Outputs: None.
+        - Example: ``MOCK_BOLT.set_override("lock.rear", "unlocked")`` makes the
+          next verify read fail so the engine retries.
+        """
+        with self._lock:
+            if bolt_status is None:
+                self._overrides.pop(entity_id, None)
+            else:
+                self._overrides[entity_id] = str(bolt_status).strip().lower()
+
+    def read(self, entity_id: str, entity_state: Optional[str]) -> Optional[str]:
+        """Return the boltStatus the verify path should see for a lock.
+
+        - Description: An explicit override wins; otherwise boltStatus is
+          DERIVED from the live entity state — ``"locked"`` -> ``"locked"``
+          (bolt thrown), anything else -> ``"unlocked"`` (not thrown). This
+          mirrors how a real Kwikset reports boltStatus tracking the bolt.
+        - Inputs: entity_id (str), entity_state (str|None live HA lock state).
+        - Outputs: str lowercased boltStatus, or None if nothing is known.
+        """
+        with self._lock:
+            if entity_id in self._overrides:
+                return self._overrides[entity_id]
+        if entity_state is None:
+            return None
+        return "locked" if str(entity_state).strip().lower() == "locked" else "unlocked"
+
+
+# Single process-wide boltStatus mock. Mirrors MOCK_DB's lifetime/scope.
+MOCK_BOLT = MockBoltStatus()
+
+
 def mock_get_usercode(node: Any, slot: int) -> Dict[str, Any]:
     """Mock of ``zwave_js_server.util.lock.get_usercode``.
 

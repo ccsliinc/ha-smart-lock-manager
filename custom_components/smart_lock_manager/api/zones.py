@@ -26,6 +26,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, State
 
 from ..alert_engine import ALERT_ENGINE_KEY
+from ..auto_lock import AUTO_LOCK_ENGINE_KEY
 from ..const import MAX_SYNC_ATTEMPTS
 from ..dev_mock import is_dev_mock
 from ..models.lock import CodeSlot, SmartLockManagerLock
@@ -474,8 +475,25 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
         "zones": zones,
         "unhomed_locks": unhomed,
         "dev_alerts": dev_alerts,
+        "auto_lock_records": _all_auto_lock_records(hass),
         "observe_only": is_dev_mock(),
     }
+
+
+def _all_auto_lock_records(hass: HomeAssistant) -> List[Dict[str, Any]]:
+    """Return every recorded auto-lock outcome (most-recent first), or empty.
+
+    - Description: Reads the dev-gated AUTO-LOCK engine's outcome records. The
+      engine is only present under ``SLM_DEV_MOCK``; outside dev this is always
+      empty. Records carry {timestamp, zone, member, mode, result, attempts,
+      method, state} and never any PIN material.
+    - Inputs: hass (HomeAssistant).
+    - Outputs: list of outcome record dicts (may be empty).
+    """
+    engine = hass.data.get(AUTO_LOCK_ENGINE_KEY)
+    if engine is None:
+        return []
+    return cast(List[Dict[str, Any]], engine.serialize())
 
 
 class SmartLockManagerZonesView(HomeAssistantView):

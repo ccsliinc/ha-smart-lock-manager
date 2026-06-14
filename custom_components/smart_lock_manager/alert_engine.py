@@ -903,3 +903,26 @@ class AlertEngine:
                 self._flag(entity_id, ALERT_OFFLINE)["alerted"] = True
         else:
             _LOGGER.warning("dev_simulate: unknown alert_type %s", alert_type)
+
+    # -- external alert routing (auto-lock failures) ------------------------
+
+    def record_external(
+        self,
+        entity_id: str,
+        alert_type: str,
+        severity: str,
+        message: str,
+    ) -> None:
+        """Record an alert raised by another engine (e.g. auto-lock failure).
+
+        - Description: Public entrypoint so the :mod:`..auto_lock` engine can
+          surface a final lock-failure into the SAME recorded-alert + DRY-RUN
+          notify stream the detectors use. It reuses :meth:`_record`, so the
+          alert lands in Dev Alerts and produces "would-notify" intents per the
+          owning zone's notify config — exactly like a detector alert. Recording
+          is the only action; nothing is ever really sent in dev.
+        - Inputs: entity_id (str member lock id), alert_type (str id, e.g.
+          ``auto_lock_failed``), severity (str WARN/CRIT), message (str).
+        - Outputs: None.
+        """
+        self._record(entity_id, alert_type, severity, message)

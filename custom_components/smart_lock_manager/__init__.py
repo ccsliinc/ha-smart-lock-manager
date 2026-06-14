@@ -19,6 +19,7 @@ from .api.http import async_register_http_views, async_unregister_http_views
 _LOGGER = logging.getLogger(__name__)
 
 from .alert_engine import ALERT_ENGINE_KEY, AlertEngine
+from .auto_lock import AUTO_LOCK_ENGINE_KEY, AutoLockEngine
 from .const import (
     ATTR_ALLOWED_DAYS,
     ATTR_ALLOWED_HOURS,
@@ -687,6 +688,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "(observe-only alert engine)"
             )
 
+    # DEV-ONLY: AUTO-LOCK engine (Phase 4c). Constructed exactly once per HA
+    # process and ONLY under SLM_DEV_MOCK, so it never runs in production
+    # alongside the live pyscripts. Even in dev it issues lock.lock only against
+    # the dummy template locks; a real lock.lock in production additionally
+    # requires the explicit SLM_ENABLE_REAL_AUTOLOCK flag (default OFF). Started
+    # after zones load so it can schedule COB triggers + idle timers per zone.
+    # The companion dev_trigger_autolock service forces a COB run / idle expiry
+    # on demand and can force a verify-failure to exercise the retry+alert path.
+    if is_dev_mock() and AUTO_LOCK_ENGINE_KEY not in hass.data:
+        auto_lock_engine = AutoLockEngine(hass)
+        hass.data[AUTO_LOCK_ENGINE_KEY] = auto_lock_engine
+        await auto_lock_engine.async_start()
+
+        if not hass.services.has_service(DOMAIN, "dev_trigger_autolock"):
+
+            async def dev_trigger_autolock_wrapper(service_call: ServiceCall) -> None:
+                active = hass.data.get(AUTO_LOCK_ENGINE_KEY)
+                if active is None:
+                    return
+                await active.dev_trigger(
+                    service_call.data["zone_id"],
+                    service_call.data["mode"],
+                    fail_verify=service_call.data.get("fail_verify", False),
+                )
+
+            hass.services.async_register(
+                DOMAIN,
+                "dev_trigger_autolock",
+                dev_trigger_autolock_wrapper,
+                schema=vol.Schema(
+                    {
+                        vol.Required("zone_id"): cv.string,
+                        vol.Required("mode"): vol.In(["scheduled", "idle"]),
+                        vol.Optional("fail_verify"): cv.boolean,
+                    }
+                ),
+            )
+            _LOGGER.info(
+                "DEV: registered smart_lock_manager.dev_trigger_autolock service "
+                "(auto-lock engine)"
+            )
+
     # NOTE: Initial Z-Wave code reading removed — it was blocking HA startup.
     # hass.services.async_call creates service-call tasks that HA's bootstrap
     # waits on, even when wrapped in async_create_background_task. With 7 locks
@@ -745,6 +788,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             engine = hass.data.pop(ALERT_ENGINE_KEY, None)
             if engine is not None:
                 engine.async_stop()
+
+            # Tear down the dev-only auto-lock engine (only ever present under
+            # SLM_DEV_MOCK) so its time triggers, listeners + idle timers are
+            # released.
+            auto_lock_engine = hass.data.pop(AUTO_LOCK_ENGINE_KEY, None)
+            if auto_lock_engine is not None:
+                auto_lock_engine.async_stop()
 
         # Remove services only if this is the last instance
         if not hass.data[DOMAIN]:
