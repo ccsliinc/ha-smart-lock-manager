@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
@@ -78,7 +78,7 @@ from .dev_mock import (
     mock_node_for_entity,
 )
 from .frontend.panel import async_register_panel, async_unregister_panel
-from .gating import engines_active
+from .gating import engines_active, prime_flags_cache
 from .models.lock import ACCESS_LOG_MAX_ENTRIES, SmartLockManagerLock
 from .services.lock_services import LockServices
 from .services.management_services import ManagementServices
@@ -678,6 +678,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_ensure_zones_loaded(hass)
     await async_run_migration_if_needed(hass)
 
+    # Prime the file-based engine flags OFF the event loop BEFORE the first gate
+    # check below. gating's hot path (engines_active / engines_enabled /
+    # real_notify_enabled / real_autolock_enabled) reads an in-memory cache with
+    # NO disk I/O; the blocking open()/json parse lives in prime_flags_cache and
+    # must run in the executor so HA's blocking-call detector stays quiet.
+    await hass.async_add_executor_job(prime_flags_cache)
+
     # OBSERVE/DRY-RUN alert detection engine (Phase 4d). Instantiated exactly
     # once per HA process when ``engines_active()`` (dev-mock OR the explicit
     # SLM_ENABLE_ENGINES flag). With both off (production default) it is never
@@ -788,8 +795,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # accumulate duplicate timers.
     if engines_active() and ENGINE_REFRESH_LISTENER_KEY not in hass.data:
 
-        @callback
-        def _on_zone_settings_updated(event: Any) -> None:
+        async def _on_zone_settings_updated(event: Any) -> None:
+            # Re-prime the file-based flags OFF the loop first so a flags-file
+            # edit paired with a settings change picks up new real-action values
+            # without blocking the event loop, then rebuild engine subscriptions.
+            await hass.async_add_executor_job(prime_flags_cache)
             alert_engine = hass.data.get(ALERT_ENGINE_KEY)
             if alert_engine is not None:
                 alert_engine.async_refresh()

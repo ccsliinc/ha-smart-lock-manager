@@ -14,8 +14,8 @@ with their env vars. These tests prove, against a temp file pointed at via the
 * ``SLM_DEV_MOCK`` is NOT readable from the file (env-only).
 
 Every test isolates env via ``patch.dict`` and points ``SLM_FLAGS_PATH`` at a
-``tmp_path`` file so nothing touches the real ``/config`` location, and resets
-the module's mtime cache between writes.
+``tmp_path`` file so nothing touches the real ``/config`` location, and
+re-primes the module's in-memory flags cache after each write.
 """
 
 from __future__ import annotations
@@ -41,11 +41,13 @@ _FLAG_ENV_KEYS = (
 
 
 def _write_flags(path: Path, payload: Optional[Dict[str, Any]]) -> None:
-    """Write a flags file (or raw-malformed content) and reset the cache.
+    """Write a flags file (or raw-malformed content) and re-prime the cache.
 
     - Description: Helper that serializes ``payload`` as JSON to ``path`` (or,
       if ``payload`` is a str, writes it verbatim to simulate malformed JSON),
-      then clears the module mtime cache + warn-dedup so the next read re-parses.
+      clears the warn-dedup guard, then calls :func:`gating.prime_flags_cache`
+      so the in-memory cache reflects the new file (mirrors the executor prime
+      that ``__init__.py`` runs on every settings-change refresh).
     - Inputs: path (Path target), payload (dict to JSON-dump, str for raw bytes,
       or None to leave the file absent).
     - Outputs: None.
@@ -55,11 +57,10 @@ def _write_flags(path: Path, payload: Optional[Dict[str, Any]]) -> None:
             path.write_text(payload, encoding="utf-8")
         else:
             path.write_text(json.dumps(payload), encoding="utf-8")
-    # Reset the module-level mtime cache + warn guard between writes so each
-    # assertion observes a fresh parse (temp files can share an mtime tick).
-    gating._flags_cache["key"] = None
-    gating._flags_cache["value"] = dict(gating._EMPTY_FLAGS)
+    # Reset the warn guard so a fresh bad file logs once, then prime so the
+    # no-I/O hot path observes the new file contents.
     gating._warned_key = None
+    gating.prime_flags_cache()
 
 
 @pytest.fixture
@@ -76,8 +77,10 @@ def flags_path(tmp_path: Path) -> Path:
     cleared = {key: "" for key in _FLAG_ENV_KEYS}
     cleared["SLM_FLAGS_PATH"] = str(path)
     with patch.dict(os.environ, cleared):
-        gating._flags_cache["key"] = None
         gating._warned_key = None
+        # Prime against the (initially absent) temp file so the cache starts
+        # from a clean all-false baseline pointed at the test path.
+        gating.prime_flags_cache()
         yield path
 
 
@@ -159,3 +162,72 @@ class TestFileFlagSource:
         with patch.dict(os.environ, {"SLM_DEV_MOCK": "1"}):
             assert gating.is_dev_mock() is True
             assert gating.current_engine_mode() == gating.MODE_DEV
+
+
+class TestPrimeAndHotPath:
+    """Cover the prime/cache split that keeps the hot path off the disk."""
+
+    def test_prime_populates_cache_returns_flags(self, flags_path: Path) -> None:
+        """Priming returns the parsed flags and fills the module cache."""
+        flags_path.write_text(
+            json.dumps({"enable_engines": True, "real_notify": True}),
+            encoding="utf-8",
+        )
+        result = gating.prime_flags_cache()
+        assert result == {
+            "enable_engines": True,
+            "real_notify": True,
+            "real_autolock": False,
+        }
+        assert gating._cached_flags == result
+        # Hot-path helper now reflects the primed cache.
+        assert gating._file_flag("enable_engines") is True
+
+    def test_hot_path_uses_cache_no_disk_read(self, flags_path: Path) -> None:
+        """After priming, the hot path reads the cache without any open()."""
+        _write_flags(flags_path, {"enable_engines": True})
+        assert gating.engines_enabled() is True
+        # Open must NOT be called on the read path: patch it to explode, then
+        # exercise every loop-reachable gate. They must answer from the cache.
+        with patch("custom_components.smart_lock_manager.gating.open") as mock_open:
+            mock_open.side_effect = AssertionError("hot path opened the flags file")
+            assert gating.engines_enabled() is True
+            assert gating.engines_active() is True
+            assert gating.real_notify_enabled() is False
+            assert gating.real_autolock_enabled() is False
+            assert gating.current_engine_mode() == gating.MODE_OBSERVE
+            mock_open.assert_not_called()
+
+    def test_file_edit_not_seen_until_reprime(self, flags_path: Path) -> None:
+        """A flags-file edit is invisible to the hot path until the next prime."""
+        _write_flags(flags_path, {"enable_engines": True})
+        assert gating.engines_enabled() is True
+        # Edit the file WITHOUT priming — the cache is stale by design.
+        flags_path.write_text(json.dumps({"enable_engines": False}), encoding="utf-8")
+        assert gating.engines_enabled() is True
+        # The next prime (executor / settings-change refresh) picks it up.
+        gating.prime_flags_cache()
+        assert gating.engines_enabled() is False
+
+    def test_prime_missing_file_all_false(self, flags_path: Path) -> None:
+        """Priming an absent file yields an all-false cache, never raises."""
+        assert not flags_path.exists()
+        assert gating.prime_flags_cache() == dict(gating._EMPTY_FLAGS)
+        assert gating._file_flag("real_autolock") is False
+
+    def test_prime_malformed_file_all_false(self, flags_path: Path) -> None:
+        """Priming a malformed file yields all-false, never raises."""
+        flags_path.write_text("{not valid json", encoding="utf-8")
+        gating._warned_key = None
+        assert gating.prime_flags_cache() == dict(gating._EMPTY_FLAGS)
+
+    def test_prime_honors_flags_path_override(self, tmp_path: Path) -> None:
+        """prime_flags_cache reads the SLM_FLAGS_PATH override, not the default."""
+        override = tmp_path / "override-flags.json"
+        override.write_text(json.dumps({"real_autolock": True}), encoding="utf-8")
+        cleared = {key: "" for key in _FLAG_ENV_KEYS}
+        cleared["SLM_FLAGS_PATH"] = str(override)
+        with patch.dict(os.environ, cleared):
+            gating._warned_key = None
+            assert gating.prime_flags_cache()["real_autolock"] is True
+            assert gating.real_autolock_enabled() is True

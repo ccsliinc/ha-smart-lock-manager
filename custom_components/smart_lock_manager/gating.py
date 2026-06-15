@@ -69,11 +69,25 @@ Robustness: a missing file yields all-false file values (env still honored); a
 malformed/unreadable file is treated as all-false and logs a SINGLE warning,
 never raising. Unknown keys are ignored; values are coerced to bool. The path
 defaults to :data:`_DEFAULT_FLAGS_PATH` but can be overridden via the
-``SLM_FLAGS_PATH`` env var (for unit tests / dev temp files). The read is cheap
-and mtime-cached, but enabling engines via the file STILL requires an
-integration reload / HA restart because the engines are CONSTRUCTED once at
-setup (see :func:`engines_active`); the file is re-read live for the real-action
-decision points (notify / auto-lock) on every check.
+``SLM_FLAGS_PATH`` env var (for unit tests / dev temp files).
+
+No blocking I/O on the event loop
+---------------------------------
+The hot path (:func:`engines_active` / :func:`engines_enabled` /
+:func:`real_notify_enabled` / :func:`real_autolock_enabled` ->
+:func:`_file_flag`) reads ONLY an in-memory cache populated by
+:func:`prime_flags_cache`. It performs NO ``open()`` / disk access, so it is
+safe to call on the HA event loop. The actual blocking file read lives in
+:func:`prime_flags_cache`, which ``__init__.py`` schedules in the executor
+(``await hass.async_add_executor_job(prime_flags_cache)``) before the first
+gate check at setup and again on the zone-settings-change refresh path.
+
+Trade-off: changing the flags file takes effect on the NEXT prime (HA restart /
+integration reload / a zone-settings-change refresh), NOT instantly per
+decision. This matches the existing "enabling engines needs a reload" note
+(engines are CONSTRUCTED once at setup). The real-action flags (notify /
+auto-lock) are still honored from the primed cache. Env reads are non-blocking
+and remain live on every check.
 """
 
 from __future__ import annotations
@@ -127,15 +141,17 @@ _FLAGS_PATH_ENV = "SLM_FLAGS_PATH"
 # listed here is ignored. SLM_DEV_MOCK is deliberately absent (env-only).
 _FILE_KEYS = ("enable_engines", "real_notify", "real_autolock")
 
-# All-false result reused for missing / malformed files.
+# All-false result reused for missing / malformed files and the initial cache.
 _EMPTY_FLAGS: Dict[str, bool] = {key: False for key in _FILE_KEYS}
 
-# mtime-based cache: (path, mtime) -> parsed flags. Keeps the per-decision read
-# cheap without sacrificing correctness (a changed file changes its mtime).
-_flags_cache: Dict[str, object] = {"key": None, "value": dict(_EMPTY_FLAGS)}
+# In-memory flags cache read by the HOT PATH with NO disk I/O. Populated by
+# :func:`prime_flags_cache` (which does the blocking open()/json parse and is
+# scheduled in the executor by __init__.py). Until the first prime it stays
+# all-false, so a gate checked before priming simply falls back to env-only.
+_cached_flags: Dict[str, bool] = dict(_EMPTY_FLAGS)
 
 # Guard so the malformed-file warning is logged at most once per bad (path,
-# mtime) — avoids log spam on the per-decision read path.
+# mtime) — avoids log spam across repeated primes of the same bad file.
 _warned_key: object = None
 
 
@@ -152,40 +168,41 @@ def _flags_path() -> str:
     return override or _DEFAULT_FLAGS_PATH
 
 
-def _read_flags_file() -> Dict[str, bool]:
-    """Read the JSON flags file, returning a {key: bool} map (never raises).
+def prime_flags_cache() -> Dict[str, bool]:
+    """Read the flags file from disk and populate the in-memory cache.
 
-    - Description: Loads the file at :func:`_flags_path` and coerces the known
-      keys (:data:`_FILE_KEYS`) to bool. A missing file -> all-false. A
-      malformed / unreadable file or a non-object JSON root -> all-false plus a
-      SINGLE logged warning (deduped by path+mtime). Unknown keys are ignored.
-      Results are mtime-cached so repeated per-decision reads stay cheap.
+    - Description: Performs the BLOCKING ``open()`` / JSON parse and stores the
+      result in :data:`_cached_flags` for the no-I/O hot path to read. Intended
+      to run in the executor (``hass.async_add_executor_job(prime_flags_cache)``)
+      so the event loop never touches disk. A missing file -> all-false (env
+      still honored). A malformed / unreadable file or non-object JSON root ->
+      all-false plus a SINGLE logged warning (deduped by path+mtime). Unknown
+      keys are ignored; known keys are coerced to bool. Never raises. Uses plain
+      ``open``/``json`` so the module stays importable without Home Assistant.
     - Inputs: none (reads the filesystem + process environment).
-    - Outputs: Dict[str, bool] with exactly the :data:`_FILE_KEYS` keys.
+    - Outputs: Dict[str, bool] with exactly the :data:`_FILE_KEYS` keys (also
+      stored in the module cache).
     """
-    global _warned_key
+    global _cached_flags, _warned_key
 
     path = _flags_path()
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        # Missing / unreadable file: not an error condition — env still honored.
-        return dict(_EMPTY_FLAGS)
-
-    cache_key = (path, mtime)
-    if _flags_cache["key"] == cache_key:
-        cached = _flags_cache["value"]
-        if isinstance(cached, dict):
-            return {key: bool(cached.get(key, False)) for key in _FILE_KEYS}
-        return dict(_EMPTY_FLAGS)
-
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         if not isinstance(data, dict):
             raise ValueError("flags file root is not a JSON object")
-        result = {key: bool(data.get(key, False)) for key in _FILE_KEYS}
-    except (OSError, ValueError) as err:
+        result: Dict[str, bool] = {
+            key: bool(data.get(key, False)) for key in _FILE_KEYS
+        }
+    except OSError:
+        # Missing / unreadable file: not an error condition — env still honored.
+        result = dict(_EMPTY_FLAGS)
+    except ValueError as err:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        cache_key = (path, mtime)
         if _warned_key != cache_key:
             _LOGGER.warning(
                 "Smart Lock Manager flags file %s is malformed or unreadable "
@@ -196,20 +213,21 @@ def _read_flags_file() -> Dict[str, bool]:
             _warned_key = cache_key
         result = dict(_EMPTY_FLAGS)
 
-    _flags_cache["key"] = cache_key
-    _flags_cache["value"] = dict(result)
+    _cached_flags = dict(result)
     return dict(result)
 
 
 def _file_flag(key: str) -> bool:
-    """Return a single file flag's bool value (all-false on any read failure).
+    """Return a single file flag's bool value from the in-memory cache.
 
-    - Description: Convenience wrapper over :func:`_read_flags_file` for the one
-      key a caller cares about. Robustness is fully handled by the reader.
+    - Description: Reads the primed cache ONLY — no disk I/O — so it is safe on
+      the HA event loop. Returns False until :func:`prime_flags_cache` has run
+      (and after any read failure, which primes all-false). Robustness lives in
+      the prime function.
     - Inputs: key (str) — one of :data:`_FILE_KEYS`.
     - Outputs: bool.
     """
-    return _read_flags_file().get(key, False)
+    return _cached_flags.get(key, False)
 
 
 def engines_enabled() -> bool:
