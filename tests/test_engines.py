@@ -35,6 +35,7 @@ from custom_components.smart_lock_manager.auto_lock import (
 from custom_components.smart_lock_manager.auto_lock_verify import _dig_bolt_status
 from custom_components.smart_lock_manager.models.zone import Zone
 from custom_components.smart_lock_manager.models.zone_settings import ZoneSettings
+from custom_components.smart_lock_manager.notifications import build_alert_subject
 from custom_components.smart_lock_manager.zone_runtime import ZONE_REGISTRY_KEY
 
 LOCK_ENTITY = "lock.front_test"
@@ -208,6 +209,165 @@ class TestAlertDetectors:
         alerts = alert_engine.serialize()
         assert alerts[0]["alert_type"] == "auto_lock_failed"
         assert alerts[0]["zone_name"] == "Test Zone"
+
+
+class TestAlertSubjects:
+    """Pyscript-parity email subject wording (keyed on member entity id)."""
+
+    def test_sustained_subject_matches_pyscript(self) -> None:
+        """sustained_unlock -> 'office HA - {entity} unlocked >{n}s'."""
+        alert = {
+            "alert_type": ALERT_SUSTAINED,
+            "member_entity_id": "lock.front_north",
+            "door_name": "Front North",
+            "message": "Unlocked >15s without re-lock",
+            "is_recovery": False,
+        }
+        assert (
+            build_alert_subject(alert) == "office HA - lock.front_north unlocked >15s"
+        )
+
+    def test_sustained_recovery_subject(self) -> None:
+        """sustained_unlock recovery -> 'office HA - {entity} locked again'."""
+        alert = {
+            "alert_type": ALERT_SUSTAINED,
+            "member_entity_id": "lock.front_middle_door_lock",
+            "is_recovery": True,
+            "message": "Re-locked after sustained-unlock alert",
+        }
+        assert (
+            build_alert_subject(alert)
+            == "office HA - lock.front_middle_door_lock locked again"
+        )
+
+    def test_outside_hours_subject_matches_pyscript(self) -> None:
+        """outside_hours -> 'office HA - door {entity} unlocked outside ...'."""
+        alert = {
+            "alert_type": ALERT_OUTSIDE_HOURS,
+            "member_entity_id": "lock.rear",
+            "message": "Unlocked outside business hours",
+            "is_recovery": False,
+        }
+        assert build_alert_subject(alert) == (
+            "office HA - door lock.rear unlocked outside business hours"
+        )
+
+    def test_outside_hours_recovery_subject(self) -> None:
+        """outside_hours recovery -> 'office HA - {entity} locked again'."""
+        alert = {
+            "alert_type": ALERT_OUTSIDE_HOURS,
+            "member_entity_id": "lock.rear",
+            "is_recovery": True,
+        }
+        assert build_alert_subject(alert) == "office HA - lock.rear locked again"
+
+    def test_auto_lock_failed_subject_uses_emdash_and_name(self) -> None:
+        """auto_lock_failed -> 'office HA — {name} FAILED to auto-lock at COB'."""
+        alert = {
+            "alert_type": "auto_lock_failed",
+            "member_entity_id": "lock.front_north",
+            "door_name": "Front North",
+            "message": "scheduled auto-lock FAILED after 3 attempt(s)",
+        }
+        # EM-DASH (—), and the friendly NAME, exactly like lock_doors.py.
+        assert build_alert_subject(alert) == (
+            "office HA — Front North FAILED to auto-lock at COB"
+        )
+
+    def test_slm_only_subjects(self) -> None:
+        """Native-only types (jam/low_battery/offline) use the house style."""
+        jam = {
+            "alert_type": ALERT_JAM,
+            "member_entity_id": "lock.bathroom",
+            "is_recovery": False,
+        }
+        assert build_alert_subject(jam) == "office HA - lock.bathroom jammed"
+
+        battery = {
+            "alert_type": ALERT_LOW_BATTERY,
+            "member_entity_id": "lock.suite_105",
+            "message": "Battery low (8%)",
+            "is_recovery": False,
+        }
+        assert build_alert_subject(battery) == (
+            "office HA - lock.suite_105 battery low (8%)"
+        )
+
+        offline = {
+            "alert_type": ALERT_OFFLINE,
+            "member_entity_id": "lock.suite_106",
+            "is_recovery": False,
+        }
+        assert build_alert_subject(offline) == "office HA - lock.suite_106 offline"
+
+    def test_unknown_type_falls_back_to_house_style(self) -> None:
+        """An unknown alert_type still yields a non-empty 'office HA - ...'."""
+        alert = {
+            "alert_type": "brand_new_type",
+            "member_entity_id": "lock.x",
+            "message": "something happened",
+        }
+        assert build_alert_subject(alert) == ("office HA - lock.x something happened")
+
+
+class TestNotificationRouting:
+    """Every alert type routes through the dispatcher per the zone notify cfg."""
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so recording doesn't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    @pytest.fixture
+    def notify_engine(self, hass: HomeAssistant) -> AlertEngine:
+        """Build an engine over a zone with BOTH notify channels enabled."""
+        zone = _build_zone()
+        zone.settings.notify.email.enabled = True
+        zone.settings.notify.mobile.enabled = True
+        _register_zone(hass, zone)
+        return AlertEngine(hass)
+
+    async def _intents_for(self, engine: AlertEngine, alert_type: str) -> list:
+        """Simulate one alert and return its rendered notify_intents.
+
+        Stubs the SMTP2GO creds so the DRY-RUN email renders without reading
+        secrets.yaml from disk, then awaits the async ``_notify`` dispatch task
+        ``_record`` schedules.
+        """
+        creds = {
+            "user": "u",
+            "pass": "p",
+            "from": "from@x",
+            "to": "to@x",
+            "kind_to": {"alert": []},
+        }
+        with patch.object(
+            engine._dispatcher.email, "_creds", AsyncMock(return_value=creds)
+        ):
+            engine.dev_simulate(alert_type, LOCK_ENTITY)
+            # _record schedules async_create_task(self._notify); await it.
+            await engine.hass.async_block_till_done()
+        match = next(a for a in engine.serialize() if a["alert_type"] == alert_type)
+        return match["notify_intents"]
+
+    async def test_low_battery_and_offline_route_email_and_mobile(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """low_battery + offline produce email+mobile intents (DRY-RUN)."""
+        for alert_type in (ALERT_LOW_BATTERY, ALERT_OFFLINE):
+            intents = await self._intents_for(notify_engine, alert_type)
+            channels = {i["channel"] for i in intents}
+            assert channels == {"email", "mobile"}, alert_type
+            # Everything stays DRY-RUN — nothing is actually sent.
+            assert all(i["dry_run"] is True for i in intents), alert_type
+            assert all(i["sent"] is False for i in intents), alert_type
+            email = next(i for i in intents if i["channel"] == "email")
+            # The new pyscript-style subject (post-wrap) is present.
+            assert "office HA -" in email["subject"], alert_type
 
 
 class TestAutoLockEngine:

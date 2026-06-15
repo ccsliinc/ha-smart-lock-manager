@@ -31,11 +31,12 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import smtplib
 from dataclasses import dataclass
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml  # type: ignore[import-untyped]
 from homeassistant.core import HomeAssistant
@@ -68,6 +69,162 @@ _MARKERS = {
 # Channel identifiers used in intent records.
 CHANNEL_EMAIL = "email"
 CHANNEL_MOBILE = "mobile"
+
+# --- Pyscript-parity subject builders --------------------------------------
+# The user's mail filters key on the EXACT subject body the legacy pyscripts
+# pass to ``send_alert(...)``. To keep those filters working, SLM reproduces
+# that wording verbatim, keyed by alert_type, using the MEMBER ENTITY ID (the
+# pyscripts key on entity_id, e.g. ``lock.front_north``) — NOT the zone display
+# name. SLM-only alert types that have no pyscript equivalent (low_battery,
+# offline, standalone jam) use the same ``office HA - {entity} ...`` house
+# style. The fleet wrapper (``[fleet/internal/{kind}] {marker} {subject}``) is
+# applied separately by :func:`_format_subject` and is unchanged.
+#
+# IMPORTANT — punctuation parity: the sustained / outside-hours pyscripts use a
+# plain hyphen ("office HA - ..."), while ``lock_doors.py`` (COB auto-lock) uses
+# an EM-DASH ("office HA — ..."). Both are reproduced exactly below so filters
+# matching either separator keep working. Each builder receives the alert record
+# and returns the pre-wrap subject body.
+
+# Subject prefix shared by every SLM alert subject (plain-hyphen variant).
+_SUBJECT_PREFIX = "office HA -"
+
+# Extracts the elapsed seconds out of a sustained-unlock message body
+# ("Unlocked >15s without re-lock" / "...(dev-simulated)").
+_SECONDS_RE = re.compile(r">(\d+)s")
+
+# Extracts the battery percent out of a low-battery message body
+# ("Battery low (8%)" / "Battery recovered (30%)").
+_PERCENT_RE = re.compile(r"\((\d+)%\)")
+
+
+def _entity_of(alert: Dict[str, Any]) -> str:
+    """Return the member entity id the pyscripts key subjects on.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str entity_id (falls back to door name then ``lock``).
+    """
+    return str(alert.get("member_entity_id") or alert.get("door_name") or "lock")
+
+
+def _name_of(alert: Dict[str, Any]) -> str:
+    """Return the friendly door name (used by the COB auto-lock subject).
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str door name (falls back to entity id).
+    """
+    return str(alert.get("door_name") or alert.get("member_entity_id") or "lock")
+
+
+def _first_int(pattern: "re.Pattern[str]", text: str, default: int) -> int:
+    """Return the first integer matched by ``pattern`` in ``text``.
+
+    - Inputs: pattern (compiled regex with one int group), text (str),
+      default (int returned when no match).
+    - Outputs: int.
+    """
+    match = pattern.search(text or "")
+    return int(match.group(1)) if match else default
+
+
+def _subj_sustained(alert: Dict[str, Any]) -> str:
+    """Sustained-unlock subject — mirrors front_middle_lock.py.
+
+    Alert:    ``office HA - {entity} unlocked >{n}s``
+    Recovery: ``office HA - {entity} locked again``
+    """
+    entity = _entity_of(alert)
+    if alert.get("is_recovery"):
+        return f"{_SUBJECT_PREFIX} {entity} locked again"
+    seconds = _first_int(_SECONDS_RE, str(alert.get("message")), 15)
+    return f"{_SUBJECT_PREFIX} {entity} unlocked >{seconds}s"
+
+
+def _subj_outside_hours(alert: Dict[str, Any]) -> str:
+    """Outside-hours subject — mirrors unlocked_outside_business.py.
+
+    Alert:    ``office HA - door {entity} unlocked outside business hours``
+    Recovery: ``office HA - {entity} locked again``
+    """
+    entity = _entity_of(alert)
+    if alert.get("is_recovery"):
+        return f"{_SUBJECT_PREFIX} {entity} locked again"
+    return f"{_SUBJECT_PREFIX} door {entity} unlocked outside business hours"
+
+
+def _subj_auto_lock_failed(alert: Dict[str, Any]) -> str:
+    """COB auto-lock failure subject — mirrors lock_doors.py (EM-DASH).
+
+    Alert: ``office HA — {name} FAILED to auto-lock at COB``
+    """
+    # NOTE: em-dash, and uses the friendly NAME (lock_doors.py keys on name).
+    return f"office HA — {_name_of(alert)} FAILED to auto-lock at COB"
+
+
+def _subj_jam(alert: Dict[str, Any]) -> str:
+    """Jam subject — SLM-only house style (no pyscript equivalent).
+
+    Alert:    ``office HA - {entity} jammed``
+    Recovery: ``office HA - {entity} jam cleared``
+    """
+    entity = _entity_of(alert)
+    state = "jam cleared" if alert.get("is_recovery") else "jammed"
+    return f"{_SUBJECT_PREFIX} {entity} {state}"
+
+
+def _subj_low_battery(alert: Dict[str, Any]) -> str:
+    """Low-battery subject — SLM-only house style.
+
+    Alert:    ``office HA - {entity} battery low ({pct}%)``
+    Recovery: ``office HA - {entity} battery recovered ({pct}%)``
+    """
+    entity = _entity_of(alert)
+    pct = _first_int(_PERCENT_RE, str(alert.get("message")), 0)
+    state = "battery recovered" if alert.get("is_recovery") else "battery low"
+    return f"{_SUBJECT_PREFIX} {entity} {state} ({pct}%)"
+
+
+def _subj_offline(alert: Dict[str, Any]) -> str:
+    """Offline subject — SLM-only house style.
+
+    Alert:    ``office HA - {entity} offline``
+    Recovery: ``office HA - {entity} back online``
+    """
+    entity = _entity_of(alert)
+    state = "back online" if alert.get("is_recovery") else "offline"
+    return f"{_SUBJECT_PREFIX} {entity} {state}"
+
+
+# alert_type -> subject builder. Single source of truth so the subject wording
+# stays data-driven (add a row, not an if/else). Keys mirror the ``ALERT_*``
+# ids in :mod:`.alert_detectors` / :mod:`.auto_lock_verify`.
+_SUBJECT_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
+    "sustained_unlock": _subj_sustained,
+    "outside_hours": _subj_outside_hours,
+    "auto_lock_failed": _subj_auto_lock_failed,
+    "jam": _subj_jam,
+    "low_battery": _subj_low_battery,
+    "offline": _subj_offline,
+}
+
+
+def build_alert_subject(alert: Dict[str, Any]) -> str:
+    """Build the pyscript-parity (pre-wrap) email subject for an alert record.
+
+    - Description: Dispatches on ``alert_type`` to the matching pyscript-style
+      builder (see :data:`_SUBJECT_BUILDERS`). Unknown types fall back to a
+      consistent ``office HA - {entity} {message}`` line so a new alert type can
+      never produce an empty/garbled subject. The fleet wrapper + severity
+      marker are added afterwards by :func:`_format_subject`.
+    - Inputs: alert (dict alert record from the engine).
+    - Outputs: str pre-wrap subject body.
+    """
+    builder = _SUBJECT_BUILDERS.get(str(alert.get("alert_type")))
+    if builder is not None:
+        return builder(alert)
+    entity = _entity_of(alert)
+    message = alert.get("message") or alert.get("alert_type") or "alert"
+    return f"{_SUBJECT_PREFIX} {entity} {message}"
 
 
 def real_send_enabled() -> bool:
@@ -396,12 +553,16 @@ class NotificationDispatcher:
     def _email_subject(alert: Dict[str, Any]) -> str:
         """Build the human (pre-wrap) email subject from an alert record.
 
+        - Description: Delegates to :func:`build_alert_subject`, which reproduces
+          the legacy pyscripts' exact ``send_alert`` subject wording (keyed on
+          the member entity id) so the user's mail filters keep matching. The
+          fleet wrapper + severity marker are applied later by
+          :func:`_format_subject`.
         - Inputs: alert (dict alert record from the engine).
-        - Outputs: str subject (e.g. ``SLM Front North: Lock jammed``).
+        - Outputs: str pre-wrap subject (e.g.
+          ``office HA - lock.front_north unlocked >15s``).
         """
-        door = alert.get("door_name") or alert.get("member_entity_id") or "lock"
-        message = alert.get("message") or alert.get("alert_type") or "alert"
-        return f"SLM {door}: {message}"
+        return build_alert_subject(alert)
 
     @staticmethod
     def _body(alert: Dict[str, Any]) -> str:
