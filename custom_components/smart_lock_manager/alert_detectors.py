@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_call_later
 
+from .dev_mock import is_dev_mock
 from .models.zone import Zone
 from .models.zone_settings import (
     DEFAULT_CLOSE_TIME,
@@ -43,10 +44,11 @@ from .zone_runtime import get_zone_for_lock
 
 _LOGGER = logging.getLogger(__name__)
 
-# When True (always, in this dev-gated engine) every detector observes
+# Dev-only override: when True AND dev_mock is active, every detector observes
 # regardless of the per-zone enable flag, using config thresholds when present
-# and the mirror defaults otherwise. Flip to False to make the engine honor the
-# per-zone enable flags strictly (intended for the future production engine).
+# and the mirror defaults otherwise — preserving dev continuity. In PRODUCTION
+# (dev_mock off) this flag has no effect and the engine honors the per-zone
+# enable flags strictly. Flip to False to disable the dev override entirely.
 _OBSERVE_ALL_IN_DEV = True
 
 # Severity vocabulary (mirrors the pyscripts' send_alert vocabulary).
@@ -144,15 +146,16 @@ class AlertDetectorsMixin:
     def _detector_enabled(self, entity_id: str, configured: bool) -> bool:
         """Decide whether a detector should observe for this member.
 
-        - Description: In this dev-gated observe-only engine, observation is
-          kept on for ALL types (``_OBSERVE_ALL_IN_DEV``) so dev continuity is
-          preserved even though per-zone toggles default to False. When that
-          flag is False (the future production engine) the per-zone ``enabled``
-          flag is honored strictly.
+        - Description: The observe-all override (``_OBSERVE_ALL_IN_DEV``) only
+          applies when dev_mock is active — in dev, observation is kept on for
+          ALL types so dev continuity is preserved even though per-zone toggles
+          default to False. In PRODUCTION (dev_mock off) the per-zone
+          ``enabled`` flag is honored strictly: a disabled detector does NOT
+          observe, an enabled one does.
         - Inputs: entity_id (str), configured (bool — the zone's enable flag).
         - Outputs: bool.
         """
-        if _OBSERVE_ALL_IN_DEV:
+        if _OBSERVE_ALL_IN_DEV and is_dev_mock():
             return True
         return configured
 

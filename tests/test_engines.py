@@ -211,6 +211,40 @@ class TestAlertDetectors:
         assert alerts[0]["zone_name"] == "Test Zone"
 
 
+class TestDetectorGating:
+    """``_detector_enabled`` honors dev_mock vs production observe semantics."""
+
+    def test_dev_mock_observes_disabled_detector(
+        self, alert_engine: AlertEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With dev_mock ON, a disabled detector still observes (observe-all)."""
+        monkeypatch.setattr(
+            "custom_components.smart_lock_manager.alert_detectors.is_dev_mock",
+            lambda: True,
+        )
+        assert alert_engine._detector_enabled(LOCK_ENTITY, configured=False) is True
+
+    def test_production_skips_disabled_detector(
+        self, alert_engine: AlertEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With dev_mock OFF, a disabled detector does NOT observe."""
+        monkeypatch.setattr(
+            "custom_components.smart_lock_manager.alert_detectors.is_dev_mock",
+            lambda: False,
+        )
+        assert alert_engine._detector_enabled(LOCK_ENTITY, configured=False) is False
+
+    def test_production_observes_enabled_detector(
+        self, alert_engine: AlertEngine, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With dev_mock OFF, an enabled detector observes (honors zone flag)."""
+        monkeypatch.setattr(
+            "custom_components.smart_lock_manager.alert_detectors.is_dev_mock",
+            lambda: False,
+        )
+        assert alert_engine._detector_enabled(LOCK_ENTITY, configured=True) is True
+
+
 class TestAlertSubjects:
     """Pyscript-parity email subject wording (keyed on member entity id)."""
 
