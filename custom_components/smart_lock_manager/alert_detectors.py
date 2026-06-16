@@ -172,6 +172,29 @@ class AlertDetectorsMixin:
 
     # -- detectors ----------------------------------------------------------
 
+    def _outside_hours_context(
+        self, entity_id: str
+    ) -> Optional[tuple[Optional[Zone], str, Dict[str, Any]]]:
+        """Resolve the outside-hours gating context for a member, or None.
+
+        - Description: SHARED gate used by both the state path and the sweep so
+          the enable/severity/flag resolution lives in ONE place. Returns
+          ``(zone, severity, flag)`` when the outside-hours detector should
+          observe for this member, or ``None`` when it is disabled (honoring
+          the dev observe-all override exactly like the other detectors).
+        - Inputs: entity_id (str member lock id).
+        - Outputs: (zone, severity, flag) tuple or None.
+        """
+        zone = self._zone_settings_for(entity_id)
+        oh = zone.settings.alerts.outside_hours if zone is not None else None
+        severity = oh.severity if oh is not None else SEV_CRIT
+        if not self._detector_enabled(
+            entity_id, bool(oh.enabled) if oh is not None else False
+        ):
+            return None
+        flag = self._flag(entity_id, ALERT_OUTSIDE_HOURS)
+        return zone, severity, flag
+
     def _eval_outside_hours(self, entity_id: str, value: str) -> None:
         """Outside-business-hours unlock detector (mirrors the pyscript).
 
@@ -181,15 +204,10 @@ class AlertDetectorsMixin:
         - Inputs: entity_id (str), value (str normalized lock state).
         - Outputs: None (records alerts).
         """
-        zone = self._zone_settings_for(entity_id)
-        oh = zone.settings.alerts.outside_hours if zone is not None else None
-        severity = oh.severity if oh is not None else SEV_CRIT
-        if not self._detector_enabled(
-            entity_id, bool(oh.enabled) if oh is not None else False
-        ):
+        resolved = self._outside_hours_context(entity_id)
+        if resolved is None:
             return
-
-        flag = self._flag(entity_id, ALERT_OUTSIDE_HOURS)
+        zone, severity, flag = resolved
 
         # Recovery: locked again after a prior alert (any time of day).
         if value == "locked" and flag.get("alerted"):
@@ -203,6 +221,30 @@ class AlertDetectorsMixin:
             flag["alerted"] = False
             return
 
+        self._check_outside_hours(entity_id, value, zone, severity, flag)
+
+    def _check_outside_hours(
+        self,
+        entity_id: str,
+        value: str,
+        zone: Optional[Zone],
+        severity: str,
+        flag: Dict[str, Any],
+    ) -> None:
+        """Fire the outside-hours alert if a member is unlocked off-hours.
+
+        - Description: The SHARED core check called by BOTH the state-trigger
+          path (:meth:`_eval_outside_hours`) and the periodic sweep
+          (``AlertEngine._run_outside_hours_sweep``). Records exactly one
+          outside-hours alert when the member is ``unlocked`` AND outside the
+          zone's business window AND not already in an alerted episode, then
+          sets the per-episode alerted flag. Recovery (re-lock) is handled by
+          the caller's state path, NOT here — the sweep never sees re-locks.
+        - Inputs: entity_id (str), value (str normalized lock state), zone
+          (owning Zone or None), severity (str WARN/CRIT), flag (the mutable
+          per-(entity, outside_hours) alerted-state dict).
+        - Outputs: None (records an alert + flips ``flag['alerted']``).
+        """
         if value != "unlocked":
             return
         if self._in_business_hours(zone):

@@ -14,6 +14,7 @@ driving them end-to-end here proves the mixin composition is intact.
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -89,9 +90,10 @@ class TestAlertEngineLifecycle:
         assert LOCK_ENTITY in monitored
         assert BATTERY_ENTITY in monitored
         assert alert_engine.serialize() == []
-        # Second start is a no-op.
+        # Second start is a no-op. Two handles: state listener + the periodic
+        # outside-hours sweep time-change trigger.
         await alert_engine.async_start()
-        assert len(alert_engine._unsubs) == 1
+        assert len(alert_engine._unsubs) == 2
         alert_engine.async_stop()
         assert alert_engine._started is False
         assert alert_engine._unsubs == []
@@ -99,7 +101,7 @@ class TestAlertEngineLifecycle:
     async def test_refresh_is_idempotent_no_duplicate_listeners(
         self, hass: HomeAssistant, alert_engine: AlertEngine
     ) -> None:
-        """Repeated refresh leaves exactly one state listener (no dupes)."""
+        """Repeated refresh leaves exactly one state listener + one sweep."""
         with patch(
             "custom_components.smart_lock_manager.alert_engine.load_alert_log",
             AsyncMock(return_value={"alerts": [], "alerted_state": {}}),
@@ -107,8 +109,9 @@ class TestAlertEngineLifecycle:
             await alert_engine.async_start()
         for _ in range(3):
             alert_engine.async_refresh()
-        # Exactly one state listener regardless of how many refreshes ran.
-        assert len(alert_engine._unsubs) == 1
+        # Exactly two handles (state listener + sweep trigger) regardless of
+        # how many refreshes ran — old handles are torn down first each time.
+        assert len(alert_engine._unsubs) == 2
 
     def test_refresh_before_start_is_noop(self, alert_engine: AlertEngine) -> None:
         """Refresh before start does nothing."""
@@ -209,6 +212,122 @@ class TestAlertDetectors:
         alerts = alert_engine.serialize()
         assert alerts[0]["alert_type"] == "auto_lock_failed"
         assert alerts[0]["zone_name"] == "Test Zone"
+
+
+class TestOutsideHoursSweep:
+    """Periodic boundary sweep for the still-unlocked-outside-hours gap."""
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so the sweep doesn't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    def test_boundary_unlock_caught_by_sweep_once(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A door unlocked-during-hours, still unlocked off-hours -> ONE alert.
+
+        Mirrors the production gap: the state path did NOT alert (it unlocked
+        in-hours), so only the boundary sweep can catch it. A second sweep does
+        NOT re-fire (per-episode alerted-flag dedup).
+        """
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        with patch.object(AlertEngine, "_in_business_hours", return_value=False):
+            alert_engine._run_outside_hours_sweep(datetime.now())
+            first = alert_engine.serialize()
+            assert len(first) == 1
+            assert first[0]["alert_type"] == ALERT_OUTSIDE_HOURS
+            assert first[0]["is_recovery"] is False
+            # Second sweep is idempotent — no re-fire.
+            alert_engine._run_outside_hours_sweep(datetime.now())
+            assert len(alert_engine.serialize()) == 1
+
+    def test_sweep_no_alert_when_locked_at_boundary(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A member LOCKED at the boundary records nothing on the sweep."""
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        with patch.object(AlertEngine, "_in_business_hours", return_value=False):
+            alert_engine._run_outside_hours_sweep(datetime.now())
+        assert alert_engine.serialize() == []
+
+    def test_sweep_no_alert_during_business_hours(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """Unlocked but still inside business hours -> sweep records nothing."""
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        with patch.object(AlertEngine, "_in_business_hours", return_value=True):
+            alert_engine._run_outside_hours_sweep(datetime.now())
+        assert alert_engine.serialize() == []
+
+    def test_state_path_then_sweep_no_double_record(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """Fresh off-hours state alert + later sweep -> no double-record.
+
+        The state path records one alert; the sweep then sees the SAME
+        already-alerted episode and records nothing further.
+        """
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        with patch.object(AlertEngine, "_in_business_hours", return_value=False):
+            alert_engine._eval_outside_hours(LOCK_ENTITY, "unlocked")
+            assert len(alert_engine.serialize()) == 1
+            alert_engine._run_outside_hours_sweep(datetime.now())
+            assert len(alert_engine.serialize()) == 1
+
+    def test_sweep_alert_then_relock_recovers(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """After the sweep alerts, a re-lock via the state path recovers once."""
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        with patch.object(AlertEngine, "_in_business_hours", return_value=False):
+            alert_engine._run_outside_hours_sweep(datetime.now())
+            assert len(alert_engine.serialize()) == 1
+            # Re-lock — recovery fires (any time of day) and clears the episode.
+            alert_engine._eval_outside_hours(LOCK_ENTITY, "locked")
+        recovered = alert_engine.serialize()
+        assert len(recovered) == 2
+        assert recovered[0]["is_recovery"] is True
+
+    def test_sweep_skipped_when_detector_disabled_in_production(
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With dev_mock OFF and outside_hours disabled, the sweep is a no-op."""
+        _register_zone(hass, _build_zone(outside_hours=False))
+        engine = AlertEngine(hass)
+        monkeypatch.setattr(
+            "custom_components.smart_lock_manager.alert_detectors.is_dev_mock",
+            lambda: False,
+        )
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        with patch.object(AlertEngine, "_in_business_hours", return_value=False):
+            engine._run_outside_hours_sweep(datetime.now())
+        assert engine.serialize() == []
+
+    async def test_start_registers_time_change_sweep(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """Starting the engine registers the periodic time-change sweep."""
+        with (
+            patch(
+                "custom_components.smart_lock_manager.alert_engine.load_alert_log",
+                AsyncMock(return_value={"alerts": [], "alerted_state": {}}),
+            ),
+            patch(
+                "custom_components.smart_lock_manager.alert_engine."
+                "async_track_time_change"
+            ) as track,
+        ):
+            await alert_engine.async_start()
+        track.assert_called_once()
+        # 15-minute cadence: minute in {0,15,30,45}, on the zero second.
+        _, kwargs = track.call_args
+        assert kwargs["minute"] == [0, 15, 30, 45]
+        assert kwargs["second"] == 0
 
 
 class TestDetectorGating:

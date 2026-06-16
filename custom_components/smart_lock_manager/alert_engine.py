@@ -39,7 +39,10 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_change,
+)
 
 from .alert_detectors import (  # noqa: F401 - re-exported for backward compat
     ALERT_JAM,
@@ -134,13 +137,7 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
         self.alerts = list(blob.get("alerts", []))[-MAX_ALERTS:]
         self._alerted = dict(blob.get("alerted_state", {}))
 
-        entities = self._monitored_entities()
-        if entities:
-            self._unsubs.append(
-                async_track_state_change_event(
-                    self.hass, entities, self._handle_state_event
-                )
-            )
+        entities = self._subscribe()
         self._started = True
         _LOGGER.info(
             "AlertEngine started: mode=%s real_notify=%s monitoring %d entit(y/ies)",
@@ -148,6 +145,42 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
             real_notify_enabled(),
             len(entities),
         )
+
+    @callback
+    def _subscribe(self) -> List[str]:
+        """Register the state listener + the periodic outside-hours sweep.
+
+        - Description: SINGLE wiring path shared by :meth:`async_start` and
+          :meth:`async_refresh`. Subscribes one state-change listener over the
+          current monitored-entity set, and registers a time-change trigger
+          that fires the still-unlocked-outside-hours sweep every 15 minutes
+          (minute in {0,15,30,45}, second 0). Both handles go into
+          ``_unsubs`` so the existing :meth:`_teardown_subscriptions` releases
+          them — no separate teardown path. The 15-minute cadence catches any
+          per-zone ``close_time`` boundary promptly; the per-episode
+          alerted-flag dedup makes the repeated sweep spam-safe.
+        - Inputs: none (reads the zone registry).
+        - Outputs: the monitored-entity list (for logging).
+        """
+        entities = self._monitored_entities()
+        if entities:
+            self._unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._handle_state_event
+                )
+            )
+        # Periodic boundary sweep: re-evaluate outside_hours for still-unlocked
+        # members at every quarter hour. Mirrors the pyscript's hourly cron but
+        # tighter so any configured close_time is caught within 15 minutes.
+        self._unsubs.append(
+            async_track_time_change(
+                self.hass,
+                self._run_outside_hours_sweep,
+                minute=[0, 15, 30, 45],
+                second=0,
+            )
+        )
+        return entities
 
     @callback
     def async_stop(self) -> None:
@@ -198,13 +231,7 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
         if not self._started:
             return
         self._teardown_subscriptions()
-        entities = self._monitored_entities()
-        if entities:
-            self._unsubs.append(
-                async_track_state_change_event(
-                    self.hass, entities, self._handle_state_event
-                )
-            )
+        entities = self._subscribe()
         _LOGGER.info(
             "AlertEngine refreshed: now monitoring %d entit(y/ies)", len(entities)
         )
@@ -301,6 +328,41 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
             self._eval_jam(entity_id, value, new_state.attributes)
             self._eval_outside_hours(entity_id, value)
             self._eval_sustained(entity_id, value)
+
+    @callback
+    def _run_outside_hours_sweep(self, _now: datetime) -> None:
+        """Periodic boundary sweep for the still-unlocked-outside-hours gap.
+
+        - Description: The state-trigger path only re-evaluates outside_hours on
+          a lock STATE CHANGE, so a door unlocked DURING business hours that
+          stays unlocked past close is never re-checked at the boundary. This
+          sweep — fired every 15 minutes by the time trigger registered in
+          :meth:`_subscribe` — closes that gap. For every zone with the
+          outside_hours detector enabled, it reads each member's LIVE state and
+          runs the SAME shared off-hours check the state path uses
+          (:meth:`_check_outside_hours`): an unlocked member outside the zone's
+          business window records exactly one outside_hours alert. The
+          per-episode alerted flag makes repeated sweeps idempotent (no
+          re-fire), and recovery-on-relock stays owned by the state path. ONLY
+          outside_hours is swept here (sustained_unlock is NOT — its own timer
+          chain already covers the duration).
+        - Inputs: _now (datetime supplied by the time trigger; unused — the
+          detector reads ``datetime.now()`` itself).
+        - Outputs: None (records alerts as a side effect).
+        """
+        for zone in get_zone_registry(self.hass).values():
+            if not zone.settings.alerts.outside_hours.enabled:
+                continue
+            for entity_id in zone.member_lock_entity_ids:
+                resolved = self._outside_hours_context(entity_id)
+                if resolved is None:
+                    continue
+                resolved_zone, severity, flag = resolved
+                state = self.hass.states.get(entity_id)
+                value = (state.state if state is not None else "unknown").lower()
+                self._check_outside_hours(
+                    entity_id, value, resolved_zone, severity, flag
+                )
 
     def _lock_for_battery(self, battery_entity_id: str) -> Optional[str]:
         """Resolve a battery sensor back to its monitored lock entity.
