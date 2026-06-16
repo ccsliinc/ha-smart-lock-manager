@@ -35,13 +35,13 @@ human-readable messages only — never PIN codes.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
-    async_track_time_change,
+    async_track_time_interval,
 )
 
 from .alert_detectors import (  # noqa: F401 - re-exported for backward compat
@@ -60,12 +60,18 @@ from .alert_detectors import (  # noqa: F401 - re-exported for backward compat
     SEV_WARN,
     AlertDetectorsMixin,
 )
+from .alert_detectors_health import AlertHealthDetectorsMixin
 from .alert_dev import AlertDevSimMixin
+from .alert_sweeps import AlertSweepsMixin
 from .const import DOMAIN
 from .dev_mock import is_dev_mock
 from .gating import current_engine_mode, real_notify_enabled
 from .notifications import NotificationDispatcher
-from .storage import load_alert_log, save_alert_log
+from .storage import get_cached_global_settings, load_alert_log, save_alert_log
+from .storage.global_settings import (
+    ATTR_HEALTH_SWEEP_MINUTES,
+    ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
+)
 from .zone_runtime import get_zone_registry
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,7 +83,12 @@ ALERT_ENGINE_KEY = f"{DOMAIN}_alert_engine"
 MAX_ALERTS = 100
 
 
-class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
+class AlertEngine(
+    AlertDetectorsMixin,
+    AlertHealthDetectorsMixin,
+    AlertSweepsMixin,
+    AlertDevSimMixin,
+):
     """Per-process OBSERVE-ONLY alert detector for all zone member locks.
 
     Created ONCE under ``SLM_DEV_MOCK`` and stored at
@@ -133,6 +144,11 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
         """
         if self._started:
             return
+        # Prime the global-settings cache so _subscribe can read the sweep
+        # cadences synchronously inside its callback.
+        from .storage import load_global_settings
+
+        await load_global_settings(self.hass)
         blob = await load_alert_log(self.hass)
         self.alerts = list(blob.get("alerts", []))[-MAX_ALERTS:]
         self._alerted = dict(blob.get("alerted_state", {}))
@@ -148,18 +164,29 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
 
     @callback
     def _subscribe(self) -> List[str]:
-        """Register the state listener + the periodic outside-hours sweep.
+        """Register the state listener + both periodic sweeps.
 
         - Description: SINGLE wiring path shared by :meth:`async_start` and
           :meth:`async_refresh`. Subscribes one state-change listener over the
-          current monitored-entity set, and registers a time-change trigger
-          that fires the still-unlocked-outside-hours sweep every 15 minutes
-          (minute in {0,15,30,45}, second 0). Both handles go into
-          ``_unsubs`` so the existing :meth:`_teardown_subscriptions` releases
-          them — no separate teardown path. The 15-minute cadence catches any
-          per-zone ``close_time`` boundary promptly; the per-episode
-          alerted-flag dedup makes the repeated sweep spam-safe.
-        - Inputs: none (reads the zone registry).
+          current monitored-entity set, then registers TWO interval triggers at
+          the GLOBALLY-CONFIGURED cadences (read synchronously from the
+          global-settings cache, primed by ``load_global_settings``):
+
+          * the still-unlocked OUTSIDE-HOURS sweep at
+            ``outside_hours_sweep_minutes`` (default 15) — fast, catches doors
+            left unlocked past a per-zone ``close_time`` boundary; and
+          * the persistent HEALTH sweep (jam / low_battery / offline) at
+            ``health_sweep_minutes`` (default 60) — slower, since those
+            conditions change slowly.
+
+          ``async_track_time_interval`` is used (not the fixed quarter-hour
+          ``async_track_time_change``) so an arbitrary N minutes works. All
+          handles go into ``_unsubs`` so the existing
+          :meth:`_teardown_subscriptions` releases them — no separate teardown.
+          The per-episode alerted-flag dedup makes the repeated sweeps spam-safe.
+          On a global-settings change, :meth:`async_refresh` tears down and
+          re-subscribes here, picking up the new cadences with NO restart.
+        - Inputs: none (reads the zone registry + the global-settings cache).
         - Outputs: the monitored-entity list (for logging).
         """
         entities = self._monitored_entities()
@@ -169,15 +196,24 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
                     self.hass, entities, self._handle_state_event
                 )
             )
-        # Periodic boundary sweep: re-evaluate outside_hours for still-unlocked
-        # members at every quarter hour. Mirrors the pyscript's hourly cron but
-        # tighter so any configured close_time is caught within 15 minutes.
+        settings = get_cached_global_settings()
+        outside_minutes = settings[ATTR_OUTSIDE_HOURS_SWEEP_MINUTES]
+        health_minutes = settings[ATTR_HEALTH_SWEEP_MINUTES]
+        # Outside-hours boundary sweep at the configurable fast cadence.
         self._unsubs.append(
-            async_track_time_change(
+            async_track_time_interval(
                 self.hass,
                 self._run_outside_hours_sweep,
-                minute=[0, 15, 30, 45],
-                second=0,
+                timedelta(minutes=outside_minutes),
+            )
+        )
+        # Persistent health sweep (jam / low_battery / offline) at the slower
+        # configurable cadence.
+        self._unsubs.append(
+            async_track_time_interval(
+                self.hass,
+                self._run_health_sweep,
+                timedelta(minutes=health_minutes),
             )
         )
         return entities
@@ -328,41 +364,6 @@ class AlertEngine(AlertDetectorsMixin, AlertDevSimMixin):
             self._eval_jam(entity_id, value, new_state.attributes)
             self._eval_outside_hours(entity_id, value)
             self._eval_sustained(entity_id, value)
-
-    @callback
-    def _run_outside_hours_sweep(self, _now: datetime) -> None:
-        """Periodic boundary sweep for the still-unlocked-outside-hours gap.
-
-        - Description: The state-trigger path only re-evaluates outside_hours on
-          a lock STATE CHANGE, so a door unlocked DURING business hours that
-          stays unlocked past close is never re-checked at the boundary. This
-          sweep — fired every 15 minutes by the time trigger registered in
-          :meth:`_subscribe` — closes that gap. For every zone with the
-          outside_hours detector enabled, it reads each member's LIVE state and
-          runs the SAME shared off-hours check the state path uses
-          (:meth:`_check_outside_hours`): an unlocked member outside the zone's
-          business window records exactly one outside_hours alert. The
-          per-episode alerted flag makes repeated sweeps idempotent (no
-          re-fire), and recovery-on-relock stays owned by the state path. ONLY
-          outside_hours is swept here (sustained_unlock is NOT — its own timer
-          chain already covers the duration).
-        - Inputs: _now (datetime supplied by the time trigger; unused — the
-          detector reads ``datetime.now()`` itself).
-        - Outputs: None (records alerts as a side effect).
-        """
-        for zone in get_zone_registry(self.hass).values():
-            if not zone.settings.alerts.outside_hours.enabled:
-                continue
-            for entity_id in zone.member_lock_entity_ids:
-                resolved = self._outside_hours_context(entity_id)
-                if resolved is None:
-                    continue
-                resolved_zone, severity, flag = resolved
-                state = self.hass.states.get(entity_id)
-                value = (state.state if state is not None else "unknown").lower()
-                self._check_outside_hours(
-                    entity_id, value, resolved_zone, severity, flag
-                )
 
     def _lock_for_battery(self, battery_entity_id: str) -> Optional[str]:
         """Resolve a battery sensor back to its monitored lock entity.

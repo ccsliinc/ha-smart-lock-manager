@@ -515,3 +515,34 @@ update_global_settings:
       required: false
       selector:
         boolean:
+
+set_sweep_intervals:
+  name: Set Alert Sweep Intervals
+  description: >-
+    Set the engine-wide periodic alert-sweep cadences (minutes). The
+    outside-hours boundary sweep catches doors left unlocked past close; the
+    health sweep re-checks persistent jam / low-battery / offline conditions.
+    Changes reschedule the sweeps live without a Home Assistant restart.
+  fields:
+    outside_hours_sweep_minutes:
+      name: Outside-Hours Sweep Interval
+      description: Minutes between outside-hours boundary sweeps (1-1440).
+      required: false
+      example: 15
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: minutes
+          mode: box
+    health_sweep_minutes:
+      name: Health Sweep Interval
+      description: Minutes between jam/low-battery/offline health sweeps (1-1440).
+      required: false
+      example: 60
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: minutes
+          mode: box

@@ -90,10 +90,10 @@ class TestAlertEngineLifecycle:
         assert LOCK_ENTITY in monitored
         assert BATTERY_ENTITY in monitored
         assert alert_engine.serialize() == []
-        # Second start is a no-op. Two handles: state listener + the periodic
-        # outside-hours sweep time-change trigger.
+        # Second start is a no-op. Three handles: state listener + the two
+        # periodic sweep interval triggers (outside-hours + health).
         await alert_engine.async_start()
-        assert len(alert_engine._unsubs) == 2
+        assert len(alert_engine._unsubs) == 3
         alert_engine.async_stop()
         assert alert_engine._started is False
         assert alert_engine._unsubs == []
@@ -109,9 +109,10 @@ class TestAlertEngineLifecycle:
             await alert_engine.async_start()
         for _ in range(3):
             alert_engine.async_refresh()
-        # Exactly two handles (state listener + sweep trigger) regardless of
-        # how many refreshes ran — old handles are torn down first each time.
-        assert len(alert_engine._unsubs) == 2
+        # Exactly three handles (state listener + the two sweep triggers)
+        # regardless of how many refreshes ran — old handles are torn down
+        # first each time.
+        assert len(alert_engine._unsubs) == 3
 
     def test_refresh_before_start_is_noop(self, alert_engine: AlertEngine) -> None:
         """Refresh before start does nothing."""
@@ -308,26 +309,247 @@ class TestOutsideHoursSweep:
             engine._run_outside_hours_sweep(datetime.now())
         assert engine.serialize() == []
 
-    async def test_start_registers_time_change_sweep(
+    async def test_start_registers_both_interval_sweeps(
         self, hass: HomeAssistant, alert_engine: AlertEngine
     ) -> None:
-        """Starting the engine registers the periodic time-change sweep."""
+        """Starting the engine registers BOTH configurable interval sweeps.
+
+        The outside-hours sweep runs at the default 15-minute cadence and the
+        health sweep at the default 60-minute cadence, both via
+        ``async_track_time_interval`` (arbitrary N works), reading the
+        globally-configured intervals from the primed cache.
+        """
+        from datetime import timedelta
+
         with (
             patch(
                 "custom_components.smart_lock_manager.alert_engine.load_alert_log",
                 AsyncMock(return_value={"alerts": [], "alerted_state": {}}),
             ),
             patch(
+                "custom_components.smart_lock_manager.storage." "load_global_settings",
+                AsyncMock(return_value=None),
+            ),
+            patch(
                 "custom_components.smart_lock_manager.alert_engine."
-                "async_track_time_change"
+                "get_cached_global_settings",
+                return_value={
+                    "outside_hours_sweep_minutes": 15,
+                    "health_sweep_minutes": 60,
+                },
+            ),
+            patch(
+                "custom_components.smart_lock_manager.alert_engine."
+                "async_track_time_interval"
             ) as track,
         ):
             await alert_engine.async_start()
-        track.assert_called_once()
-        # 15-minute cadence: minute in {0,15,30,45}, on the zero second.
-        _, kwargs = track.call_args
-        assert kwargs["minute"] == [0, 15, 30, 45]
-        assert kwargs["second"] == 0
+        # Two interval triggers: outside-hours (15m) + health (60m).
+        assert track.call_count == 2
+        intervals = {call.args[2] for call in track.call_args_list}
+        assert timedelta(minutes=15) in intervals
+        assert timedelta(minutes=60) in intervals
+
+
+class TestHealthSweep:
+    """Periodic health sweep for persistent jam / low_battery / offline."""
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so the sweep doesn't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    def test_jam_caught_by_sweep_once_then_recovers(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A persistently-jammed member -> ONE alert; 2nd sweep no re-fire."""
+        hass.states.async_set(LOCK_ENTITY, "jammed")
+        alert_engine._run_health_sweep(datetime.now())
+        first = alert_engine.serialize()
+        assert len(first) == 1
+        assert first[0]["alert_type"] == ALERT_JAM
+        assert first[0]["is_recovery"] is False
+        # Still jammed on the next sweep -> idempotent, no re-fire.
+        alert_engine._run_health_sweep(datetime.now())
+        assert len(alert_engine.serialize()) == 1
+        # Clearing the state via the state path records exactly one recovery.
+        alert_engine._eval_jam(LOCK_ENTITY, "locked", {})
+        recovered = alert_engine.serialize()
+        assert len(recovered) == 2
+        assert recovered[0]["is_recovery"] is True
+
+    def test_jam_sensor_on_caught_by_sweep(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A companion jam binary_sensor 'on' (lock not jammed) still alerts."""
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set("binary_sensor.front_test_jammed", "on")
+        alert_engine._run_health_sweep(datetime.now())
+        alerts = alert_engine.serialize()
+        assert len(alerts) == 1
+        assert alerts[0]["alert_type"] == ALERT_JAM
+
+    def test_offline_caught_by_sweep_once_then_recovers(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A persistently-offline member -> ONE alert; 2nd sweep no re-fire."""
+        hass.states.async_set(LOCK_ENTITY, "unavailable")
+        alert_engine._run_health_sweep(datetime.now())
+        first = alert_engine.serialize()
+        assert len(first) == 1
+        assert first[0]["alert_type"] == ALERT_OFFLINE
+        # Second sweep idempotent.
+        alert_engine._run_health_sweep(datetime.now())
+        assert len(alert_engine.serialize()) == 1
+        # Back online via the state path -> one recovery.
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        alert_engine._eval_offline(LOCK_ENTITY, "locked")
+        recovered = alert_engine.serialize()
+        assert len(recovered) == 2
+        assert recovered[0]["is_recovery"] is True
+
+    def test_low_battery_caught_by_sweep_once(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A battery stuck below threshold -> ONE alert; 2nd sweep no re-fire."""
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set(BATTERY_ENTITY, "5")
+        alert_engine._run_health_sweep(datetime.now())
+        first = alert_engine.serialize()
+        assert len(first) == 1
+        assert first[0]["alert_type"] == ALERT_LOW_BATTERY
+        assert first[0]["severity"] == "WARN"
+        alert_engine._run_health_sweep(datetime.now())
+        assert len(alert_engine.serialize()) == 1
+
+    def test_state_path_then_sweep_no_double_record(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A state-path jam alert + later sweep -> no double-record."""
+        alert_engine._eval_jam(LOCK_ENTITY, "jammed", {})
+        assert len(alert_engine.serialize()) == 1
+        # The sweep sees the SAME already-alerted episode -> records nothing.
+        hass.states.async_set(LOCK_ENTITY, "jammed")
+        alert_engine._run_health_sweep(datetime.now())
+        assert len(alert_engine.serialize()) == 1
+
+    def test_sweep_healthy_member_records_nothing(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """A locked member with good battery and online -> sweep is silent."""
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set(BATTERY_ENTITY, "90")
+        alert_engine._run_health_sweep(datetime.now())
+        assert alert_engine.serialize() == []
+
+    def test_sweep_does_not_touch_sustained(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """The health sweep never records a sustained_unlock alert."""
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        alert_engine._run_health_sweep(datetime.now())
+        types = {a["alert_type"] for a in alert_engine.serialize()}
+        assert ALERT_SUSTAINED not in types
+
+    def test_sweep_skipped_when_detectors_disabled_in_production(
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dev_mock OFF + all health detectors disabled -> sweep is a no-op."""
+        _register_zone(hass, _build_zone(jam=False, offline=False, low_battery=False))
+        engine = AlertEngine(hass)
+        monkeypatch.setattr(
+            "custom_components.smart_lock_manager.alert_detectors.is_dev_mock",
+            lambda: False,
+        )
+        monkeypatch.setattr(
+            "custom_components.smart_lock_manager.alert_sweeps.is_dev_mock",
+            lambda: False,
+        )
+        hass.states.async_set(LOCK_ENTITY, "jammed")
+        hass.states.async_set(BATTERY_ENTITY, "1")
+        engine._run_health_sweep(datetime.now())
+        assert engine.serialize() == []
+
+
+class TestSweepIntervalConfig:
+    """The global set_sweep_intervals settings store + validation."""
+
+    async def test_load_defaults_when_absent(self, hass: HomeAssistant) -> None:
+        """An unprimed store yields the documented cadence defaults."""
+        from custom_components.smart_lock_manager.storage.global_settings import (
+            DEFAULT_HEALTH_SWEEP_MINUTES,
+            DEFAULT_OUTSIDE_HOURS_SWEEP_MINUTES,
+            load_global_settings,
+        )
+
+        with patch(
+            "custom_components.smart_lock_manager.storage.global_settings.Store"
+        ) as store_cls:
+            store_cls.return_value.async_load = AsyncMock(return_value=None)
+            settings = await load_global_settings(hass)
+        assert (
+            settings["outside_hours_sweep_minutes"]
+            == DEFAULT_OUTSIDE_HOURS_SWEEP_MINUTES
+        )
+        assert settings["health_sweep_minutes"] == DEFAULT_HEALTH_SWEEP_MINUTES
+
+    async def test_save_persists_and_caches(self, hass: HomeAssistant) -> None:
+        """Saving a partial blob merges, persists, and re-primes the cache."""
+        from custom_components.smart_lock_manager.storage.global_settings import (
+            get_cached_global_settings,
+            save_global_settings,
+        )
+
+        saved = {}
+
+        async def _fake_save(blob):
+            saved.update(blob)
+
+        with patch(
+            "custom_components.smart_lock_manager.storage.global_settings.Store"
+        ) as store_cls:
+            store_cls.return_value.async_save = AsyncMock(side_effect=_fake_save)
+            await save_global_settings(hass, {"health_sweep_minutes": 30})
+        assert saved["health_sweep_minutes"] == 30
+        # Outside-hours retains its default in the merged persisted blob.
+        assert "outside_hours_sweep_minutes" in saved
+        assert get_cached_global_settings()["health_sweep_minutes"] == 30
+
+    def test_out_of_bounds_values_are_clamped_to_defaults(self) -> None:
+        """Values outside [1, 1440] are rejected, falling back to defaults."""
+        from custom_components.smart_lock_manager.storage.global_settings import (
+            DEFAULT_HEALTH_SWEEP_MINUTES,
+            _shape,
+        )
+
+        shaped = _shape({"health_sweep_minutes": 99999, "bogus": 1})
+        assert shaped["health_sweep_minutes"] == DEFAULT_HEALTH_SWEEP_MINUTES
+
+    def test_service_schema_rejects_zero_and_requires_a_key(self) -> None:
+        """The voluptuous schema enforces the 1..1440 range + at-least-one."""
+        import voluptuous as vol
+
+        from custom_components.smart_lock_manager import (
+            SET_SWEEP_INTERVALS_SCHEMA,
+        )
+
+        # Valid.
+        assert SET_SWEEP_INTERVALS_SCHEMA({"outside_hours_sweep_minutes": 5}) == {
+            "outside_hours_sweep_minutes": 5
+        }
+        # Zero is below the minimum.
+        with pytest.raises(vol.Invalid):
+            SET_SWEEP_INTERVALS_SCHEMA({"health_sweep_minutes": 0})
+        # Above the maximum.
+        with pytest.raises(vol.Invalid):
+            SET_SWEEP_INTERVALS_SCHEMA({"health_sweep_minutes": 5000})
+        # Empty payload must be rejected (at-least-one-key).
+        with pytest.raises(vol.Invalid):
+            SET_SWEEP_INTERVALS_SCHEMA({})
 
 
 class TestDetectorGating:

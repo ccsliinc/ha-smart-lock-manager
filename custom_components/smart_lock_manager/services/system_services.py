@@ -13,6 +13,11 @@ from ..const import (
     ATTR_SYNC_ON_LOCK_EVENTS,
     DOMAIN,
 )
+from ..storage import save_global_settings
+from ..storage.global_settings import (
+    ATTR_HEALTH_SWEEP_MINUTES,
+    ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +84,40 @@ class SystemServices:
         )
 
         _LOGGER.info("Updated global settings: %s", settings)
+
+    @staticmethod
+    async def set_sweep_intervals(
+        hass: HomeAssistant, service_call: ServiceCall
+    ) -> None:
+        """Persist the engine-wide periodic-sweep cadences and reschedule.
+
+        - Description: Sets either / both GLOBAL sweep intervals (the
+          outside-hours boundary sweep and the persistent health sweep). The
+          cadence is engine-wide (one timer per sweep), so it is a global
+          setting, not per-zone. Validated values (positive ints, 1..1440) are
+          merged onto the persisted blob, then a
+          ``smart_lock_manager_global_settings_updated`` event is fired so the
+          alert engine's live-refresh listener tears down + re-subscribes with
+          the new cadences WITHOUT a Home Assistant restart.
+        - Inputs (service_call.data): ``outside_hours_sweep_minutes`` (int,
+          optional) and/or ``health_sweep_minutes`` (int, optional). At least
+          one must be supplied. Both are validated/clamped by the voluptuous
+          schema at the registration site.
+        - Outputs: None.
+        """
+        updates: dict = {}
+        for key in (ATTR_OUTSIDE_HOURS_SWEEP_MINUTES, ATTR_HEALTH_SWEEP_MINUTES):
+            if key in service_call.data:
+                updates[key] = int(service_call.data[key])
+
+        await save_global_settings(hass, updates)
+        _LOGGER.info("Updated sweep intervals: %s", updates)
+
+        # Notify the engine to reschedule its sweeps live.
+        hass.bus.async_fire(
+            "smart_lock_manager_global_settings_updated",
+            {"settings": updates},
+        )
 
     @staticmethod
     async def generate_package(hass: HomeAssistant, service_call: ServiceCall) -> None:

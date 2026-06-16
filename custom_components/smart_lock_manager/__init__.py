@@ -25,6 +25,11 @@ from .auto_lock import AUTO_LOCK_ENGINE_KEY, AutoLockEngine
 # hass.data key holding the unsub for the zone-settings-changed event listener
 # that drives live engine re-subscription (Task 2). Registered once per process.
 ENGINE_REFRESH_LISTENER_KEY = "smart_lock_manager_engine_refresh_listener"
+# hass.data key for the global-settings-changed listener that reschedules the
+# alert engine's periodic sweeps live (set_sweep_intervals). Once per process.
+GLOBAL_SETTINGS_REFRESH_LISTENER_KEY = (
+    "smart_lock_manager_global_settings_refresh_listener"
+)
 from .const import (
     ATTR_ALLOWED_DAYS,
     ATTR_ALLOWED_HOURS,
@@ -64,6 +69,7 @@ from .const import (
     SERVICE_RESIZE_SLOTS,
     SERVICE_SET_CODE,
     SERVICE_SET_CODE_ADVANCED,
+    SERVICE_SET_SWEEP_INTERVALS,
     SERVICE_UPDATE_GLOBAL_SETTINGS,
     SERVICE_UPDATE_LOCK_SETTINGS,
     SERVICE_UPDATE_ZONE,
@@ -389,6 +395,21 @@ UPDATE_GLOBAL_SETTINGS_SCHEMA = vol.Schema(
         vol.Optional(ATTR_SYNC_ON_LOCK_EVENTS): bool,
         vol.Optional(ATTR_DEBUG_LOGGING): bool,
     }
+)
+
+# At least one cadence must be supplied; each is a positive int in [1, 1440].
+SET_SWEEP_INTERVALS_SCHEMA = vol.Schema(
+    vol.All(
+        {
+            vol.Optional("outside_hours_sweep_minutes"): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=1440)
+            ),
+            vol.Optional("health_sweep_minutes"): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=1440)
+            ),
+        },
+        cv.has_at_least_one_key("outside_hours_sweep_minutes", "health_sweep_minutes"),
+    )
 )
 
 
@@ -810,8 +831,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[ENGINE_REFRESH_LISTENER_KEY] = hass.bus.async_listen(
             "smart_lock_manager_zone_settings_updated", _on_zone_settings_updated
         )
+
+        async def _on_global_settings_updated(event: Any) -> None:
+            # Re-load the persisted global settings into the synchronous cache
+            # FIRST (so _subscribe reads the new cadences), then rebuild the
+            # alert-engine subscriptions so the sweep timers reschedule live —
+            # no HA restart. async_refresh is idempotent (tears the old timers
+            # down before re-subscribing) so repeated edits never accumulate.
+            from .storage import load_global_settings
+
+            await load_global_settings(hass)
+            alert_engine = hass.data.get(ALERT_ENGINE_KEY)
+            if alert_engine is not None:
+                alert_engine.async_refresh()
+
+        hass.data[GLOBAL_SETTINGS_REFRESH_LISTENER_KEY] = hass.bus.async_listen(
+            "smart_lock_manager_global_settings_updated",
+            _on_global_settings_updated,
+        )
         _LOGGER.info(
-            "Registered engine live-refresh listener for zone settings changes"
+            "Registered engine live-refresh listeners for zone + global settings"
         )
 
     # NOTE: Initial Z-Wave code reading removed — it was blocking HA startup.
@@ -880,10 +919,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if auto_lock_engine is not None:
                 auto_lock_engine.async_stop()
 
-            # Remove the engine live-refresh event listener.
+            # Remove the engine live-refresh event listeners.
             refresh_unsub = hass.data.pop(ENGINE_REFRESH_LISTENER_KEY, None)
             if refresh_unsub is not None:
                 refresh_unsub()
+            global_refresh_unsub = hass.data.pop(
+                GLOBAL_SETTINGS_REFRESH_LISTENER_KEY, None
+            )
+            if global_refresh_unsub is not None:
+                global_refresh_unsub()
 
         # Remove services only if this is the last instance
         if not hass.data[DOMAIN]:
@@ -910,6 +954,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE)
             hass.services.async_remove(DOMAIN, SERVICE_CLEAR_ZONE_CODES)
             hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE_SETTINGS)
+            hass.services.async_remove(DOMAIN, SERVICE_SET_SWEEP_INTERVALS)
 
     return bool(unload_ok)
 
@@ -1014,6 +1059,9 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     async def update_global_settings_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.update_global_settings(hass, service_call)
+
+    async def set_sweep_intervals_wrapper(service_call: ServiceCall) -> None:
+        return await SystemServices.set_sweep_intervals(hass, service_call)
 
     # Register advanced services using modular classes
     _LOGGER.debug("Registering advanced services...")
@@ -1146,6 +1194,13 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         SERVICE_UPDATE_GLOBAL_SETTINGS,
         update_global_settings_wrapper,
         schema=UPDATE_GLOBAL_SETTINGS_SCHEMA,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_SWEEP_INTERVALS,
+        set_sweep_intervals_wrapper,
+        schema=SET_SWEEP_INTERVALS_SCHEMA,
     )
     _LOGGER.debug("Registered system services")
 
