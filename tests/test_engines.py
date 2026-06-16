@@ -475,6 +475,150 @@ class TestHealthSweep:
         assert engine.serialize() == []
 
 
+class TestMemberMetaResolution:
+    """member_meta companion-entity overrides resolve before auto-discovery.
+
+    Real-world Z-Wave locks expose jam / battery companions whose ids do not
+    match the auto-discovery convention. These tests assert the detectors and
+    the health sweep resolve the configured ``member_meta`` entity FIRST and
+    fall back to auto-discovery when it is absent.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so the sweep doesn't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    @staticmethod
+    def _zone_with_meta(**meta: str) -> Zone:
+        """One-member zone with all health detectors on + member_meta override."""
+        from custom_components.smart_lock_manager.models.zone_settings import (
+            MemberMeta,
+        )
+
+        zone = _build_zone()
+        zone.settings.member_meta[LOCK_ENTITY] = MemberMeta(
+            jam_sensor=meta.get("jam_sensor", ""),
+            battery_entity=meta.get("battery_entity", ""),
+        )
+        return zone
+
+    def test_jam_resolves_member_meta_sensor_sweep(self, hass: HomeAssistant) -> None:
+        """A non-conventional jam_sensor reading 'on' fires the jam sweep."""
+        _register_zone(
+            hass, self._zone_with_meta(jam_sensor="binary_sensor.front_lock_jammed")
+        )
+        engine = AlertEngine(hass)
+        # Lock itself is fine; only the explicitly-configured jam sensor is on.
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set("binary_sensor.front_lock_jammed", "on")
+        # The auto-discovery name is intentionally absent / off.
+        engine._run_health_sweep(datetime.now())
+        alerts = engine.serialize()
+        assert len(alerts) == 1
+        assert alerts[0]["alert_type"] == ALERT_JAM
+
+    def test_jam_member_meta_subscribed_state_path(self, hass: HomeAssistant) -> None:
+        """The configured jam sensor is monitored AND drives the state path."""
+        custom_jam = "binary_sensor.front_middle_door_lock_access_control_lock_jammed"
+        _register_zone(hass, self._zone_with_meta(jam_sensor=custom_jam))
+        engine = AlertEngine(hass)
+        # The custom jam sensor is in the subscribed entity set.
+        assert custom_jam in engine._monitored_entities()
+        # A state change on it routes back to the lock and fires jam.
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set(custom_jam, "on")
+        event = type(
+            "E",
+            (),
+            {
+                "data": {
+                    "entity_id": custom_jam,
+                    "new_state": hass.states.get(custom_jam),
+                }
+            },
+        )()
+        engine._handle_state_event(event)  # type: ignore[arg-type]
+        alerts = engine.serialize()
+        assert len(alerts) == 1
+        assert alerts[0]["alert_type"] == ALERT_JAM
+
+    def test_battery_resolves_member_meta_entity_sweep(
+        self, hass: HomeAssistant
+    ) -> None:
+        """A non-conventional battery_entity below threshold fires low_battery."""
+        _register_zone(
+            hass,
+            self._zone_with_meta(battery_entity="sensor.front_battery_level"),
+        )
+        engine = AlertEngine(hass)
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set("sensor.front_battery_level", "8")
+        # The auto-discovery name is absent.
+        engine._run_health_sweep(datetime.now())
+        alerts = engine.serialize()
+        assert len(alerts) == 1
+        assert alerts[0]["alert_type"] == ALERT_LOW_BATTERY
+
+    def test_battery_member_meta_subscribed_state_path(
+        self, hass: HomeAssistant
+    ) -> None:
+        """The configured battery entity is monitored AND drives the state path."""
+        custom_batt = "sensor.front_battery_level"
+        _register_zone(hass, self._zone_with_meta(battery_entity=custom_batt))
+        engine = AlertEngine(hass)
+        assert custom_batt in engine._monitored_entities()
+        hass.states.async_set(custom_batt, "9")
+        event = type(
+            "E",
+            (),
+            {
+                "data": {
+                    "entity_id": custom_batt,
+                    "new_state": hass.states.get(custom_batt),
+                }
+            },
+        )()
+        engine._handle_state_event(event)  # type: ignore[arg-type]
+        alerts = engine.serialize()
+        assert len(alerts) == 1
+        assert alerts[0]["alert_type"] == ALERT_LOW_BATTERY
+
+    def test_auto_discovery_fallback_when_no_member_meta(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """With no member_meta, the auto-discovery companions still resolve."""
+        # No member_meta on this zone (alert_engine fixture uses _build_zone()).
+        assert BATTERY_ENTITY in alert_engine._monitored_entities()
+        assert "binary_sensor.front_test_jammed" in alert_engine._monitored_entities()
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set("binary_sensor.front_test_jammed", "on")
+        hass.states.async_set(BATTERY_ENTITY, "5")
+        alert_engine._run_health_sweep(datetime.now())
+        types = {a["alert_type"] for a in alert_engine.serialize()}
+        assert ALERT_JAM in types
+        assert ALERT_LOW_BATTERY in types
+
+    def test_battery_unknown_state_no_crash_no_alert(self, hass: HomeAssistant) -> None:
+        """A member_meta battery reading 'unavailable' -> no crash, no alert."""
+        _register_zone(
+            hass,
+            self._zone_with_meta(battery_entity="sensor.front_battery_level"),
+        )
+        engine = AlertEngine(hass)
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set("sensor.front_battery_level", "unavailable")
+        engine._run_health_sweep(datetime.now())
+        assert engine.serialize() == []
+        # State path too: an unknown reading is ignored safely.
+        engine._eval_low_battery(LOCK_ENTITY, "unknown")
+        assert engine.serialize() == []
+
+
 class TestSweepIntervalConfig:
     """The global set_sweep_intervals settings store + validation."""
 

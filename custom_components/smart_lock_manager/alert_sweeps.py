@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from homeassistant.core import callback
 
@@ -46,6 +46,11 @@ class AlertSweepsMixin:
     """
 
     hass: Any
+    # Real impl lives on AlertTopologyMixin (member_meta-aware battery resolver).
+    # Declared as an attribute annotation (NOT a method) so it does not shadow
+    # the real implementation via mixin MRO while still satisfying the type
+    # checker that the sweep may call it.
+    _battery_entity_for: Callable[[str], str]
 
     # -- cross-mixin methods (provided by the engine / detector mixins) ------
     # Declared here so the type checker knows the sweeps may call them; the real
@@ -95,9 +100,6 @@ class AlertSweepsMixin:
     def _check_low_battery(
         self, entity_id: str, percent: int, threshold: int, flag: Dict[str, Any]
     ) -> bool:  # pragma: no cover
-        raise NotImplementedError
-
-    def _battery_entity_for(self, lock_entity_id: str) -> str:  # pragma: no cover
         raise NotImplementedError
 
     @callback

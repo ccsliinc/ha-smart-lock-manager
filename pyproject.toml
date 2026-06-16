@@ -44,6 +44,7 @@ dev = [
     "bandit>=1.7.0",
     "safety>=2.0.0",
     "vulture>=2.0.0",
+    "types-PyYAML>=6.0.0",
 ]
 
 [tool.black]

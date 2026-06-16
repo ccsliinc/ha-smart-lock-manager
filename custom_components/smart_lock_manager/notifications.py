@@ -38,7 +38,7 @@ from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
 from typing import Any, Callable, Dict, List, Optional
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from homeassistant.core import HomeAssistant
 
 from .models.zone_settings import EmailNotify, MobileNotify, ZoneNotify

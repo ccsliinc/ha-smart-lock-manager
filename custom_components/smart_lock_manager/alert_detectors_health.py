@@ -92,6 +92,11 @@ class AlertHealthDetectorsMixin:
     ) -> Optional[Zone]:  # pragma: no cover - provided by sibling mixin
         raise NotImplementedError
 
+    def _resolve_jam_sensor(
+        self, entity_id: str
+    ) -> str:  # pragma: no cover - provided by sibling mixin
+        raise NotImplementedError
+
     # -- jam ----------------------------------------------------------------
 
     def _jam_context(self, entity_id: str) -> Optional[tuple[str, Dict[str, Any]]]:
@@ -163,11 +168,14 @@ class AlertHealthDetectorsMixin:
     def _jam_sensor_on(self, entity_id: str) -> bool:
         """Return True if the companion jam binary_sensor reads ``on``.
 
+        - Description: Resolves the companion jam binary_sensor via the shared
+          :meth:`_resolve_jam_sensor` (explicit ``member_meta.jam_sensor`` first,
+          auto-discovery ``binary_sensor.<object_id>_jammed`` second), then reads
+          its live state.
         - Inputs: entity_id (str lock entity id).
         - Outputs: bool.
         """
-        object_id = entity_id.split(".", 1)[-1]
-        jam = self.hass.states.get(f"binary_sensor.{object_id}_jammed")
+        jam = self.hass.states.get(self._resolve_jam_sensor(entity_id))
         return jam is not None and (jam.state or "").lower() == "on"
 
     # -- low_battery --------------------------------------------------------

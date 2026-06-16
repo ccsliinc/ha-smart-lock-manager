@@ -143,6 +143,45 @@ class AlertDetectorsMixin:
         """
         return get_zone_for_lock(self.hass, entity_id)
 
+    # -- companion-entity resolution (member_meta -> auto-discovery) --------
+
+    def _resolve_jam_sensor(self, entity_id: str) -> str:
+        """Resolve a member's jam binary_sensor id (member_meta first).
+
+        - Description: SHARED resolver used by BOTH the jam state-path detector
+          and the health sweep so the member_meta-then-auto-discovery resolution
+          lives in ONE place. Returns the explicit
+          ``settings.member_meta[entity_id].jam_sensor`` when configured, else
+          the auto-discovery guess ``binary_sensor.<object_id>_jammed``.
+        - Inputs: entity_id (str lock entity id).
+        - Outputs: str binary_sensor entity id.
+        """
+        zone = self._zone_settings_for(entity_id)
+        if zone is not None:
+            meta = zone.settings.member_meta.get(entity_id)
+            if meta is not None and meta.jam_sensor:
+                return meta.jam_sensor
+        object_id = entity_id.split(".", 1)[-1]
+        return f"binary_sensor.{object_id}_jammed"
+
+    def _resolve_battery_entity(self, entity_id: str) -> str:
+        """Resolve a member's battery sensor id (member_meta first).
+
+        - Description: SHARED resolver used by BOTH the low-battery state path
+          and the health sweep. Returns the explicit
+          ``settings.member_meta[entity_id].battery_entity`` when configured,
+          else the auto-discovery guess ``sensor.<object_id>_battery``.
+        - Inputs: entity_id (str lock entity id).
+        - Outputs: str battery sensor entity id.
+        """
+        zone = self._zone_settings_for(entity_id)
+        if zone is not None:
+            meta = zone.settings.member_meta.get(entity_id)
+            if meta is not None and meta.battery_entity:
+                return meta.battery_entity
+        object_id = entity_id.split(".", 1)[-1]
+        return f"sensor.{object_id}_battery"
+
     def _detector_enabled(self, entity_id: str, configured: bool) -> bool:
         """Decide whether a detector should observe for this member.
 

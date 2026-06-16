@@ -42,6 +42,8 @@ repos:
       - id: mypy
         args:
           - --ignore-missing-imports
+        additional_dependencies:
+          - types-PyYAML
         files: ^custom_components/.+\.py$
 
   - repo: https://github.com/pycqa/bandit

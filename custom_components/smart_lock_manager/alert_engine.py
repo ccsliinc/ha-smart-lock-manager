@@ -36,9 +36,9 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -63,6 +63,7 @@ from .alert_detectors import (  # noqa: F401 - re-exported for backward compat
 from .alert_detectors_health import AlertHealthDetectorsMixin
 from .alert_dev import AlertDevSimMixin
 from .alert_sweeps import AlertSweepsMixin
+from .alert_topology import AlertTopologyMixin
 from .const import DOMAIN
 from .dev_mock import is_dev_mock
 from .gating import current_engine_mode, real_notify_enabled
@@ -72,7 +73,6 @@ from .storage.global_settings import (
     ATTR_HEALTH_SWEEP_MINUTES,
     ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
 )
-from .zone_runtime import get_zone_registry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +87,7 @@ class AlertEngine(
     AlertDetectorsMixin,
     AlertHealthDetectorsMixin,
     AlertSweepsMixin,
+    AlertTopologyMixin,
     AlertDevSimMixin,
 ):
     """Per-process OBSERVE-ONLY alert detector for all zone member locks.
@@ -271,112 +272,6 @@ class AlertEngine(
         _LOGGER.info(
             "AlertEngine refreshed: now monitoring %d entit(y/ies)", len(entities)
         )
-
-    # -- topology -----------------------------------------------------------
-
-    def _monitored_entities(self) -> List[str]:
-        """Return every entity the engine should watch (locks + batteries).
-
-        - Description: All zone member lock entity ids plus their companion
-          ``sensor.<object_id>_battery`` entities (best-effort) so the
-          low-battery detector gets state events.
-        - Inputs: none (reads the zone registry).
-        - Outputs: de-duplicated list of entity_id strings.
-        """
-        entities: List[str] = []
-        for zone in get_zone_registry(self.hass).values():
-            for entity_id in zone.member_lock_entity_ids:
-                entities.append(entity_id)
-                entities.append(self._battery_entity_for(entity_id))
-        # De-dup while preserving order.
-        seen: set = set()
-        result: List[str] = []
-        for ent in entities:
-            if ent not in seen:
-                seen.add(ent)
-                result.append(ent)
-        return result
-
-    @staticmethod
-    def _battery_entity_for(lock_entity_id: str) -> str:
-        """Return the companion battery sensor id for a lock entity.
-
-        - Inputs: lock_entity_id (str), e.g. ``lock.front_north``.
-        - Outputs: str, e.g. ``sensor.front_north_battery``.
-        """
-        object_id = lock_entity_id.split(".", 1)[-1]
-        return f"sensor.{object_id}_battery"
-
-    def _zone_for(self, entity_id: str) -> tuple[Optional[str], Optional[str], str]:
-        """Return (zone_id, zone_name, door_name) for a member entity.
-
-        - Inputs: entity_id (str lock entity id).
-        - Outputs: tuple(zone_id, zone_name, door_name); door_name falls back
-          to the live HA friendly_name then the entity id.
-        """
-        for zone in get_zone_registry(self.hass).values():
-            if zone.has_member(entity_id):
-                door = self._friendly_name(entity_id)
-                return zone.zone_id, zone.name, door
-        return None, None, self._friendly_name(entity_id)
-
-    def _friendly_name(self, entity_id: str) -> str:
-        """Return the live HA friendly name for an entity, or the id.
-
-        - Inputs: entity_id (str).
-        - Outputs: str display name (never empty).
-        """
-        state = self.hass.states.get(entity_id)
-        if state is not None:
-            name = state.attributes.get("friendly_name")
-            if name:
-                return str(name)
-        return entity_id
-
-    # -- event routing ------------------------------------------------------
-
-    @callback
-    def _handle_state_event(self, event: Event) -> None:
-        """Route a state-change event to the relevant detectors.
-
-        - Description: Battery-sensor events drive the low-battery detector;
-          lock entity events drive the unlock-based detectors (outside-hours,
-          sustained), jam, and offline detectors.
-        - Inputs: event (HA state_changed Event).
-        - Outputs: None (records alerts as a side effect).
-        """
-        entity_id = event.data.get("entity_id", "")
-        new_state = event.data.get("new_state")
-        if new_state is None:
-            return
-
-        # Battery sensor path.
-        if entity_id.startswith("sensor.") and entity_id.endswith("_battery"):
-            lock_entity = self._lock_for_battery(entity_id)
-            if lock_entity:
-                self._eval_low_battery(lock_entity, new_state.state)
-            return
-
-        # Lock entity path.
-        if entity_id.startswith("lock."):
-            value = (new_state.state or "unknown").lower()
-            self._eval_offline(entity_id, value)
-            self._eval_jam(entity_id, value, new_state.attributes)
-            self._eval_outside_hours(entity_id, value)
-            self._eval_sustained(entity_id, value)
-
-    def _lock_for_battery(self, battery_entity_id: str) -> Optional[str]:
-        """Resolve a battery sensor back to its monitored lock entity.
-
-        - Inputs: battery_entity_id (str).
-        - Outputs: the lock entity id if it is a monitored member, else None.
-        """
-        object_id = battery_entity_id[len("sensor.") : -len("_battery")]
-        candidate = f"lock.{object_id}"
-        for zone in get_zone_registry(self.hass).values():
-            if zone.has_member(candidate):
-                return candidate
-        return None
 
     # -- recording ----------------------------------------------------------
 

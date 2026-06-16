@@ -188,6 +188,25 @@ class ZoneNotify:
 
 
 @dataclass
+class MemberMeta:
+    """Per-member companion-entity overrides for the health detectors.
+
+    Real-world Z-Wave locks expose jam and battery companion entities whose ids
+    do NOT follow the auto-discovery convention
+    (``binary_sensor.<object_id>_jammed`` / ``sensor.<object_id>_battery``).
+    These explicit overrides — keyed by member ``entity_id`` in
+    :attr:`ZoneSettings.member_meta` — are the SOURCE OF TRUTH the jam and
+    low-battery detectors resolve FIRST, falling back to auto-discovery only
+    when a field is empty. Both default to empty (auto-discovery preserved).
+
+    Non-secret operational config (entity ids only) — safe over the read API.
+    """
+
+    jam_sensor: str = ""
+    battery_entity: str = ""
+
+
+@dataclass
 class ZoneSettings:
     """The full per-zone operational settings bundle.
 
@@ -202,6 +221,10 @@ class ZoneSettings:
     idle_auto_lock: IdleAutoLock = field(default_factory=IdleAutoLock)
     alerts: ZoneAlerts = field(default_factory=ZoneAlerts)
     notify: ZoneNotify = field(default_factory=ZoneNotify)
+    # Per-member companion-entity overrides, keyed by member entity_id. The
+    # health detectors (jam / low_battery) resolve these FIRST and fall back to
+    # auto-discovery when a field is empty. Defaults to no overrides.
+    member_meta: Dict[str, MemberMeta] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the full settings bundle to a JSON-safe nested dict.
@@ -214,6 +237,9 @@ class ZoneSettings:
             "idle_auto_lock": asdict(self.idle_auto_lock),
             "alerts": asdict(self.alerts),
             "notify": asdict(self.notify),
+            "member_meta": {
+                entity_id: asdict(meta) for entity_id, meta in self.member_meta.items()
+            },
         }
 
 
@@ -360,6 +386,28 @@ def _notify_from(data: Any) -> ZoneNotify:
     )
 
 
+def _member_meta_from(data: Any) -> Dict[str, MemberMeta]:
+    """Rebuild the per-member companion-entity overrides from persisted JSON.
+
+    - Description: Accepts the persisted ``member_meta`` mapping (entity_id ->
+      sub-dict) and returns a dict of :class:`MemberMeta`, defaulting each
+      field to an empty string. Tolerant of a wholly-absent / malformed map (a
+      zone persisted before this field existed yields an empty dict — i.e.
+      auto-discovery for every member).
+    - Inputs: data (any) — the persisted ``member_meta`` blob or None.
+    - Outputs: dict[str, MemberMeta].
+    """
+    d = _as_dict(data)
+    out: Dict[str, MemberMeta] = {}
+    for entity_id, meta in d.items():
+        m = _as_dict(meta)
+        out[str(entity_id)] = MemberMeta(
+            jam_sensor=_str(m.get("jam_sensor"), ""),
+            battery_entity=_str(m.get("battery_entity"), ""),
+        )
+    return out
+
+
 def settings_from_dict(data: Any) -> ZoneSettings:
     """Rebuild a :class:`ZoneSettings` from persisted JSON, tolerantly.
 
@@ -377,18 +425,22 @@ def settings_from_dict(data: Any) -> ZoneSettings:
         idle_auto_lock=_idle_from(d.get("idle_auto_lock")),
         alerts=_alerts_from(d.get("alerts")),
         notify=_notify_from(d.get("notify")),
+        member_meta=_member_meta_from(d.get("member_meta")),
     )
 
 
 # Top-level block names accepted by the update_zone_settings service. Each maps
 # to a ``ZoneSettings`` attribute; the merge in the service is per-block so an
-# unspecified block is never clobbered.
+# unspecified block is never clobbered. ``member_meta`` is a keyed map (entity
+# id -> override sub-dict) rather than a flat block, but the same per-block deep
+# merge applies — a partial update touches only the named members' sub-dicts.
 SETTINGS_BLOCKS = (
     "business_hours",
     "scheduled_auto_lock",
     "idle_auto_lock",
     "alerts",
     "notify",
+    "member_meta",
 )
 
 
