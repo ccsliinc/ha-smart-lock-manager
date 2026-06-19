@@ -2150,6 +2150,8 @@ class SmartLockManagerPanel extends HTMLElement {
           display: flex;
           align-items: center;
           justify-content: center;
+          width: 18px;
+          height: 18px;
           --mdc-icon-size: 18px;
           line-height: 0;
         }
