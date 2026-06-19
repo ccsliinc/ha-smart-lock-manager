@@ -145,12 +145,17 @@ class AutoLockEngine(AutoLockVerifyMixin):
         self._schedule_all_cob()
         self._subscribe_idle()
         self._started = True
+        # File-aware reader (lazy import, mirrors _may_execute) so the logged
+        # real_flag matches the value that actually gates execution — env OR
+        # the flags-file ``real_autolock`` key, not the env var alone.
+        from .gating import real_autolock_enabled as file_aware_real_autolock
+
         _LOGGER.info(
             "AutoLockEngine started: mode=%s real_exec=%s (dev_mock=%s, real_flag=%s)",
             current_engine_mode(),
             self._may_execute(),
             is_dev_mock(),
-            real_autolock_enabled(),
+            file_aware_real_autolock(),
         )
 
     @callback
@@ -218,7 +223,14 @@ class AutoLockEngine(AutoLockVerifyMixin):
         - Inputs: none.
         - Outputs: bool.
         """
-        return is_dev_mock() or real_autolock_enabled()
+        # File-aware reader imported LAZILY here (mirrors gating's own lazy
+        # import of this module's env reader) to avoid a circular import at
+        # module load. This OR-combines the SLM_ENABLE_REAL_AUTOLOCK env var
+        # with the flags-file ``real_autolock`` key, so HA OS (no settable env)
+        # can enable real auto-lock via the file — same as the notify path.
+        from .gating import real_autolock_enabled as file_aware_real_autolock
+
+        return is_dev_mock() or file_aware_real_autolock()
 
     # -- scheduled COB ------------------------------------------------------
 

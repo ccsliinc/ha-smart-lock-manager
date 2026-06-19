@@ -231,3 +231,39 @@ class TestPrimeAndHotPath:
             gating._warned_key = None
             assert gating.prime_flags_cache()["real_autolock"] is True
             assert gating.real_autolock_enabled() is True
+
+
+class TestAutoLockMayExecuteFileAware:
+    """Regression: AutoLockEngine._may_execute must honor the FILE flag.
+
+    The bug: ``_may_execute`` called the env-ONLY ``auto_lock.real_autolock_enabled``
+    so the office HA OS install (which has no settable env and uses the flags
+    FILE) could never enable real auto-lock — while the notify path already
+    worked from the file. ``_may_execute`` now delegates to the file-aware
+    ``gating.real_autolock_enabled`` (env OR file), so the flags-file
+    ``real_autolock`` key unblocks real execution.
+    """
+
+    def test_may_execute_honors_file_real_autolock(self, flags_path: Path) -> None:
+        """File real_autolock true (dev-mock off) -> _may_execute True."""
+        from custom_components.smart_lock_manager.auto_lock import AutoLockEngine
+
+        # _may_execute only reads gating + dev-mock; it never touches hass, so a
+        # trivial stub stands in for the HomeAssistant instance.
+        engine = AutoLockEngine(object())  # type: ignore[arg-type]
+
+        # File false / absent, no env, dev-mock off -> OBSERVE: must NOT execute.
+        assert engine._may_execute() is False
+
+        # Flip the FILE flag on and re-prime: real execution is now permitted
+        # WITHOUT any env var (the HA-OS path the bug broke).
+        _write_flags(flags_path, {"real_autolock": True})
+        assert engine._may_execute() is True
+
+    def test_may_execute_false_without_file_or_env(self, flags_path: Path) -> None:
+        """No file flag, no env, dev-mock off -> _may_execute False."""
+        from custom_components.smart_lock_manager.auto_lock import AutoLockEngine
+
+        engine = AutoLockEngine(object())  # type: ignore[arg-type]
+        _write_flags(flags_path, {"real_autolock": False})
+        assert engine._may_execute() is False
