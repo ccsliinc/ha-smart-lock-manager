@@ -14,6 +14,7 @@ driving them end-to-end here proves the mixin composition is intact.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -36,7 +37,19 @@ from custom_components.smart_lock_manager.auto_lock import (
 from custom_components.smart_lock_manager.auto_lock_verify import _dig_bolt_status
 from custom_components.smart_lock_manager.models.zone import Zone
 from custom_components.smart_lock_manager.models.zone_settings import ZoneSettings
-from custom_components.smart_lock_manager.notifications import build_alert_subject
+from custom_components.smart_lock_manager.notifications import (
+    build_alert_body,
+    build_alert_subject,
+)
+from custom_components.smart_lock_manager.storage import (
+    clear_global_snooze,
+    clear_zone_snooze,
+    global_snooze_active,
+    set_global_snooze,
+    set_zone_snooze,
+    snooze_active,
+    zone_snooze_active,
+)
 from custom_components.smart_lock_manager.zone_runtime import ZONE_REGISTRY_KEY
 
 LOCK_ENTITY = "lock.front_test"
@@ -1043,3 +1056,325 @@ class TestAutoLockHelpers:
         assert _dig_bolt_status({"lock.x": {"boltStatus": "Unlocked"}}) == "unlocked"
         assert _dig_bolt_status("not-a-dict") is None
         assert _dig_bolt_status({"other": 1}) is None
+
+
+class TestAlertBodies:
+    """Plain-text email BODY wording (recovery-aware, byte-for-byte)."""
+
+    def test_outside_hours_body_alert(self) -> None:
+        """outside_hours alert body lists lock / state / timestamps."""
+        alert = {
+            "alert_type": ALERT_OUTSIDE_HOURS,
+            "member_entity_id": "lock.front_north",
+            "friendly_name": "Front North",
+            "timestamp": "2026-06-19T10:00:00",
+            "last_changed": "2026-06-19T09:55:00",
+            "message": "Unlocked outside business hours",
+            "severity": "CRIT",
+            "is_recovery": False,
+        }
+        assert build_alert_body(alert) == (
+            "Lock: Front North (lock.front_north)\n"
+            "State: unlocked\n"
+            "Timestamp: 2026-06-19T10:00:00\n"
+            "Last changed: 2026-06-19T09:55:00"
+        )
+
+    def test_outside_hours_body_recovery(self) -> None:
+        """outside_hours recovery body closes the alert."""
+        alert = {
+            "alert_type": ALERT_OUTSIDE_HOURS,
+            "member_entity_id": "lock.front_north",
+            "friendly_name": "Front North",
+            "timestamp": "2026-06-19T10:00:00",
+            "last_changed": "2026-06-19T09:55:00",
+            "message": "Unlocked outside business hours",
+            "severity": "CRIT",
+            "is_recovery": True,
+        }
+        assert build_alert_body(alert) == (
+            "Front North (lock.front_north) was previously alerted as unlocked.\n"
+            "Now showing state: locked.\n"
+            "Last unlocked at: 2026-06-19T09:55:00\n"
+            "Recovery timestamp: 2026-06-19T10:00:00\n"
+            "Alert closed."
+        )
+
+    def test_sustained_body_alert(self) -> None:
+        """sustained_unlock alert body lists elapsed seconds + severity."""
+        alert = {
+            "alert_type": ALERT_SUSTAINED,
+            "member_entity_id": "lock.front_middle_door_lock",
+            "friendly_name": "Front Middle",
+            "timestamp": "2026-06-19T10:00:00",
+            "last_changed": "2026-06-19T09:59:00",
+            "message": "Unlocked >30s without re-lock (dev-simulated)",
+            "severity": "CRIT",
+            "is_recovery": False,
+        }
+        assert build_alert_body(alert) == (
+            "Lock: Front Middle (lock.front_middle_door_lock)\n"
+            "State: unlocked\n"
+            "Elapsed: 30s without re-lock\n"
+            "Severity: CRIT"
+        )
+
+    def test_sustained_body_recovery(self) -> None:
+        """sustained_unlock recovery body closes the alert."""
+        alert = {
+            "alert_type": ALERT_SUSTAINED,
+            "member_entity_id": "lock.front_middle_door_lock",
+            "friendly_name": "Front Middle",
+            "timestamp": "2026-06-19T10:00:00",
+            "last_changed": "2026-06-19T09:59:00",
+            "message": "Unlocked >30s without re-lock (dev-simulated)",
+            "severity": "CRIT",
+            "is_recovery": True,
+        }
+        assert build_alert_body(alert) == (
+            "Front Middle (lock.front_middle_door_lock) is now locked again.\n"
+            "Previously alerted as sustained-unlocked.\n"
+            "Last unlocked at: 2026-06-19T09:59:00\n"
+            "Recovery timestamp: 2026-06-19T10:00:00\n"
+            "Alert closed."
+        )
+
+    def test_jam_body_alert(self) -> None:
+        """Jam alert body lists lock / jammed state / detail / timestamps."""
+        alert = {
+            "alert_type": ALERT_JAM,
+            "member_entity_id": "lock.bathroom",
+            "friendly_name": "Bathroom",
+            "timestamp": "2026-06-19T10:00:00",
+            "last_changed": "2026-06-19T09:58:00",
+            "message": "Lock reported jammed",
+            "is_recovery": False,
+        }
+        assert build_alert_body(alert) == (
+            "Lock: Bathroom (lock.bathroom)\n"
+            "State: jammed\n"
+            "Detail: Lock reported jammed\n"
+            "Timestamp: 2026-06-19T10:00:00\n"
+            "Last changed: 2026-06-19T09:58:00"
+        )
+
+    def test_jam_body_recovery(self) -> None:
+        """Jam recovery body closes the alert."""
+        alert = {
+            "alert_type": ALERT_JAM,
+            "member_entity_id": "lock.bathroom",
+            "friendly_name": "Bathroom",
+            "timestamp": "2026-06-19T10:00:00",
+            "message": "Jam cleared",
+            "is_recovery": True,
+        }
+        assert build_alert_body(alert) == (
+            "Bathroom (lock.bathroom) was previously alerted as jammed.\n"
+            "Now showing state: jam cleared.\n"
+            "Recovery timestamp: 2026-06-19T10:00:00\n"
+            "Alert closed."
+        )
+
+    def test_low_battery_body_alert(self) -> None:
+        """low_battery alert body carries the percent + detail."""
+        alert = {
+            "alert_type": ALERT_LOW_BATTERY,
+            "member_entity_id": "lock.suite_105",
+            "friendly_name": "Suite 105",
+            "timestamp": "2026-06-19T10:00:00",
+            "message": "Battery low (8%)",
+            "is_recovery": False,
+        }
+        assert build_alert_body(alert) == (
+            "Lock: Suite 105 (lock.suite_105)\n"
+            "State: battery low (8%)\n"
+            "Detail: Battery low (8%)\n"
+            "Timestamp: 2026-06-19T10:00:00"
+        )
+
+    def test_low_battery_body_recovery(self) -> None:
+        """low_battery recovery body closes the alert with percent."""
+        alert = {
+            "alert_type": ALERT_LOW_BATTERY,
+            "member_entity_id": "lock.suite_105",
+            "friendly_name": "Suite 105",
+            "timestamp": "2026-06-19T10:00:00",
+            "message": "Battery recovered (30%)",
+            "is_recovery": True,
+        }
+        assert build_alert_body(alert) == (
+            "Suite 105 (lock.suite_105) battery recovered (30%).\n"
+            "Detail: Battery recovered (30%)\n"
+            "Recovery timestamp: 2026-06-19T10:00:00\n"
+            "Alert closed."
+        )
+
+    def test_offline_body_alert(self) -> None:
+        """Offline alert body lists offline state / detail / timestamps."""
+        alert = {
+            "alert_type": ALERT_OFFLINE,
+            "member_entity_id": "lock.suite_106",
+            "friendly_name": "Suite 106",
+            "timestamp": "2026-06-19T10:00:00",
+            "last_changed": "2026-06-19T09:50:00",
+            "message": "No response from node",
+            "is_recovery": False,
+        }
+        assert build_alert_body(alert) == (
+            "Lock: Suite 106 (lock.suite_106)\n"
+            "State: offline\n"
+            "Detail: No response from node\n"
+            "Timestamp: 2026-06-19T10:00:00\n"
+            "Last changed: 2026-06-19T09:50:00"
+        )
+
+    def test_offline_body_recovery(self) -> None:
+        """Offline recovery body closes the alert."""
+        alert = {
+            "alert_type": ALERT_OFFLINE,
+            "member_entity_id": "lock.suite_106",
+            "friendly_name": "Suite 106",
+            "timestamp": "2026-06-19T10:00:00",
+            "message": "Node responded",
+            "is_recovery": True,
+        }
+        assert build_alert_body(alert) == (
+            "Suite 106 (lock.suite_106) is back online.\n"
+            "Recovery timestamp: 2026-06-19T10:00:00\n"
+            "Alert closed."
+        )
+
+    def test_auto_lock_failed_body(self) -> None:
+        """auto_lock_failed body carries the failure detail + physical check."""
+        alert = {
+            "alert_type": "auto_lock_failed",
+            "member_entity_id": "lock.rear",
+            "friendly_name": "Rear Entrance",
+            "timestamp": "2026-06-19T17:30:00",
+            "last_changed": "2026-06-19T17:29:00",
+            "message": "FAILED to auto-lock after 3 attempts",
+            "severity": "CRIT",
+        }
+        assert build_alert_body(alert) == (
+            "Lock: Rear Entrance (lock.rear)\n"
+            "State: failed to auto-lock\n"
+            "Detail: FAILED to auto-lock after 3 attempts\n"
+            "Timestamp: 2026-06-19T17:30:00\n"
+            "\n"
+            "Physical check needed — the bolt could not be confirmed thrown."
+        )
+
+
+class TestAlertSnooze:
+    """Module-cache snooze accessors + the engine record-but-suppress path."""
+
+    ZONE_ID = "zone_test"
+
+    @pytest.fixture(autouse=True)
+    def _reset_snooze_cache(self) -> None:
+        """Reset the module-level snooze cache before AND after each test."""
+        clear_global_snooze()
+        for zone_id in ("zone_a", "zone_b", self.ZONE_ID):
+            clear_zone_snooze(zone_id)
+        yield
+        clear_global_snooze()
+        for zone_id in ("zone_a", "zone_b", self.ZONE_ID):
+            clear_zone_snooze(zone_id)
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so recording doesn't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    @pytest.fixture
+    def notify_engine(self, hass: HomeAssistant) -> AlertEngine:
+        """Build an engine over a zone with BOTH notify channels enabled."""
+        zone = _build_zone()
+        zone.settings.notify.email.enabled = True
+        zone.settings.notify.mobile.enabled = True
+        _register_zone(hass, zone)
+        return AlertEngine(hass)
+
+    async def _simulate(self, engine: AlertEngine, alert_type: str) -> dict:
+        """Simulate one alert, await the dispatch, return its newest record."""
+        creds = {
+            "user": "u",
+            "pass": "p",
+            "from": "from@x",
+            "to": "to@x",
+            "kind_to": {"alert": []},
+        }
+        with patch.object(
+            engine._dispatcher.email, "_creds", AsyncMock(return_value=creds)
+        ):
+            engine.dev_simulate(alert_type, LOCK_ENTITY)
+            await engine.hass.async_block_till_done()
+        return next(
+            a for a in reversed(engine.serialize()) if a["alert_type"] == alert_type
+        )
+
+    def test_global_expiry_unit(self) -> None:
+        """A future global deadline is active; a past one is not."""
+        set_global_snooze(time.time() + 100)
+        assert global_snooze_active() is True
+        set_global_snooze(time.time() - 100)
+        assert global_snooze_active() is False
+        # now_epoch arg crosses the boundary against a fixed deadline.
+        deadline = time.time()
+        set_global_snooze(deadline)
+        assert global_snooze_active(now_epoch=deadline - 50) is True
+        assert global_snooze_active(now_epoch=deadline + 50) is False
+
+    def test_per_zone_vs_global_isolation(self) -> None:
+        """Per-zone snooze is isolated; global covers every zone."""
+        now = time.time()
+        set_zone_snooze("zone_a", now + 100)
+        assert zone_snooze_active("zone_a") is True
+        assert zone_snooze_active("zone_b") is False
+        assert global_snooze_active() is False
+        assert snooze_active("zone_a") is True
+        assert snooze_active("zone_b") is False
+
+        set_global_snooze(now + 100)
+        assert snooze_active("zone_b") is True
+
+        clear_global_snooze()
+        assert snooze_active("zone_b") is False
+        assert snooze_active("zone_a") is True
+
+    async def test_engine_records_but_suppresses_when_snoozed(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """Snoozed alerts are still recorded but carry no notify_intents."""
+        # Resolve the test lock's zone id off a real recorded alert.
+        record = await self._simulate(notify_engine, ALERT_LOW_BATTERY)
+        zone_id = record["zone_id"]
+        assert zone_id == self.ZONE_ID
+        # NO snooze -> notified.
+        assert record["notify_intents"] != []
+        assert record["snoozed"] is False
+
+        # ZONE snooze -> recorded, suppressed.
+        set_zone_snooze(zone_id, time.time() + 1000)
+        record = await self._simulate(notify_engine, ALERT_OFFLINE)
+        assert record["notify_intents"] == []
+        assert record["snoozed"] is True
+        assert any(a["alert_type"] == ALERT_OFFLINE for a in notify_engine.serialize())
+
+        # GLOBAL snooze (zone cleared) -> still suppressed.
+        clear_zone_snooze(zone_id)
+        set_global_snooze(time.time() + 1000)
+        record = await self._simulate(notify_engine, ALERT_JAM)
+        assert record["notify_intents"] == []
+        assert record["snoozed"] is True
+
+        # RESUME -> notifies again.
+        clear_global_snooze()
+        clear_zone_snooze(zone_id)
+        record = await self._simulate(notify_engine, ALERT_OUTSIDE_HOURS)
+        assert record["notify_intents"] != []
+        assert record["snoozed"] is False

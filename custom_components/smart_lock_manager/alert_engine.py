@@ -147,9 +147,10 @@ class AlertEngine(
             return
         # Prime the global-settings cache so _subscribe can read the sweep
         # cadences synchronously inside its callback.
-        from .storage import load_global_settings
+        from .storage import load_global_settings, load_snooze
 
         await load_global_settings(self.hass)
+        await load_snooze(self.hass)
         blob = await load_alert_log(self.hass)
         self.alerts = list(blob.get("alerts", []))[-MAX_ALERTS:]
         self._alerted = dict(blob.get("alerted_state", {}))
@@ -293,16 +294,28 @@ class AlertEngine(
         - Outputs: None.
         """
         zone_id, zone_name, door_name = self._zone_for(entity_id)
+        state_obj = self.hass.states.get(entity_id)
+        friendly_name = (
+            state_obj.attributes.get("friendly_name") if state_obj else None
+        ) or door_name
+        last_changed = (
+            state_obj.last_changed.isoformat()
+            if state_obj is not None and state_obj.last_changed is not None
+            else "unknown"
+        )
         record: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
             "zone_id": zone_id,
             "zone_name": zone_name,
             "member_entity_id": entity_id,
             "door_name": door_name,
+            "friendly_name": friendly_name,
+            "last_changed": last_changed,
             "alert_type": alert_type,
             "severity": severity,
             "message": message,
             "is_recovery": is_recovery,
+            "snoozed": False,
             # Filled asynchronously by the DRY-RUN dispatcher (see _notify). The
             # engine still records ZERO real sends; these are "would-notify"
             # intents surfaced to the API/panel for parity checking.
@@ -336,6 +349,19 @@ class AlertEngine(
         - Inputs: entity_id (str member lock id), record (dict alert record).
         - Outputs: None.
         """
+        from .storage import snooze_active
+
+        snoozed = snooze_active(record.get("zone_id"))
+        if snoozed:
+            record["snoozed"] = True
+            _LOGGER.info(
+                "AlertEngine: alert SNOOZED (recorded, no notify): %s on %s",
+                record.get("alert_type"),
+                entity_id,
+            )
+            await self._persist()
+            return
+
         zone = self._zone_settings_for(entity_id)
         if zone is not None:
             notify = zone.settings.notify

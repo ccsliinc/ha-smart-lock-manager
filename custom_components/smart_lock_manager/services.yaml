@@ -546,3 +546,35 @@ set_sweep_intervals:
           max: 1440
           unit_of_measurement: minutes
           mode: box
+
+pause_alerts:
+  name: Pause Alerts
+  description: Temporarily suppress alert notifications (alerts are still recorded). Auto-expires.
+  fields:
+    hours:
+      name: Hours
+      description: How many hours to snooze (0.25 to 24).
+      required: true
+      selector:
+        number:
+          min: 0.25
+          max: 24
+          step: 0.25
+          unit_of_measurement: hours
+    zone_id:
+      name: Zone ID
+      description: Optional zone to snooze. Omit to snooze ALL zones globally.
+      required: false
+      selector:
+        text:
+
+resume_alerts:
+  name: Resume Alerts
+  description: Clear an active alert snooze (global or per-zone).
+  fields:
+    zone_id:
+      name: Zone ID
+      description: Optional zone to resume. Omit to clear the global snooze.
+      required: false
+      selector:
+        text:

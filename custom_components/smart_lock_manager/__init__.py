@@ -61,12 +61,14 @@ from .const import (
     SERVICE_ENABLE_SLOT,
     SERVICE_GENERATE_PACKAGE,
     SERVICE_GET_USAGE_STATS,
+    SERVICE_PAUSE_ALERTS,
     SERVICE_READ_ZWAVE_CODES,
     SERVICE_REFRESH_CODES,
     SERVICE_REMOVE_LOCK_FROM_ZONE,
     SERVICE_RESET_SLOT_USAGE,
     SERVICE_RESET_SYNC,
     SERVICE_RESIZE_SLOTS,
+    SERVICE_RESUME_ALERTS,
     SERVICE_SET_CODE,
     SERVICE_SET_CODE_ADVANCED,
     SERVICE_SET_SWEEP_INTERVALS,
@@ -411,6 +413,16 @@ SET_SWEEP_INTERVALS_SCHEMA = vol.Schema(
         cv.has_at_least_one_key("outside_hours_sweep_minutes", "health_sweep_minutes"),
     )
 )
+
+# Pause/resume the alert-snooze. ``hours`` is a float in [0.25, 24]; ``zone_id``
+# is optional (omit to snooze ALL zones globally).
+PAUSE_ALERTS_SCHEMA = vol.Schema(
+    {
+        vol.Required("hours"): vol.All(vol.Coerce(float), vol.Range(min=0.25, max=24)),
+        vol.Optional("zone_id"): cv.string,
+    }
+)
+RESUME_ALERTS_SCHEMA = vol.Schema({vol.Optional("zone_id"): cv.string})
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa
@@ -955,6 +967,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_CLEAR_ZONE_CODES)
             hass.services.async_remove(DOMAIN, SERVICE_UPDATE_ZONE_SETTINGS)
             hass.services.async_remove(DOMAIN, SERVICE_SET_SWEEP_INTERVALS)
+            hass.services.async_remove(DOMAIN, SERVICE_PAUSE_ALERTS)
+            hass.services.async_remove(DOMAIN, SERVICE_RESUME_ALERTS)
 
     return bool(unload_ok)
 
@@ -1062,6 +1076,12 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
 
     async def set_sweep_intervals_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.set_sweep_intervals(hass, service_call)
+
+    async def pause_alerts_wrapper(service_call: ServiceCall) -> None:
+        return await SystemServices.pause_alerts(hass, service_call)
+
+    async def resume_alerts_wrapper(service_call: ServiceCall) -> None:
+        return await SystemServices.resume_alerts(hass, service_call)
 
     # Register advanced services using modular classes
     _LOGGER.debug("Registering advanced services...")
@@ -1201,6 +1221,20 @@ async def _register_advanced_services(hass: HomeAssistant) -> None:
         SERVICE_SET_SWEEP_INTERVALS,
         set_sweep_intervals_wrapper,
         schema=SET_SWEEP_INTERVALS_SCHEMA,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PAUSE_ALERTS,
+        pause_alerts_wrapper,
+        schema=PAUSE_ALERTS_SCHEMA,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESUME_ALERTS,
+        resume_alerts_wrapper,
+        schema=RESUME_ALERTS_SCHEMA,
     )
     _LOGGER.debug("Registered system services")
 

@@ -36,6 +36,7 @@ from ..gating import (
 )
 from ..models.lock import CodeSlot, SmartLockManagerLock
 from ..models.zone import Zone
+from ..storage import snooze_state_for_api
 from ..zone_runtime import (
     get_unhomed_lock_entity_ids,
     get_zone_registry,
@@ -472,10 +473,14 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
         if zone_id is not None:
             alerts_by_zone.setdefault(zone_id, []).append(alert)
 
+    snooze_api = snooze_state_for_api()
+    zone_snoozes = snooze_api.get("zones", {})
+
     zones: List[Dict[str, Any]] = []
     for zone in sorted(registry.values(), key=lambda z: z.name.lower()):
         serialized = _serialize_zone(hass, zone, locks)
         serialized["dev_alerts"] = alerts_by_zone.get(zone.zone_id, [])
+        serialized["snoozed_until"] = zone_snoozes.get(zone.zone_id)
         zones.append(serialized)
 
     unhomed = [
@@ -495,6 +500,7 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
         "real_notify": real_notify_enabled(),
         "real_autolock": real_autolock_enabled(),
         "observe_only": mode != MODE_OFF,
+        "snooze": snooze_api,
     }
 
 

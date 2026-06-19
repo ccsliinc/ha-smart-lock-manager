@@ -1,0 +1,398 @@
+"""Pyscript-parity subject AND body builders for SLM alert notifications.
+
+Split out of :mod:`.notifications` (which exceeded the 500-line limit) so the
+notification dispatcher stays lean. This module owns the two data-driven
+builder families that turn a recorded alert record into the exact email
+SUBJECT and BODY text:
+
+* **Subjects** reproduce the legacy pyscripts' ``send_alert`` subject wording
+  VERBATIM (keyed on the member entity id) so the user's mail filters keep
+  matching. The fleet wrapper + severity marker are applied separately by
+  :func:`.notifications._format_subject`.
+* **Bodies** give each alert type a small, recovery-aware multi-line body so
+  the dev/parity panel and any real send carry a human-readable description
+  (door friendly name, state, timestamps, severity / percent / detail).
+
+Both families are dispatch dicts keyed by ``alert_type`` (single source of
+truth — add a row, not an if/else). SECURITY: bodies/subjects carry door
+names, severities, human messages and timestamps only — never PIN codes.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Callable, Dict
+
+# Subject prefix shared by every SLM alert subject (plain-hyphen variant).
+_SUBJECT_PREFIX = "office HA -"
+
+# Extracts the elapsed seconds out of a sustained-unlock message body
+# ("Unlocked >15s without re-lock" / "...(dev-simulated)").
+_SECONDS_RE = re.compile(r">(\d+)s")
+
+# Extracts the battery percent out of a low-battery message body
+# ("Battery low (8%)" / "Battery recovered (30%)").
+_PERCENT_RE = re.compile(r"\((\d+)%\)")
+
+
+def _entity_of(alert: Dict[str, Any]) -> str:
+    """Return the member entity id the pyscripts key subjects on.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str entity_id (falls back to door name then ``lock``).
+    """
+    return str(alert.get("member_entity_id") or alert.get("door_name") or "lock")
+
+
+def _name_of(alert: Dict[str, Any]) -> str:
+    """Return the friendly door name (used by the COB auto-lock subject).
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str door name (falls back to entity id).
+    """
+    return str(alert.get("door_name") or alert.get("member_entity_id") or "lock")
+
+
+def _first_int(pattern: "re.Pattern[str]", text: str, default: int) -> int:
+    """Return the first integer matched by ``pattern`` in ``text``.
+
+    - Inputs: pattern (compiled regex with one int group), text (str),
+      default (int returned when no match).
+    - Outputs: int.
+    """
+    match = pattern.search(text or "")
+    return int(match.group(1)) if match else default
+
+
+def _friendly_of(alert: Dict[str, Any]) -> str:
+    """Return the human-friendly door label for body text.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str friendly_name (falls back to the door name helper).
+    """
+    return alert.get("friendly_name") or _name_of(alert)
+
+
+def _last_changed_of(alert: Dict[str, Any]) -> str:
+    """Return the entity's last-changed timestamp as a string.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str ISO timestamp (``"unknown"`` when absent).
+    """
+    return str(alert.get("last_changed") or "unknown")
+
+
+def _iso_of(alert: Dict[str, Any]) -> str:
+    """Return the alert record's own ISO timestamp as a string.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str ISO timestamp (empty string when absent).
+    """
+    return str(alert.get("timestamp") or "")
+
+
+# --- Subject builders -------------------------------------------------------
+
+
+def _subj_sustained(alert: Dict[str, Any]) -> str:
+    """Sustained-unlock subject — mirrors front_middle_lock.py.
+
+    Alert:    ``office HA - {entity} unlocked >{n}s``
+    Recovery: ``office HA - {entity} locked again``
+    """
+    entity = _entity_of(alert)
+    if alert.get("is_recovery"):
+        return f"{_SUBJECT_PREFIX} {entity} locked again"
+    seconds = _first_int(_SECONDS_RE, str(alert.get("message")), 15)
+    return f"{_SUBJECT_PREFIX} {entity} unlocked >{seconds}s"
+
+
+def _subj_outside_hours(alert: Dict[str, Any]) -> str:
+    """Outside-hours subject — mirrors unlocked_outside_business.py.
+
+    Alert:    ``office HA - door {entity} unlocked outside business hours``
+    Recovery: ``office HA - {entity} locked again``
+    """
+    entity = _entity_of(alert)
+    if alert.get("is_recovery"):
+        return f"{_SUBJECT_PREFIX} {entity} locked again"
+    return f"{_SUBJECT_PREFIX} door {entity} unlocked outside business hours"
+
+
+def _subj_auto_lock_failed(alert: Dict[str, Any]) -> str:
+    """COB auto-lock failure subject — mirrors lock_doors.py (EM-DASH).
+
+    Alert: ``office HA — {name} FAILED to auto-lock at COB``
+    """
+    # NOTE: em-dash, and uses the friendly NAME (lock_doors.py keys on name).
+    return f"office HA — {_name_of(alert)} FAILED to auto-lock at COB"
+
+
+def _subj_jam(alert: Dict[str, Any]) -> str:
+    """Jam subject — SLM-only house style (no pyscript equivalent).
+
+    Alert:    ``office HA - {entity} jammed``
+    Recovery: ``office HA - {entity} jam cleared``
+    """
+    entity = _entity_of(alert)
+    state = "jam cleared" if alert.get("is_recovery") else "jammed"
+    return f"{_SUBJECT_PREFIX} {entity} {state}"
+
+
+def _subj_low_battery(alert: Dict[str, Any]) -> str:
+    """Low-battery subject — SLM-only house style.
+
+    Alert:    ``office HA - {entity} battery low ({pct}%)``
+    Recovery: ``office HA - {entity} battery recovered ({pct}%)``
+    """
+    entity = _entity_of(alert)
+    pct = _first_int(_PERCENT_RE, str(alert.get("message")), 0)
+    state = "battery recovered" if alert.get("is_recovery") else "battery low"
+    return f"{_SUBJECT_PREFIX} {entity} {state} ({pct}%)"
+
+
+def _subj_offline(alert: Dict[str, Any]) -> str:
+    """Offline subject — SLM-only house style.
+
+    Alert:    ``office HA - {entity} offline``
+    Recovery: ``office HA - {entity} back online``
+    """
+    entity = _entity_of(alert)
+    state = "back online" if alert.get("is_recovery") else "offline"
+    return f"{_SUBJECT_PREFIX} {entity} {state}"
+
+
+# alert_type -> subject builder. Single source of truth so the subject wording
+# stays data-driven (add a row, not an if/else). Keys mirror the ``ALERT_*``
+# ids in :mod:`.alert_detectors` / :mod:`.auto_lock_verify`.
+_SUBJECT_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
+    "sustained_unlock": _subj_sustained,
+    "outside_hours": _subj_outside_hours,
+    "auto_lock_failed": _subj_auto_lock_failed,
+    "jam": _subj_jam,
+    "low_battery": _subj_low_battery,
+    "offline": _subj_offline,
+}
+
+
+def build_alert_subject(alert: Dict[str, Any]) -> str:
+    """Build the pyscript-parity (pre-wrap) email subject for an alert record.
+
+    - Description: Dispatches on ``alert_type`` to the matching pyscript-style
+      builder (see :data:`_SUBJECT_BUILDERS`). Unknown types fall back to a
+      consistent ``office HA - {entity} {message}`` line so a new alert type can
+      never produce an empty/garbled subject. The fleet wrapper + severity
+      marker are added afterwards by :func:`.notifications._format_subject`.
+    - Inputs: alert (dict alert record from the engine).
+    - Outputs: str pre-wrap subject body.
+    """
+    builder = _SUBJECT_BUILDERS.get(str(alert.get("alert_type")))
+    if builder is not None:
+        return builder(alert)
+    entity = _entity_of(alert)
+    message = alert.get("message") or alert.get("alert_type") or "alert"
+    return f"{_SUBJECT_PREFIX} {entity} {message}"
+
+
+# --- Body builders ----------------------------------------------------------
+
+
+def _body_outside_hours(alert: Dict[str, Any]) -> str:
+    """Outside-hours body — recovery-aware multi-line text.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str newline-joined body.
+    """
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    last_changed = _last_changed_of(alert)
+    if alert.get("is_recovery"):
+        lines = [
+            f"{friendly} ({entity}) was previously alerted as unlocked.",
+            "Now showing state: locked.",
+            f"Last unlocked at: {last_changed}",
+            f"Recovery timestamp: {iso}",
+            "Alert closed.",
+        ]
+    else:
+        lines = [
+            f"Lock: {friendly} ({entity})",
+            "State: unlocked",
+            f"Timestamp: {iso}",
+            f"Last changed: {last_changed}",
+        ]
+    return "\n".join(lines)
+
+
+def _body_sustained(alert: Dict[str, Any]) -> str:
+    """Sustained-unlock body — recovery-aware multi-line text.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str newline-joined body.
+    """
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    last_changed = _last_changed_of(alert)
+    if alert.get("is_recovery"):
+        lines = [
+            f"{friendly} ({entity}) is now locked again.",
+            "Previously alerted as sustained-unlocked.",
+            f"Last unlocked at: {last_changed}",
+            f"Recovery timestamp: {iso}",
+            "Alert closed.",
+        ]
+    else:
+        seconds = _first_int(_SECONDS_RE, str(alert.get("message")), 15)
+        severity = str(alert.get("severity"))
+        lines = [
+            f"Lock: {friendly} ({entity})",
+            "State: unlocked",
+            f"Elapsed: {seconds}s without re-lock",
+            f"Severity: {severity}",
+        ]
+    return "\n".join(lines)
+
+
+def _body_auto_lock_failed(alert: Dict[str, Any]) -> str:
+    """COB auto-lock failure body — alert only (no recovery variant).
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str newline-joined body (always the failure text).
+    """
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    message = str(alert.get("message"))
+    lines = [
+        f"Lock: {friendly} ({entity})",
+        "State: failed to auto-lock",
+        f"Detail: {message}",
+        f"Timestamp: {iso}",
+        "",
+        "Physical check needed — the bolt could not be confirmed thrown.",
+    ]
+    return "\n".join(lines)
+
+
+def _body_jam(alert: Dict[str, Any]) -> str:
+    """Jam body — recovery-aware multi-line text.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str newline-joined body.
+    """
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    last_changed = _last_changed_of(alert)
+    if alert.get("is_recovery"):
+        lines = [
+            f"{friendly} ({entity}) was previously alerted as jammed.",
+            "Now showing state: jam cleared.",
+            f"Recovery timestamp: {iso}",
+            "Alert closed.",
+        ]
+    else:
+        message = str(alert.get("message"))
+        lines = [
+            f"Lock: {friendly} ({entity})",
+            "State: jammed",
+            f"Detail: {message}",
+            f"Timestamp: {iso}",
+            f"Last changed: {last_changed}",
+        ]
+    return "\n".join(lines)
+
+
+def _body_low_battery(alert: Dict[str, Any]) -> str:
+    """Low-battery body — recovery-aware multi-line text.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str newline-joined body.
+    """
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    pct = _first_int(_PERCENT_RE, str(alert.get("message")), 0)
+    message = str(alert.get("message"))
+    if alert.get("is_recovery"):
+        lines = [
+            f"{friendly} ({entity}) battery recovered ({pct}%).",
+            f"Detail: {message}",
+            f"Recovery timestamp: {iso}",
+            "Alert closed.",
+        ]
+    else:
+        lines = [
+            f"Lock: {friendly} ({entity})",
+            f"State: battery low ({pct}%)",
+            f"Detail: {message}",
+            f"Timestamp: {iso}",
+        ]
+    return "\n".join(lines)
+
+
+def _body_offline(alert: Dict[str, Any]) -> str:
+    """Offline body — recovery-aware multi-line text.
+
+    - Inputs: alert (dict alert record).
+    - Outputs: str newline-joined body.
+    """
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    last_changed = _last_changed_of(alert)
+    if alert.get("is_recovery"):
+        lines = [
+            f"{friendly} ({entity}) is back online.",
+            f"Recovery timestamp: {iso}",
+            "Alert closed.",
+        ]
+    else:
+        message = str(alert.get("message"))
+        lines = [
+            f"Lock: {friendly} ({entity})",
+            "State: offline",
+            f"Detail: {message}",
+            f"Timestamp: {iso}",
+            f"Last changed: {last_changed}",
+        ]
+    return "\n".join(lines)
+
+
+# alert_type -> body builder. Mirrors :data:`_SUBJECT_BUILDERS` key-for-key so
+# both families stay consistent (single source of truth, data-driven).
+_BODY_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
+    "sustained_unlock": _body_sustained,
+    "outside_hours": _body_outside_hours,
+    "auto_lock_failed": _body_auto_lock_failed,
+    "jam": _body_jam,
+    "low_battery": _body_low_battery,
+    "offline": _body_offline,
+}
+
+
+def build_alert_body(alert: Dict[str, Any]) -> str:
+    """Build the plain-text email body for an alert record (no PINs).
+
+    - Description: Dispatches on ``alert_type`` to the matching recovery-aware
+      body builder (see :data:`_BODY_BUILDERS`). Unknown types fall back to a
+      generic house-style body so a new alert type can never produce an empty
+      body.
+    - Inputs: alert (dict alert record from the engine).
+    - Outputs: str newline-joined multi-line body.
+    """
+    builder = _BODY_BUILDERS.get(str(alert.get("alert_type")))
+    if builder is not None:
+        return builder(alert)
+    friendly = _friendly_of(alert)
+    entity = _entity_of(alert)
+    iso = _iso_of(alert)
+    message = str(alert.get("message"))
+    lines = [
+        f"Lock: {friendly} ({entity})",
+        f"State: {message}",
+        f"Timestamp: {iso}",
+    ]
+    return "\n".join(lines)

@@ -100,6 +100,8 @@ SERVICE_SET_CODE_ADVANCED = "set_code_advanced"
 SERVICE_UPDATE_GLOBAL_SETTINGS = "update_global_settings"
 SERVICE_UPDATE_LOCK_SETTINGS = "update_lock_settings"
 SERVICE_SET_SWEEP_INTERVALS = "set_sweep_intervals"
+SERVICE_PAUSE_ALERTS = "pause_alerts"
+SERVICE_RESUME_ALERTS = "resume_alerts"
 
 # Zone-management services (replace retired parent/child services)
 SERVICE_CREATE_ZONE = "create_zone"

@@ -1,6 +1,7 @@
 """System-wide services for Smart Lock Manager."""
 
 import logging
+import time
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -13,7 +14,15 @@ from ..const import (
     ATTR_SYNC_ON_LOCK_EVENTS,
     DOMAIN,
 )
-from ..storage import save_global_settings
+from ..storage import (
+    clear_global_snooze,
+    clear_zone_snooze,
+    get_cached_snooze,
+    save_global_settings,
+    save_snooze,
+    set_global_snooze,
+    set_zone_snooze,
+)
 from ..storage.global_settings import (
     ATTR_HEALTH_SWEEP_MINUTES,
     ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
@@ -117,6 +126,55 @@ class SystemServices:
         hass.bus.async_fire(
             "smart_lock_manager_global_settings_updated",
             {"settings": updates},
+        )
+
+    @staticmethod
+    async def pause_alerts(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Start (or extend) an auto-expiring alert snooze, global or per-zone.
+
+        - Description: Computes an epoch deadline ``now + hours`` and stores it
+          either for ONE zone (when ``zone_id`` is given) or GLOBALLY (when it is
+          omitted). The snooze suppresses notifications only — alerts are still
+          recorded — and auto-expires at the deadline. Persists the blob, then
+          fires ``smart_lock_manager_snooze_updated``.
+        - Inputs (service_call.data): ``hours`` (float, required, 0.25..24) and
+          optional ``zone_id`` (str). ``hours`` is validated by the voluptuous
+          schema at the registration site.
+        - Outputs: None.
+        """
+        data = service_call.data
+        hours = float(data["hours"])
+        zone_id = data.get("zone_id")
+        until = time.time() + hours * 3600
+        if zone_id:
+            set_zone_snooze(zone_id, until)
+        else:
+            set_global_snooze(until)
+        await save_snooze(hass, get_cached_snooze())
+        hass.bus.async_fire(
+            "smart_lock_manager_snooze_updated",
+            {"zone_id": zone_id, "until": until},
+        )
+
+    @staticmethod
+    async def resume_alerts(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Clear an active alert snooze, global or per-zone.
+
+        - Description: Clears the snooze deadline for ONE zone (when ``zone_id``
+          is given) or the GLOBAL deadline (when omitted). Persists the blob,
+          then fires ``smart_lock_manager_snooze_updated``.
+        - Inputs (service_call.data): optional ``zone_id`` (str).
+        - Outputs: None.
+        """
+        zone_id = service_call.data.get("zone_id")
+        if zone_id:
+            clear_zone_snooze(zone_id)
+        else:
+            clear_global_snooze()
+        await save_snooze(hass, get_cached_snooze())
+        hass.bus.async_fire(
+            "smart_lock_manager_snooze_updated",
+            {"zone_id": zone_id, "cleared": True},
         )
 
     @staticmethod
