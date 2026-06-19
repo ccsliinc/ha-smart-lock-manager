@@ -2111,14 +2111,11 @@ class SmartLockManagerPanel extends HTMLElement {
           color: var(--secondary-text-color);
         }
 
-        /* The mdi chevron glyph isn't centered in its own viewBox (chevron-up
-           sits ~2.7px low, chevron-down ~2.7px high), so optically center each
-           direction to match the dead-centered + button next to it. */
+        /* Both mdi chevron glyphs (up + down) sit ~3px low within their own
+           viewBox, so nudge up to optically center them on the header row,
+           matching the dead-centered + button next to them. */
         .zone-section-chevron {
-          transform: translateY(-2.7px);
-        }
-        .zone-section-chevron.expanded {
-          transform: translateY(2.7px);
+          transform: translateY(-3px);
         }
 
         /* Slots section wrapper mirrors the locks section framing so its
