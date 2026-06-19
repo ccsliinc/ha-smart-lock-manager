@@ -2,6 +2,5 @@
   "name": "Smart Lock Manager",
   "content_in_root": false,
   "render_readme": true,
-  "hacs": "2025.1.0",
   "homeassistant": "2024.8.0"
 }
