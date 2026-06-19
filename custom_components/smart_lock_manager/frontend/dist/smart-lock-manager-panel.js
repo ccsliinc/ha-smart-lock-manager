@@ -27,6 +27,9 @@ class SmartLockManagerPanel extends HTMLElement {
     this._openZoneMenu = null;  // zone_id whose header gear menu is open
     this._openLockMenu = null;  // entity_id whose per-lock gear menu is open
     this._openPicker = null;    // zone_id whose "+" unhomed picker is open
+    this._snooze = null;        // { global_until, zones: {} } alert-pause state from zones API
+    this._openSnoozeMenu = null; // zone_id whose per-zone snooze duration popover is open
+    this._openPauseAllMenu = false; // true when the global "Pause all" duration popover is open
     this._editLockModalOpen = false; // per-lock Edit (friendly name) modal
     this._editLockEntityId = null;   // entity_id being edited in that modal
     this._zoneSettingsModalOpen = false; // Zone Settings modal (Phase 4a)
@@ -161,6 +164,9 @@ class SmartLockManagerPanel extends HTMLElement {
       const payload = await this._hass.callApi('GET', 'smart_lock_manager/zones');
       this._zones = Array.isArray(payload?.zones) ? payload.zones : [];
       this._unhomedLocks = Array.isArray(payload?.unhomed_locks) ? payload.unhomed_locks : [];
+      // Alert-pause (snooze) state: { global_until: <iso|null>, zones: { <id>: <iso> } }.
+      // Per-zone snoozed_until is also carried on each zone object.
+      this._snooze = payload?.snooze || null;
       // OBSERVE recorded alert log. ``observe_only`` is true whenever an engine
       // is constructed (dev OR observe); the Dev Alerts section renders then.
       this._observeOnly = !!payload?.observe_only;
@@ -1483,6 +1489,72 @@ class SmartLockManagerPanel extends HTMLElement {
   // healthy zones show no banner.
   // - Inputs: zone (zone object from the API).
   // - Outputs: HTML string (possibly empty).
+  // Format an ISO timestamp as a local short time, e.g. "1:20 PM".
+  // - Inputs: iso (str|null).
+  // - Outputs: short local time string; '' if falsy or unparseable.
+  _fmtTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  // Resolve the effective alert-snooze for a zone: a future per-zone snooze
+  // wins; otherwise a future global pause applies; otherwise none.
+  // - Inputs: zone (zone obj).
+  // - Outputs: { until: <iso>, global: <bool> } or null.
+  _zoneSnoozeUntil(zone) {
+    const now = new Date();
+    const zu = zone && zone.snoozed_until;
+    if (zu && new Date(zu) > now) return { until: zu, global: false };
+    const gu = this._snooze && this._snooze.global_until;
+    if (gu && new Date(gu) > now) return { until: gu, global: true };
+    return null;
+  }
+
+  // Compute hours from now until the next occurrence of a zone's open time,
+  // for the "Until morning" snooze. Open time = zone.settings.business_hours
+  // .open_time (a non-empty "HH:MM"), else "08:30". Build a Date for today at
+  // that time; if it's already past, add one day. hours = (target - now) /
+  // 3,600,000 ms, clamped to [0.25, 24] to satisfy the service bounds.
+  // - Inputs: zone (zone obj).
+  // - Outputs: float hours.
+  _untilMorningHours(zone) {
+    const bh = zone && zone.settings && zone.settings.business_hours;
+    let open = bh && typeof bh.open_time === 'string' && bh.open_time
+      ? bh.open_time : '08:30';
+    const parts = String(open).split(':');
+    const hh = parseInt(parts[0], 10) || 0;
+    const mm = parseInt(parts[1], 10) || 0;
+    const now = new Date();
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    let hours = (target - now) / 3600000;
+    if (hours > 24) hours = 24;
+    if (hours < 0.25) hours = 0.25;
+    return hours;
+  }
+
+  // Render the global alert-pause banner under the page header when a global
+  // pause is active (future global_until). Mirrors the amber sync-warning
+  // palette. Offers a "Resume all" action.
+  // - Inputs: none (reads this._snooze).
+  // - Outputs: HTML string ('' when no active global pause).
+  _renderGlobalSnoozeBanner() {
+    const gu = this._snooze && this._snooze.global_until;
+    if (!gu || !(new Date(gu) > new Date())) return '';
+    const t = this._esc(this._fmtTime(gu));
+    return `
+      <div class="zone-sync-warning global-snooze-banner" role="status">
+        <ha-icon icon="mdi:bell-sleep-outline" style="width:18px;height:18px;flex:0 0 auto;"></ha-icon>
+        <span>⏸ All alerts paused until ${t}</span>
+        <button class="global-snooze-resume"
+                onclick="SmartLockManagerPanel.resumeAll()"
+                title="Resume all alerts">Resume all</button>
+      </div>
+    `;
+  }
+
   renderZoneSyncWarning(zone) {
     const errs = Array.isArray(zone.error_slots) ? zone.error_slots : [];
     if (!errs.length) return '';
@@ -1534,17 +1606,58 @@ class SmartLockManagerPanel extends HTMLElement {
     const zid = this._esc(zone.zone_id);
     const name = this._esc(zone.name || 'Zone');
     const menuOpen = this._openZoneMenu === zone.zone_id;
+    const snz = this._zoneSnoozeUntil(zone);
+    const snoozeMenuOpen = this._openSnoozeMenu === zone.zone_id;
+    const snoozeBadge = snz
+      ? `<span class="zone-snooze-badge">⏸ ${snz.global
+          ? `All alerts paused until ${this._esc(this._fmtTime(snz.until))}`
+          : `Snoozed until ${this._esc(this._fmtTime(snz.until))}`}</span>`
+      : '';
 
     return `
       <div class="lock-card zone-card">
         <div class="lock-header zone-header">
           <div class="zone-title-wrap">
             <h3 class="lock-title" title="${name}">${name}</h3>
+            ${snoozeBadge}
             <div class="saving-spinner" id="saving-spinner-zone-${zid}" style="display:none;">
               <div class="spinner"></div><span>Saving...</span>
             </div>
           </div>
           <div class="lock-header-right">
+            ${snz ? `
+            <button class="zone-snooze-btn"
+                    onclick="event.stopPropagation(); SmartLockManagerPanel.unsnoozeZone('${zid}')"
+                    title="Resume alerts"
+                    style="background:none;border:none;cursor:pointer;padding:4px;border-radius:4px;display:flex;align-items:center;color:#f0a020;">
+              <ha-icon icon="mdi:bell-ring-outline" style="width:22px;height:22px;"></ha-icon>
+            </button>
+            ` : `
+            <div class="zone-snooze-wrap" style="position:relative;">
+              <button class="zone-snooze-btn"
+                      onclick="event.stopPropagation(); SmartLockManagerPanel.toggleSnoozeMenu('${zid}')"
+                      title="Snooze alerts"
+                      style="background:none;border:none;cursor:pointer;padding:4px;border-radius:4px;display:flex;align-items:center;color:var(--secondary-text-color);">
+                <ha-icon icon="mdi:bell-sleep-outline" style="width:22px;height:22px;"></ha-icon>
+              </button>
+              ${snoozeMenuOpen ? `
+                <div class="zone-menu zone-snooze-menu">
+                  <button class="zone-menu-item" onclick="event.stopPropagation(); SmartLockManagerPanel.snoozeZone('${zid}', 1)">
+                    <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>1h</span>
+                  </button>
+                  <button class="zone-menu-item" onclick="event.stopPropagation(); SmartLockManagerPanel.snoozeZone('${zid}', 2)">
+                    <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>2h</span>
+                  </button>
+                  <button class="zone-menu-item" onclick="event.stopPropagation(); SmartLockManagerPanel.snoozeZone('${zid}', 4)">
+                    <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>4h</span>
+                  </button>
+                  <button class="zone-menu-item" onclick="event.stopPropagation(); SmartLockManagerPanel.snoozeZoneUntilMorning('${zid}')">
+                    <ha-icon icon="mdi:weather-sunset-up" style="width:16px;height:16px;"></ha-icon><span>Until morning</span>
+                  </button>
+                </div>
+              ` : ''}
+            </div>
+            `}
             <button class="refresh-btn zone-refresh-btn"
                     onclick="SmartLockManagerPanel.refreshZone('${zid}')"
                     title="Refresh this zone"
@@ -1906,6 +2019,36 @@ class SmartLockManagerPanel extends HTMLElement {
         }
         .zone-sync-warning ha-icon {
           color: #f0a020;
+        }
+        /* Amber pill marking a zone (or global) alert snooze. */
+        .zone-snooze-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 12px;
+          font-weight: 500;
+          padding: 2px 8px;
+          border-radius: 10px;
+          background: rgba(240, 160, 32, 0.12);
+          border: 1px solid rgba(240, 160, 32, 0.55);
+          color: #b9770e;
+          white-space: nowrap;
+        }
+        /* Snooze duration popover anchored under the zone header bell. */
+        .zone-snooze-menu { top: 36px; right: 0; }
+        /* Global "Pause all" popover anchored under the header button. */
+        .pause-all-menu { top: 38px; right: 0; }
+        /* Resume button inside the global snooze banner. */
+        .global-snooze-resume {
+          margin-left: auto;
+          background: none;
+          border: 1px solid rgba(240, 160, 32, 0.55);
+          color: #b9770e;
+          cursor: pointer;
+          padding: 3px 10px;
+          border-radius: 6px;
+          font-size: 12px;
+          font-weight: 600;
         }
         /* Phase 4d engine-mode banner under the page header. */
         .engine-banner {
@@ -2859,6 +3002,31 @@ class SmartLockManagerPanel extends HTMLElement {
             <ha-icon icon="mdi:plus-box" style="margin-right: 3px; width: 24px; height: 24px;"></ha-icon>
             <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 4px;">New Zone</span>
           </button>
+          <div class="pause-all-wrap" style="position: relative; display: flex;">
+            <button class="refresh-btn pause-all-btn"
+                    onclick="SmartLockManagerPanel.togglePauseAllMenu()"
+                    title="Pause alerts for every zone"
+                    style="background: none; border: none; cursor: pointer; padding: 4px; border-radius: 4px; display: flex; align-items: center; color: var(--primary-text-color); opacity: 0.7; transition: opacity 0.2s;">
+              <ha-icon icon="mdi:bell-sleep-outline" style="margin-right: 3px; width: 24px; height: 24px;"></ha-icon>
+              <span style="height: 20px; line-height: 20px; display: flex; align-items: center; margin-left: 4px;">Pause all</span>
+            </button>
+            ${this._openPauseAllMenu ? `
+              <div class="zone-menu pause-all-menu">
+                <button class="zone-menu-item" onclick="SmartLockManagerPanel.pauseAll(1)">
+                  <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>1h</span>
+                </button>
+                <button class="zone-menu-item" onclick="SmartLockManagerPanel.pauseAll(2)">
+                  <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>2h</span>
+                </button>
+                <button class="zone-menu-item" onclick="SmartLockManagerPanel.pauseAll(4)">
+                  <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>4h</span>
+                </button>
+                <button class="zone-menu-item" onclick="SmartLockManagerPanel.pauseAll(8)">
+                  <ha-icon icon="mdi:bell-sleep-outline" style="width:16px;height:16px;"></ha-icon><span>8h</span>
+                </button>
+              </div>
+            ` : ''}
+          </div>
           <button class="refresh-btn"
                   onclick="SmartLockManagerPanel.forceRefresh()"
                   title="Refresh all data from Home Assistant"
@@ -2869,6 +3037,7 @@ class SmartLockManagerPanel extends HTMLElement {
         </div>
       </div>
 
+      ${this._renderGlobalSnoozeBanner()}
       ${this._renderEngineBanner()}
 
       ${(!this._zoneDataLoaded && zones.length === 0) ? `
@@ -3814,6 +3983,84 @@ class SmartLockManagerPanel extends HTMLElement {
     p._openPicker = (p._openPicker === zoneId) ? null : zoneId;
     p._openZoneMenu = null; p._openLockMenu = null;
     p.requestUpdate();
+  }
+
+  // --- Alert-snooze controls (per-zone + global) -------------------------
+
+  // Toggle a zone's snooze-duration popover; mutually exclusive with other menus.
+  // - Inputs: zoneId (str).
+  // - Outputs: none (re-renders).
+  static toggleSnoozeMenu(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openSnoozeMenu = (p._openSnoozeMenu === zoneId) ? null : zoneId;
+    p._openZoneMenu = null; p._openLockMenu = null; p._openPicker = null;
+    p._openPauseAllMenu = false;
+    p.requestUpdate();
+  }
+
+  // Snooze a single zone's alerts for a fixed number of hours.
+  // - Inputs: zoneId (str), hours (float 0.25-24).
+  // - Outputs: Promise<void>.
+  static async snoozeZone(zoneId, hours) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openSnoozeMenu = null;
+    await p.callZoneService('pause_alerts', { zone_id: zoneId, hours });
+  }
+
+  // Snooze a zone until its next open time ("Until morning").
+  // - Inputs: zoneId (str).
+  // - Outputs: Promise<void>.
+  static async snoozeZoneUntilMorning(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const zone = p._zones.find(z => String(z.zone_id) === String(zoneId));
+    if (!zone) return;
+    const hours = p._untilMorningHours(zone);
+    p._openSnoozeMenu = null;
+    await p.callZoneService('pause_alerts', { zone_id: zoneId, hours });
+  }
+
+  // Resume a zone's alerts. If the zone is covered only by the GLOBAL pause
+  // (no live per-zone snooze), clear the global pause; otherwise clear just
+  // this zone.
+  // - Inputs: zoneId (str).
+  // - Outputs: Promise<void>.
+  static async unsnoozeZone(zoneId) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    const zone = p._zones.find(z => String(z.zone_id) === String(zoneId));
+    if (!zone) return;
+    const snz = p._zoneSnoozeUntil(zone);
+    if (snz && snz.global && !(zone.snoozed_until && new Date(zone.snoozed_until) > new Date())) {
+      await p.callZoneService('resume_alerts', {});
+    } else {
+      await p.callZoneService('resume_alerts', { zone_id: zoneId });
+    }
+  }
+
+  // Toggle the global "Pause all" duration popover.
+  // - Inputs: none.
+  // - Outputs: none (re-renders).
+  static togglePauseAllMenu() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openPauseAllMenu = !p._openPauseAllMenu;
+    p._openSnoozeMenu = null; p._openZoneMenu = null;
+    p.requestUpdate();
+  }
+
+  // Pause alerts for ALL zones (global) for a fixed number of hours.
+  // - Inputs: hours (float 0.25-24).
+  // - Outputs: Promise<void>.
+  static async pauseAll(hours) {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    p._openPauseAllMenu = false;
+    await p.callZoneService('pause_alerts', { hours });
+  }
+
+  // Clear the global alert pause.
+  // - Inputs: none.
+  // - Outputs: Promise<void>.
+  static async resumeAll() {
+    const p = window.smartLockManagerPanel; if (!p) return;
+    await p.callZoneService('resume_alerts', {});
   }
 
   // --- Zone lifecycle / membership services ---
