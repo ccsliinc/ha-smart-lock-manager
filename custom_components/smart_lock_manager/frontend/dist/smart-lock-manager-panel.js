@@ -1142,7 +1142,7 @@ class SmartLockManagerPanel extends HTMLElement {
                     title="Add an unhomed lock to this zone">
               <ha-icon icon="mdi:plus" style="width:18px;height:18px;"></ha-icon>
             </button>
-            <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+            <ha-icon icon="${chevron}" class="zone-section-chevron${expanded ? ' expanded' : ''}" style="width:18px;height:18px;"></ha-icon>
           </div>
         </div>
         <div class="zone-locks-body" style="${expanded ? '' : 'display:none;'}">
@@ -1258,7 +1258,7 @@ class SmartLockManagerPanel extends HTMLElement {
       <div class="zone-section-head" onclick="SmartLockManagerPanel.toggleSection('${zid}', 'slots')">
         <span class="zone-section-title">Slots${configuredCount ? ` (${configuredCount})` : ''}</span>
         <div class="zone-section-head-right">
-          <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+          <ha-icon icon="${chevron}" class="zone-section-chevron${expanded ? ' expanded' : ''}" style="width:18px;height:18px;"></ha-icon>
         </div>
       </div>
     `;
@@ -1368,7 +1368,7 @@ class SmartLockManagerPanel extends HTMLElement {
       <div class="access-log-section">
         <div class="access-log-header" onclick="SmartLockManagerPanel.toggleSection('${this._esc(zone.zone_id)}', 'log')">
           <span>Access Log${combined.length ? ` (${combined.length})` : ''}</span>
-          <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+          <ha-icon icon="${chevron}" class="zone-section-chevron${expanded ? ' expanded' : ''}" style="width:18px;height:18px;"></ha-icon>
         </div>
         <div class="access-log-body" id="${bodyId}" style="${expanded ? '' : 'display:none;'}">
           ${combined.length ? rows : '<div class="access-log-empty">No access events recorded yet.</div>'}
@@ -1431,7 +1431,7 @@ class SmartLockManagerPanel extends HTMLElement {
       <div class="access-log-section dev-alerts-section">
         <div class="access-log-header" onclick="SmartLockManagerPanel.toggleSection('${zid}', 'alerts')">
           <span>Dev Alerts${alerts.length ? ` (${alerts.length})` : ''}</span>
-          <ha-icon icon="${chevron}" style="width:18px;height:18px;"></ha-icon>
+          <ha-icon icon="${chevron}" class="zone-section-chevron${expanded ? ' expanded' : ''}" style="width:18px;height:18px;"></ha-icon>
         </div>
         <div class="dev-alerts-banner" style="${expanded ? '' : 'display:none;'}">
           Dev / observe-only — no notifications sent
@@ -2109,6 +2109,16 @@ class SmartLockManagerPanel extends HTMLElement {
           align-items: center;
           gap: 6px;
           color: var(--secondary-text-color);
+        }
+
+        /* The mdi chevron glyph isn't centered in its own viewBox (chevron-up
+           sits ~2.7px low, chevron-down ~2.7px high), so optically center each
+           direction to match the dead-centered + button next to it. */
+        .zone-section-chevron {
+          transform: translateY(-2.7px);
+        }
+        .zone-section-chevron.expanded {
+          transform: translateY(2.7px);
         }
 
         /* Slots section wrapper mirrors the locks section framing so its
