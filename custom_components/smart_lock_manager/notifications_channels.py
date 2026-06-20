@@ -126,7 +126,8 @@ class RenderedEmail:
         kind: subject-prefix segment (always ``alert`` for SLM alerts).
         subject: the wrapped ``[fleet/internal/...]`` subject line.
         body: plain-text body.
-        recipients: final envelope recipient list (base + alert + override).
+        recipients: final envelope recipient list (the non-empty zone override
+            verbatim, else base ``smtp2go_to`` + the kind-specific extras).
     """
 
     severity: str
@@ -170,18 +171,25 @@ class EmailNotifier:
     def _resolve_recipients(
         self, creds: Dict[str, Any], kind: str, override: List[str]
     ) -> List[str]:
-        """Build the final To: list (base + kind extras + zone override).
+        """Build the final To: list, honouring a non-empty zone override.
 
-        - Description: Mirrors ``lib_email._resolve_recipients`` (base
-          ``smtp2go_to`` first, then the kind-specific list) and additionally
-          appends the zone's ``recipients_override`` so per-zone targeting is
-          honoured. De-duplicated, order-preserving.
+        - Description: A NON-EMPTY ``recipients_override`` REPLACES the base
+          routing entirely — the email goes to EXACTLY those addresses (base
+          ``smtp2go_to`` and the kind-specific extras are NOT appended), so a
+          zone can be retargeted to its own recipients. When the override is
+          empty / None it falls back to ``lib_email._resolve_recipients``
+          parity: base ``smtp2go_to`` first, then the kind-specific list.
+          Addresses are trimmed; blanks are dropped; the result is
+          de-duplicated, order-preserving.
         - Inputs: creds (dict), kind (str), override (list[str] zone override).
         - Outputs: list[str] of recipient addresses.
         """
+        cleaned_override = [a.strip() for a in (override or []) if a and a.strip()]
+        if cleaned_override:
+            return _dedup_preserve(cleaned_override)
         base = [creds["to"]] if creds.get("to") else []
         extras = (creds.get("kind_to") or {}).get(kind, []) or []
-        return _dedup_preserve(base + extras + list(override or []))
+        return _dedup_preserve(base + extras)
 
     async def render(
         self,

@@ -100,12 +100,20 @@ class NotificationDispatcher:
     def _should_really_send(self) -> bool:
         """Return True only when real sending is permitted.
 
-        - Description: Requires the explicit real-send flag AND that dry-run is
-          not forced. In dev (``dry_run`` True) this is always False.
+        - Description: Requires the FILE-AWARE real-send flag AND that dry-run is
+          not forced. In dev (``dry_run`` True) this is always False. The reader
+          is :func:`..gating.real_notify_enabled` (env OR the flags-file
+          ``real_notify`` key) — NOT the env-only :func:`real_send_enabled` — so
+          HA OS (no settable env) can enable real sends via the file, mirroring
+          :meth:`..auto_lock.AutoLockEngine._may_execute`.
         - Inputs: none.
         - Outputs: bool.
         """
-        return (not self.dry_run) and real_send_enabled()
+        # Imported LAZILY here to avoid a circular import at module load (gating
+        # imports this module's ``real_send_enabled``), mirroring auto_lock.
+        from .gating import real_notify_enabled
+
+        return (not self.dry_run) and real_notify_enabled()
 
     @staticmethod
     def _severity_for(alert: Dict[str, Any]) -> str:
