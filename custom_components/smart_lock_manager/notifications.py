@@ -31,7 +31,11 @@ from typing import Any, Dict, List, Optional
 from homeassistant.core import HomeAssistant
 
 from .models.zone_settings import EmailNotify, MobileNotify, ZoneNotify
-from .notifications_bodies import build_alert_body, build_alert_subject
+from .notifications_bodies import (
+    build_alert_body,
+    build_alert_body_lines,
+    build_alert_subject,
+)
 from .notifications_channels import (
     CHANNEL_EMAIL,
     CHANNEL_MOBILE,
@@ -145,10 +149,11 @@ class NotificationDispatcher:
         severity = self._severity_for(alert)
         subject = build_alert_subject(alert)
         body = build_alert_body(alert)
+        body_lines = build_alert_body_lines(alert)
 
         if notify.email.enabled:
             intent = await self._dispatch_email(
-                alert, notify.email, severity, subject, body
+                alert, notify.email, severity, subject, body, body_lines
             )
             if intent is not None:
                 intents.append(intent)
@@ -167,15 +172,22 @@ class NotificationDispatcher:
         severity: str,
         subject: str,
         body: str,
+        body_lines: List[str],
     ) -> Optional[Dict[str, Any]]:
         """Render + (dry-run) record / (real) send the email channel.
 
         - Inputs: alert (dict), email_cfg (EmailNotify), severity (str),
-          subject (str), body (str).
+          subject (str), body (str), body_lines (list[str] un-joined body lines
+          for the HTML card).
         - Outputs: intent dict, or None when the payload could not be rendered.
         """
         rendered = await self.email.render(
-            severity, subject, body, email_cfg.recipients_override, kind="alert"
+            severity,
+            subject,
+            body,
+            email_cfg.recipients_override,
+            kind="alert",
+            body_lines=body_lines,
         )
         if rendered is None:
             return None

@@ -229,7 +229,7 @@ class AlertEngine(
         """
         self._teardown_subscriptions()
         self._started = False
-        _LOGGER.info("AlertEngine (observe-only) stopped")
+        _LOGGER.info("AlertEngine stopped")
 
     @callback
     def _teardown_subscriptions(self) -> None:
@@ -288,8 +288,10 @@ class AlertEngine(
         """Append one structured alert record and persist the log.
 
         - Description: Builds the canonical record dict, appends it to the
-          rolling capped list, and schedules an async persist. Recording is the
-          ONLY action — no notification is ever sent.
+          rolling capped list, and schedules an async persist. After recording, an
+          async DRY-RUN dispatch is scheduled (see :meth:`_notify`); it records
+          would-notify intents and only performs a REAL send when
+          ``SLM_ENABLE_REAL_NOTIFY`` is set AND dry-run is not forced.
         - Inputs: entity_id (str), alert_type (str), severity (str WARN/CRIT),
           message (str human-readable), is_recovery (bool), origin (str — one of
           ``"state_change"`` for rising/falling-edge Alerts/Recoveries emitted by
@@ -330,9 +332,10 @@ class AlertEngine(
         if len(self.alerts) > MAX_ALERTS:
             self.alerts = self.alerts[-MAX_ALERTS:]
         _LOGGER.info(
-            "AlertEngine RECORDED (observe-only, no notification): "
-            "%s %s %s on %s (%s)",
+            "AlertEngine RECORDED %s (origin=%s) %s %s on %s (%s) "
+            "— dispatch follows",
             "RECOVERY" if is_recovery else "ALERT",
+            origin,
             severity,
             alert_type,
             door_name,

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 import smtplib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # --- lib_email parity constants (replicated EXACTLY) ------------------------
 SECRETS_FILENAME = "secrets.yaml"
+HOST_TAG_FILENAME = ".ha_host_tag"
 SMTP_HOST = "mail.smtp2go.com"
 SMTP_PORT = 587
 SMTP_TIMEOUT = 15  # seconds
@@ -98,6 +100,23 @@ def _load_secrets_sync(secrets_path: str) -> Optional[Dict[str, Any]]:
     return creds
 
 
+def _read_host_tag_sync(host_tag_path: str) -> Optional[str]:
+    """Read the host tag from ``.ha_host_tag`` (BLOCKING file IO).
+
+    - Description: Mirrors lib_email._hostname_tag's file read. MUST run in the
+      executor, never the event loop. Returns None if missing/empty so the
+      footer can gracefully omit the host.
+    - Inputs: host_tag_path (str absolute path to .ha_host_tag).
+    - Outputs: str host tag (e.g. 'ha-office'), or None.
+    """
+    try:
+        with open(host_tag_path, "r", encoding="utf-8") as handle:
+            tag = handle.read().strip()
+    except OSError:
+        return None
+    return tag or None
+
+
 def _dedup_preserve(addresses: List[str]) -> List[str]:
     """Return ``addresses`` de-duplicated case-insensitively, order preserved.
 
@@ -128,6 +147,10 @@ class RenderedEmail:
         body: plain-text body.
         recipients: final envelope recipient list (the non-empty zone override
             verbatim, else base ``smtp2go_to`` + the kind-specific extras).
+        body_lines: the un-joined body lines fed to the HTML card renderer (so
+            each becomes its own row); derived from ``body`` when not supplied.
+        host_tag: the footer host label (e.g. ``ha-office``), or None when the
+            ``.ha_host_tag`` file is absent so the footer omits the host.
     """
 
     severity: str
@@ -135,6 +158,8 @@ class RenderedEmail:
     subject: str
     body: str
     recipients: List[str]
+    body_lines: List[str] = field(default_factory=list)
+    host_tag: Optional[str] = None
 
 
 class EmailNotifier:
@@ -155,6 +180,8 @@ class EmailNotifier:
         self.hass = hass
         self._secrets_path = hass.config.path(SECRETS_FILENAME)
         self._creds_cache: Optional[Dict[str, Any]] = None
+        self._host_tag_cache: Optional[str] = None
+        self._host_tag_loaded = False
 
     async def _creds(self) -> Optional[Dict[str, Any]]:
         """Return the cached SMTP2GO creds, loading them via the executor once.
@@ -167,6 +194,22 @@ class EmailNotifier:
                 _load_secrets_sync, self._secrets_path
             )
         return self._creds_cache
+
+    async def _host_tag(self) -> Optional[str]:
+        """Return the cached host tag, loading it via the executor once.
+
+        - Description: Lazily reads ``.ha_host_tag`` once (executor), caching the
+          result — including a None (missing file) — so the footer host label is
+          resolved at most one file read per process. Mirrors :meth:`_creds`.
+        - Inputs: none.
+        - Outputs: str host tag, or None when the file is missing/empty.
+        """
+        if not self._host_tag_loaded:
+            self._host_tag_cache = await self.hass.async_add_executor_job(
+                _read_host_tag_sync, self.hass.config.path(HOST_TAG_FILENAME)
+            )
+            self._host_tag_loaded = True
+        return self._host_tag_cache
 
     def _resolve_recipients(
         self, creds: Dict[str, Any], kind: str, override: List[str]
@@ -198,11 +241,14 @@ class EmailNotifier:
         body: str,
         recipients_override: List[str],
         kind: str = "alert",
+        body_lines: Optional[List[str]] = None,
     ) -> Optional[RenderedEmail]:
         """Render a full email payload from secrets + the lib_email format.
 
         - Inputs: severity (str), subject (str), body (str),
-          recipients_override (list[str] from the zone), kind (str).
+          recipients_override (list[str] from the zone), kind (str), body_lines
+          (optional pre-split lines for the HTML card; derived from ``body`` by
+          splitting on newlines when None).
         - Outputs: RenderedEmail, or None when creds/recipients are unavailable.
         """
         creds = await self._creds()
@@ -214,6 +260,8 @@ class EmailNotifier:
                 "notifications: no email recipients resolved for kind=%s", kind
             )
             return None
+        host_tag = await self._host_tag()
+        lines = body_lines if body_lines is not None else body.split("\n")
         sev = (severity or "").upper().strip()
         return RenderedEmail(
             severity=sev,
@@ -221,15 +269,25 @@ class EmailNotifier:
             subject=_format_subject(sev, subject, kind),
             body=body,
             recipients=recipients,
+            body_lines=lines,
+            host_tag=host_tag,
         )
 
-    def _build_mime(self, creds: Dict[str, Any], email: RenderedEmail) -> MIMEText:
-        """Build the MIMEText message (parity with ``lib_email._build_message``).
+    def _build_mime(self, creds: Dict[str, Any], email: RenderedEmail) -> MIMEMultipart:
+        """Build a multipart/alternative message (plain + styled HTML card).
 
+        - Description: Parity with lib_email but upgraded to multipart: a text/plain
+          part (the legacy body, unchanged) AND a text/html part rendering the
+          shared alert card via render_alert_html. The plain part stays first so
+          non-HTML clients fall back to it.
         - Inputs: creds (dict), email (RenderedEmail).
-        - Outputs: MIMEText ready for ``sendmail``.
+        - Outputs: MIMEMultipart('alternative') ready for sendmail.
         """
-        msg = MIMEText(email.body, "plain", "utf-8")
+        # Imported LAZILY to avoid a circular import at module load:
+        # notifications_html imports _MARKERS from this module.
+        from .notifications_html import render_alert_html
+
+        msg = MIMEMultipart("alternative")
         msg["From"] = creds["from"]
         msg["To"] = ", ".join(email.recipients)
         msg["Subject"] = email.subject
@@ -237,6 +295,18 @@ class EmailNotifier:
         msg["Message-ID"] = make_msgid(domain="ha.local")
         msg["X-HA-Severity"] = email.severity
         msg["X-HA-Kind"] = email.kind
+        # actor=None: the alert record carries no triggered-by info today; the
+        # renderer omits the line cleanly when actor is falsy.
+        html = render_alert_html(
+            severity=email.severity,
+            subject=email.subject,
+            body_lines=email.body_lines,
+            host_tag=email.host_tag,
+            actor=None,
+            timestamp=None,
+        )
+        msg.attach(MIMEText(email.body, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
         return msg
 
     def _smtp_send(self, creds: Dict[str, Any], email: RenderedEmail) -> bool:

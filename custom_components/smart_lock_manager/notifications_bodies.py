@@ -21,7 +21,7 @@ names, severities, human messages and timestamps only — never PIN codes.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 
 # Subject prefix shared by every SLM alert subject (plain-hyphen variant).
 _SUBJECT_PREFIX = "office HA -"
@@ -197,11 +197,11 @@ def build_alert_subject(alert: Dict[str, Any]) -> str:
 # --- Body builders ----------------------------------------------------------
 
 
-def _body_outside_hours(alert: Dict[str, Any]) -> str:
+def _body_outside_hours(alert: Dict[str, Any]) -> List[str]:
     """Outside-hours body — recovery-aware multi-line text.
 
     - Inputs: alert (dict alert record).
-    - Outputs: str newline-joined body.
+    - Outputs: list[str] body lines.
     """
     friendly = _friendly_of(alert)
     entity = _entity_of(alert)
@@ -222,14 +222,14 @@ def _body_outside_hours(alert: Dict[str, Any]) -> str:
             f"Timestamp: {iso}",
             f"Last changed: {last_changed}",
         ]
-    return "\n".join(lines)
+    return lines
 
 
-def _body_sustained(alert: Dict[str, Any]) -> str:
+def _body_sustained(alert: Dict[str, Any]) -> List[str]:
     """Sustained-unlock body — recovery-aware multi-line text.
 
     - Inputs: alert (dict alert record).
-    - Outputs: str newline-joined body.
+    - Outputs: list[str] body lines.
     """
     friendly = _friendly_of(alert)
     entity = _entity_of(alert)
@@ -252,14 +252,14 @@ def _body_sustained(alert: Dict[str, Any]) -> str:
             f"Elapsed: {seconds}s without re-lock",
             f"Severity: {severity}",
         ]
-    return "\n".join(lines)
+    return lines
 
 
-def _body_auto_lock_failed(alert: Dict[str, Any]) -> str:
+def _body_auto_lock_failed(alert: Dict[str, Any]) -> List[str]:
     """COB auto-lock failure body — alert only (no recovery variant).
 
     - Inputs: alert (dict alert record).
-    - Outputs: str newline-joined body (always the failure text).
+    - Outputs: list[str] body lines.
     """
     friendly = _friendly_of(alert)
     entity = _entity_of(alert)
@@ -273,14 +273,14 @@ def _body_auto_lock_failed(alert: Dict[str, Any]) -> str:
         "",
         "Physical check needed — the bolt could not be confirmed thrown.",
     ]
-    return "\n".join(lines)
+    return lines
 
 
-def _body_jam(alert: Dict[str, Any]) -> str:
+def _body_jam(alert: Dict[str, Any]) -> List[str]:
     """Jam body — recovery-aware multi-line text.
 
     - Inputs: alert (dict alert record).
-    - Outputs: str newline-joined body.
+    - Outputs: list[str] body lines.
     """
     friendly = _friendly_of(alert)
     entity = _entity_of(alert)
@@ -302,14 +302,14 @@ def _body_jam(alert: Dict[str, Any]) -> str:
             f"Timestamp: {iso}",
             f"Last changed: {last_changed}",
         ]
-    return "\n".join(lines)
+    return lines
 
 
-def _body_low_battery(alert: Dict[str, Any]) -> str:
+def _body_low_battery(alert: Dict[str, Any]) -> List[str]:
     """Low-battery body — recovery-aware multi-line text.
 
     - Inputs: alert (dict alert record).
-    - Outputs: str newline-joined body.
+    - Outputs: list[str] body lines.
     """
     friendly = _friendly_of(alert)
     entity = _entity_of(alert)
@@ -330,14 +330,14 @@ def _body_low_battery(alert: Dict[str, Any]) -> str:
             f"Detail: {message}",
             f"Timestamp: {iso}",
         ]
-    return "\n".join(lines)
+    return lines
 
 
-def _body_offline(alert: Dict[str, Any]) -> str:
+def _body_offline(alert: Dict[str, Any]) -> List[str]:
     """Offline body — recovery-aware multi-line text.
 
     - Inputs: alert (dict alert record).
-    - Outputs: str newline-joined body.
+    - Outputs: list[str] body lines.
     """
     friendly = _friendly_of(alert)
     entity = _entity_of(alert)
@@ -358,12 +358,12 @@ def _body_offline(alert: Dict[str, Any]) -> str:
             f"Timestamp: {iso}",
             f"Last changed: {last_changed}",
         ]
-    return "\n".join(lines)
+    return lines
 
 
 # alert_type -> body builder. Mirrors :data:`_SUBJECT_BUILDERS` key-for-key so
 # both families stay consistent (single source of truth, data-driven).
-_BODY_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
+_BODY_BUILDERS: Dict[str, Callable[[Dict[str, Any]], List[str]]] = {
     "sustained_unlock": _body_sustained,
     "outside_hours": _body_outside_hours,
     "auto_lock_failed": _body_auto_lock_failed,
@@ -373,15 +373,16 @@ _BODY_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
 }
 
 
-def build_alert_body(alert: Dict[str, Any]) -> str:
-    """Build the plain-text email body for an alert record (no PINs).
+def build_alert_body_lines(alert: Dict[str, Any]) -> List[str]:
+    """Build the email body as a list of lines for an alert record (no PINs).
 
     - Description: Dispatches on ``alert_type`` to the matching recovery-aware
-      body builder (see :data:`_BODY_BUILDERS`). Unknown types fall back to a
+      body builder (see :data:`_BODY_BUILDERS`), returning the lines un-joined so
+      the HTML card can render each as its own row. Unknown types fall back to a
       generic house-style body so a new alert type can never produce an empty
       body.
     - Inputs: alert (dict alert record from the engine).
-    - Outputs: str newline-joined multi-line body.
+    - Outputs: list[str] body lines.
     """
     builder = _BODY_BUILDERS.get(str(alert.get("alert_type")))
     if builder is not None:
@@ -395,4 +396,17 @@ def build_alert_body(alert: Dict[str, Any]) -> str:
         f"State: {message}",
         f"Timestamp: {iso}",
     ]
-    return "\n".join(lines)
+    return lines
+
+
+def build_alert_body(alert: Dict[str, Any]) -> str:
+    """Build the plain-text email body for an alert record (no PINs).
+
+    - Description: Dispatches on ``alert_type`` to the matching recovery-aware
+      body builder (see :data:`_BODY_BUILDERS`). Unknown types fall back to a
+      generic house-style body so a new alert type can never produce an empty
+      body.
+    - Inputs: alert (dict alert record from the engine).
+    - Outputs: str newline-joined multi-line body.
+    """
+    return "\n".join(build_alert_body_lines(alert))
