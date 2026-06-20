@@ -8,7 +8,8 @@ one. This module owns that small settings blob, persisted under a dedicated key
 separate from the per-lock / per-zone / alert-log keys:
 
   - ``smart_lock_manager_global_settings`` —
-    ``{"outside_hours_sweep_minutes": int, "health_sweep_minutes": int}``
+    ``{"outside_hours_sweep_minutes": int, "health_sweep_minutes": int,
+    "nag_interval_minutes": int}``
 
 The blob is always returned fully shaped (defaults filled) so callers never
 have to special-case an absent file. SECURITY: no PIN material is involved —
@@ -33,11 +34,16 @@ GLOBAL_SETTINGS_STORAGE_KEY = "smart_lock_manager_global_settings"
 # Setting field names (single source of truth, re-used by the service schema).
 ATTR_OUTSIDE_HOURS_SWEEP_MINUTES = "outside_hours_sweep_minutes"
 ATTR_HEALTH_SWEEP_MINUTES = "health_sweep_minutes"
+# Nag throttle: minimum minutes between repeated (timer-origin) re-alerts of the
+# SAME ongoing episode. State-change Alerts/Recoveries are NOT throttled.
+ATTR_NAG_INTERVAL_MINUTES = "nag_interval_minutes"
 
 # Defaults: outside-hours sweep is FAST (catches doors at close); the health
 # sweep is SLOWER because jam / battery / offline change slowly.
 DEFAULT_OUTSIDE_HOURS_SWEEP_MINUTES = 15
 DEFAULT_HEALTH_SWEEP_MINUTES = 60
+# Default nag cadence: at most one repeat-nag per hour per ongoing episode.
+DEFAULT_NAG_INTERVAL_MINUTES = 60
 
 # Sane bounds for either cadence (minutes). 1..1440 (one minute .. one day).
 MIN_SWEEP_MINUTES = 1
@@ -66,9 +72,14 @@ def _shape(data: Any) -> Dict[str, int]:
     result = {
         ATTR_OUTSIDE_HOURS_SWEEP_MINUTES: DEFAULT_OUTSIDE_HOURS_SWEEP_MINUTES,
         ATTR_HEALTH_SWEEP_MINUTES: DEFAULT_HEALTH_SWEEP_MINUTES,
+        ATTR_NAG_INTERVAL_MINUTES: DEFAULT_NAG_INTERVAL_MINUTES,
     }
     if isinstance(data, dict):
-        for key in (ATTR_OUTSIDE_HOURS_SWEEP_MINUTES, ATTR_HEALTH_SWEEP_MINUTES):
+        for key in (
+            ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
+            ATTR_HEALTH_SWEEP_MINUTES,
+            ATTR_NAG_INTERVAL_MINUTES,
+        ):
             try:
                 value = int(data[key])
             except (KeyError, TypeError, ValueError):

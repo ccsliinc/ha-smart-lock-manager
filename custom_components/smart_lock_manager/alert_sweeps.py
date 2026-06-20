@@ -69,6 +69,7 @@ class AlertSweepsMixin:
         zone: Optional[Zone],
         severity: str,
         flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> None:  # pragma: no cover
         raise NotImplementedError
 
@@ -78,7 +79,12 @@ class AlertSweepsMixin:
         raise NotImplementedError
 
     def _check_jam(
-        self, entity_id: str, value: str, severity: str, flag: Dict[str, Any]
+        self,
+        entity_id: str,
+        value: str,
+        severity: str,
+        flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> bool:  # pragma: no cover
         raise NotImplementedError
 
@@ -88,7 +94,11 @@ class AlertSweepsMixin:
         raise NotImplementedError
 
     def _check_offline(
-        self, entity_id: str, value: str, flag: Dict[str, Any]
+        self,
+        entity_id: str,
+        value: str,
+        flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> bool:  # pragma: no cover
         raise NotImplementedError
 
@@ -98,7 +108,12 @@ class AlertSweepsMixin:
         raise NotImplementedError
 
     def _check_low_battery(
-        self, entity_id: str, percent: int, threshold: int, flag: Dict[str, Any]
+        self,
+        entity_id: str,
+        percent: int,
+        threshold: int,
+        flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> bool:  # pragma: no cover
         raise NotImplementedError
 
@@ -135,7 +150,7 @@ class AlertSweepsMixin:
                 state = self.hass.states.get(entity_id)
                 value = (state.state if state is not None else "unknown").lower()
                 self._check_outside_hours(
-                    entity_id, value, resolved_zone, severity, flag
+                    entity_id, value, resolved_zone, severity, flag, origin="timer"
                 )
 
     @callback
@@ -171,12 +186,16 @@ class AlertSweepsMixin:
                     ctx = self._jam_context(entity_id)
                     if ctx is not None:
                         severity, flag = ctx
-                        self._check_jam(entity_id, value, severity, flag)
+                        self._check_jam(
+                            entity_id, value, severity, flag, origin="timer"
+                        )
 
                 if alerts_cfg.offline.enabled or is_dev_mock():
                     offline_flag = self._offline_context(entity_id)
                     if offline_flag is not None:
-                        self._check_offline(entity_id, value, offline_flag)
+                        self._check_offline(
+                            entity_id, value, offline_flag, origin="timer"
+                        )
 
                 if alerts_cfg.low_battery.enabled or is_dev_mock():
                     self._sweep_low_battery(entity_id)
@@ -204,4 +223,4 @@ class AlertSweepsMixin:
         if ctx is None:
             return
         threshold, flag = ctx
-        self._check_low_battery(entity_id, percent, threshold, flag)
+        self._check_low_battery(entity_id, percent, threshold, flag, origin="timer")

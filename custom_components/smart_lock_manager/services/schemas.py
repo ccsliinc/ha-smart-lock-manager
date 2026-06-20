@@ -27,6 +27,7 @@ from ..const import (
     ATTR_SYNC_ON_LOCK_EVENTS,
     ATTR_USER_CODE,
 )
+from ..storage.global_settings import ATTR_NAG_INTERVAL_MINUTES
 
 # Service schemas
 CLEAR_CODE_SCHEMA = vol.Schema(
@@ -159,8 +160,15 @@ SET_SWEEP_INTERVALS_SCHEMA = vol.Schema(
             vol.Optional("health_sweep_minutes"): vol.All(
                 vol.Coerce(int), vol.Range(min=1, max=1440)
             ),
+            vol.Optional(ATTR_NAG_INTERVAL_MINUTES): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=1440)
+            ),
         },
-        cv.has_at_least_one_key("outside_hours_sweep_minutes", "health_sweep_minutes"),
+        cv.has_at_least_one_key(
+            "outside_hours_sweep_minutes",
+            "health_sweep_minutes",
+            ATTR_NAG_INTERVAL_MINUTES,
+        ),
     )
 )
 

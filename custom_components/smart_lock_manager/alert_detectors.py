@@ -20,6 +20,7 @@ human-readable messages only — never PIN codes.
 from __future__ import annotations
 
 import logging
+import time as _time
 from datetime import datetime, time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -130,6 +131,17 @@ class AlertDetectorsMixin:
         severity: str,
         message: str,
         is_recovery: bool = False,
+        origin: str = "state_change",
+    ) -> None:  # pragma: no cover - provided by AlertEngine
+        raise NotImplementedError
+
+    def _should_nag(
+        self, flag: Dict[str, Any], now: float
+    ) -> bool:  # pragma: no cover - provided by AlertEngine
+        raise NotImplementedError
+
+    def _seed_nag(
+        self, flag: Dict[str, Any], now: float
     ) -> None:  # pragma: no cover - provided by AlertEngine
         raise NotImplementedError
 
@@ -203,11 +215,15 @@ class AlertDetectorsMixin:
     def _flag(self, entity_id: str, kind: str) -> Dict[str, Any]:
         """Return the mutable alerted-state record for (entity, kind).
 
+        - Description: ``last_nag`` (float epoch | None) tracks the last
+          timer-nag/seed for the throttle. Old persisted blobs without the key
+          read back as ``.get('last_nag') -> None`` (fire immediately), so the
+          extended default is fully back-compatible.
         - Inputs: entity_id (str), kind (str alert-type id).
-        - Outputs: dict (created on first access) with at least ``alerted``.
+        - Outputs: dict (created on first access) with ``alerted`` + ``last_nag``.
         """
         key = f"{entity_id}|{kind}"
-        return self._alerted.setdefault(key, {"alerted": False})
+        return self._alerted.setdefault(key, {"alerted": False, "last_nag": None})
 
     # -- detectors ----------------------------------------------------------
 
@@ -258,6 +274,7 @@ class AlertDetectorsMixin:
                 is_recovery=True,
             )
             flag["alerted"] = False
+            flag["last_nag"] = None
             return
 
         self._check_outside_hours(entity_id, value, zone, severity, flag)
@@ -269,6 +286,7 @@ class AlertDetectorsMixin:
         zone: Optional[Zone],
         severity: str,
         flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> None:
         """Fire the outside-hours alert if a member is unlocked off-hours.
 
@@ -288,15 +306,31 @@ class AlertDetectorsMixin:
             return
         if self._in_business_hours(zone):
             return
+        now = _time.time()
         if flag.get("alerted"):
+            # Ongoing episode: only timer-origin sweeps may re-fire, throttled to
+            # one Nag per nag_interval. State-change re-evals never re-record.
+            if origin == "timer" and self._should_nag(flag, now):
+                self._record(
+                    entity_id,
+                    ALERT_OUTSIDE_HOURS,
+                    severity,
+                    "Still unlocked outside business hours",
+                    origin="timer",
+                )
+                flag["last_nag"] = now
             return
         self._record(
             entity_id,
             ALERT_OUTSIDE_HOURS,
             severity,
             "Unlocked outside business hours",
+            origin=origin,
         )
         flag["alerted"] = True
+        # Seed last_nag at the initial alert so the first Nag waits a full
+        # interval (prevents an Alert + immediate-Nag double-hit).
+        self._seed_nag(flag, now)
 
     def _in_business_hours(self, zone: Optional[Zone] = None) -> bool:
         """Return True if NOW is inside the zone's business window.
@@ -378,6 +412,7 @@ class AlertDetectorsMixin:
                 )
                 flag["alerted"] = False
                 flag["max_tier"] = 0
+                flag["last_nag"] = None
 
     def _sustained_tiers_for(self, entity_id: str) -> tuple:
         """Resolve the (seconds, severity) tier chain for a member.
@@ -421,11 +456,13 @@ class AlertDetectorsMixin:
             flag = self._flag(entity_id, ALERT_SUSTAINED)
             flag["alerted"] = True
             flag["max_tier"] = seconds
+            # Tiered sustained-unlock fires are timer-driven -> Nags (snoozable).
             self._record(
                 entity_id,
                 ALERT_SUSTAINED,
                 severity,
                 f"Unlocked >{seconds}s without re-lock",
+                origin="timer",
             )
             self._sustained_timers.pop(entity_id, None)
             self._schedule_tier(entity_id, tier_index + 1)

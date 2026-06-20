@@ -25,6 +25,7 @@ from ..storage import (
 )
 from ..storage.global_settings import (
     ATTR_HEALTH_SWEEP_MINUTES,
+    ATTR_NAG_INTERVAL_MINUTES,
     ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
 )
 
@@ -109,13 +110,18 @@ class SystemServices:
           alert engine's live-refresh listener tears down + re-subscribes with
           the new cadences WITHOUT a Home Assistant restart.
         - Inputs (service_call.data): ``outside_hours_sweep_minutes`` (int,
-          optional) and/or ``health_sweep_minutes`` (int, optional). At least
-          one must be supplied. Both are validated/clamped by the voluptuous
-          schema at the registration site.
+          optional), ``health_sweep_minutes`` (int, optional) and/or
+          ``nag_interval_minutes`` (int, optional — the per-episode timer-nag
+          throttle). At least one must be supplied. All are validated/clamped by
+          the voluptuous schema at the registration site.
         - Outputs: None.
         """
         updates: dict = {}
-        for key in (ATTR_OUTSIDE_HOURS_SWEEP_MINUTES, ATTR_HEALTH_SWEEP_MINUTES):
+        for key in (
+            ATTR_OUTSIDE_HOURS_SWEEP_MINUTES,
+            ATTR_HEALTH_SWEEP_MINUTES,
+            ATTR_NAG_INTERVAL_MINUTES,
+        ):
             if key in service_call.data:
                 updates[key] = int(service_call.data[key])
 

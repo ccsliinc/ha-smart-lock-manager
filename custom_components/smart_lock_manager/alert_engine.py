@@ -283,6 +283,7 @@ class AlertEngine(
         severity: str,
         message: str,
         is_recovery: bool = False,
+        origin: str = "state_change",
     ) -> None:
         """Append one structured alert record and persist the log.
 
@@ -290,7 +291,10 @@ class AlertEngine(
           rolling capped list, and schedules an async persist. Recording is the
           ONLY action — no notification is ever sent.
         - Inputs: entity_id (str), alert_type (str), severity (str WARN/CRIT),
-          message (str human-readable), is_recovery (bool).
+          message (str human-readable), is_recovery (bool), origin (str — one of
+          ``"state_change"`` for rising/falling-edge Alerts/Recoveries emitted by
+          the ``_eval_*`` detectors, or ``"timer"`` for periodic-sweep Nags;
+          ``state_change`` always dispatches, ``timer`` is snoozable + throttled).
         - Outputs: None.
         """
         zone_id, zone_name, door_name = self._zone_for(entity_id)
@@ -315,6 +319,7 @@ class AlertEngine(
             "severity": severity,
             "message": message,
             "is_recovery": is_recovery,
+            "origin": origin,
             "snoozed": False,
             # Filled asynchronously by the DRY-RUN dispatcher (see _notify). The
             # engine still records ZERO real sends; these are "would-notify"
@@ -338,6 +343,37 @@ class AlertEngine(
         # record in place before the final persist.
         self.hass.async_create_task(self._notify(entity_id, record))
 
+    # -- nag throttle (shared by the detector cores) ------------------------
+
+    def _should_nag(self, flag: Dict[str, Any], now: float) -> bool:
+        """Return True if an ongoing episode is due for a repeat timer-nag.
+
+        - Description: Throttles timer-origin re-alerts of an ALREADY-alerted
+          episode to at most one per ``nag_interval_minutes`` (global setting).
+          ``flag['last_nag']`` is the epoch of the last nag/seed; ``None`` means
+          never stamped (fire immediately). The caller stamps ``last_nag`` to
+          ``now`` whenever this returns True.
+        - Inputs: flag (the per-episode alerted-state dict), now (float epoch).
+        - Outputs: bool — True when the nag interval has elapsed.
+        """
+        nag_interval = get_cached_global_settings().get("nag_interval_minutes", 60) * 60
+        last = flag.get("last_nag")
+        return last is None or (now - last) >= nag_interval
+
+    @staticmethod
+    def _seed_nag(flag: Dict[str, Any], now: float) -> None:
+        """Stamp ``last_nag`` so the first/next nag waits a full interval.
+
+        - Description: Called by a core when it records a NEW (rising-edge or
+          sweep-discovered) alert — seeding ``last_nag`` to ``now`` prevents the
+          immediately-following sweep from firing a back-to-back Nag (the
+          Alert+immediate-Nag double-hit). The first repeat-Nag then lands one
+          full ``nag_interval`` after the initial alert.
+        - Inputs: flag (the per-episode alerted-state dict), now (float epoch).
+        - Outputs: None.
+        """
+        flag["last_nag"] = now
+
     async def _notify(self, entity_id: str, record: Dict[str, Any]) -> None:
         """Run the DRY-RUN dispatcher for a record, then persist.
 
@@ -354,13 +390,21 @@ class AlertEngine(
         snoozed = snooze_active(record.get("zone_id"))
         if snoozed:
             record["snoozed"] = True
+            if record.get("origin") == "timer":
+                _LOGGER.info(
+                    "AlertEngine: NAG suppressed (snoozed timer-origin): %s on %s",
+                    record.get("alert_type"),
+                    entity_id,
+                )
+                await self._persist()
+                return
+            # state_change Alert/Recovery: snooze NEVER suppresses a state edge.
+            record["snooze_bypassed"] = True
             _LOGGER.info(
-                "AlertEngine: alert SNOOZED (recorded, no notify): %s on %s",
+                "AlertEngine: snoozed but state_change edge -> dispatching: %s on %s",
                 record.get("alert_type"),
                 entity_id,
             )
-            await self._persist()
-            return
 
         zone = self._zone_settings_for(entity_id)
         if zone is not None:

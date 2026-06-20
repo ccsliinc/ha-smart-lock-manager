@@ -546,6 +546,20 @@ set_sweep_intervals:
           max: 1440
           unit_of_measurement: minutes
           mode: box
+    nag_interval_minutes:
+      name: Nag Interval
+      description: >-
+        Minimum minutes between repeated timer-origin re-alerts (nags) of the
+        same ongoing episode (1-1440). State-change Alerts and Recoveries are
+        never throttled.
+      required: false
+      example: 60
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: minutes
+          mode: box
 
 pause_alerts:
   name: Pause Alerts

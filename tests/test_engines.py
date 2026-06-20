@@ -1346,35 +1346,162 @@ class TestAlertSnooze:
         assert snooze_active("zone_b") is False
         assert snooze_active("zone_a") is True
 
-    async def test_engine_records_but_suppresses_when_snoozed(
+    async def test_snooze_does_not_suppress_state_change_edges(
         self, hass: HomeAssistant, notify_engine: AlertEngine
     ) -> None:
-        """Snoozed alerts are still recorded but carry no notify_intents."""
+        """State-change Alerts/Recoveries bypass snooze (always dispatch).
+
+        Under the origin model, ``dev_simulate`` records origin="state_change"
+        (a rising/falling edge). Those ALWAYS dispatch — snooze must NOT suppress
+        them — but the record is still flagged ``snoozed`` with
+        ``snooze_bypassed`` so the API/panel can show the bypass.
+        """
         # Resolve the test lock's zone id off a real recorded alert.
         record = await self._simulate(notify_engine, ALERT_LOW_BATTERY)
         zone_id = record["zone_id"]
         assert zone_id == self.ZONE_ID
-        # NO snooze -> notified.
+        # NO snooze -> notified, not snoozed.
         assert record["notify_intents"] != []
         assert record["snoozed"] is False
+        assert record["origin"] == "state_change"
 
-        # ZONE snooze -> recorded, suppressed.
+        # ZONE snooze -> state_change edge STILL dispatches (bypass), flagged.
         set_zone_snooze(zone_id, time.time() + 1000)
         record = await self._simulate(notify_engine, ALERT_OFFLINE)
-        assert record["notify_intents"] == []
+        assert record["notify_intents"] != []
         assert record["snoozed"] is True
+        assert record["snooze_bypassed"] is True
         assert any(a["alert_type"] == ALERT_OFFLINE for a in notify_engine.serialize())
 
-        # GLOBAL snooze (zone cleared) -> still suppressed.
+        # GLOBAL snooze (zone cleared) -> still dispatches (state_change).
         clear_zone_snooze(zone_id)
         set_global_snooze(time.time() + 1000)
         record = await self._simulate(notify_engine, ALERT_JAM)
-        assert record["notify_intents"] == []
+        assert record["notify_intents"] != []
         assert record["snoozed"] is True
+        assert record["snooze_bypassed"] is True
 
-        # RESUME -> notifies again.
+        # RESUME -> notifies again, no snooze flags.
         clear_global_snooze()
         clear_zone_snooze(zone_id)
         record = await self._simulate(notify_engine, ALERT_OUTSIDE_HOURS)
         assert record["notify_intents"] != []
         assert record["snoozed"] is False
+
+    async def test_snooze_suppresses_timer_origin_nag(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """Timer-origin Nags ARE suppressed by snooze (recorded, no dispatch)."""
+        zone_id = self.ZONE_ID
+        set_zone_snooze(zone_id, time.time() + 1000)
+        creds = {
+            "user": "u",
+            "pass": "p",
+            "from": "from@x",
+            "to": "to@x",
+            "kind_to": {"alert": []},
+        }
+        with patch.object(
+            notify_engine._dispatcher.email, "_creds", AsyncMock(return_value=creds)
+        ):
+            # Record a timer-origin Nag directly; snooze must suppress dispatch.
+            notify_engine._record(
+                LOCK_ENTITY,
+                ALERT_OFFLINE,
+                "WARN",
+                "Still offline (unavailable)",
+                origin="timer",
+            )
+            await notify_engine.hass.async_block_till_done()
+        record = next(
+            a
+            for a in reversed(notify_engine.serialize())
+            if a["alert_type"] == ALERT_OFFLINE
+        )
+        assert record["origin"] == "timer"
+        assert record["snoozed"] is True
+        assert "snooze_bypassed" not in record
+        assert record["notify_intents"] == []
+
+    def test_nag_throttle_and_seed(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """Rising-edge Alert seeds last_nag; timer re-fires only after interval.
+
+        Drives the shared ``_check_outside_hours`` core directly. The rising-edge
+        (state_change) Alert seeds ``last_nag`` so an immediately-following timer
+        sweep does NOT double-hit; only after a full nag_interval does a timer
+        sweep re-fire a single Nag.
+        """
+        flag = alert_engine._flag(LOCK_ENTITY, ALERT_OUTSIDE_HOURS)
+
+        def _count() -> int:
+            return sum(
+                1
+                for a in alert_engine.serialize()
+                if a["alert_type"] == ALERT_OUTSIDE_HOURS
+            )
+
+        # nag_interval = 1 minute (60s) for the test.
+        with (
+            patch(
+                "custom_components.smart_lock_manager.alert_engine."
+                "get_cached_global_settings",
+                return_value={"nag_interval_minutes": 1},
+            ),
+            patch.object(alert_engine, "_in_business_hours", return_value=False),
+        ):
+            # Rising-edge Alert (state_change): records once, seeds last_nag.
+            alert_engine._check_outside_hours(
+                LOCK_ENTITY, "unlocked", None, "CRIT", flag
+            )
+            assert _count() == 1
+            assert flag["alerted"] is True
+            seeded = flag["last_nag"]
+            assert seeded is not None
+
+            # Immediate timer sweep: throttled (seed < interval) -> NO new record.
+            alert_engine._check_outside_hours(
+                LOCK_ENTITY, "unlocked", None, "CRIT", flag, origin="timer"
+            )
+            assert _count() == 1
+
+            # Pretend a full interval has elapsed -> exactly ONE re-Nag fires.
+            flag["last_nag"] = seeded - 61
+            alert_engine._check_outside_hours(
+                LOCK_ENTITY, "unlocked", None, "CRIT", flag, origin="timer"
+            )
+            assert _count() == 2
+            nags = [
+                a
+                for a in alert_engine.serialize()
+                if a["alert_type"] == ALERT_OUTSIDE_HOURS and a["origin"] == "timer"
+            ]
+            assert len(nags) == 1
+
+            # A second immediate timer sweep is throttled again.
+            alert_engine._check_outside_hours(
+                LOCK_ENTITY, "unlocked", None, "CRIT", flag, origin="timer"
+            )
+            assert _count() == 2
+
+    def test_recovery_clears_last_nag(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """Falling-edge Recovery resets alerted AND last_nag for a clean episode."""
+        flag = alert_engine._flag(LOCK_ENTITY, ALERT_OUTSIDE_HOURS)
+        with patch.object(alert_engine, "_in_business_hours", return_value=False):
+            alert_engine._eval_outside_hours(LOCK_ENTITY, "unlocked")
+        assert flag["alerted"] is True
+        assert flag["last_nag"] is not None
+        # Recovery on re-lock.
+        alert_engine._eval_outside_hours(LOCK_ENTITY, "locked")
+        assert flag["alerted"] is False
+        assert flag["last_nag"] is None
+        recovery = next(
+            a
+            for a in alert_engine.serialize()
+            if a["alert_type"] == ALERT_OUTSIDE_HOURS and a["is_recovery"]
+        )
+        assert recovery["is_recovery"] is True
+        assert recovery["origin"] == "state_change"

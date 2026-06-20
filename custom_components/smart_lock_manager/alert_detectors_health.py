@@ -28,6 +28,7 @@ human-readable messages only — never PIN codes.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -74,6 +75,17 @@ class AlertHealthDetectorsMixin:
         severity: str,
         message: str,
         is_recovery: bool = False,
+        origin: str = "state_change",
+    ) -> None:  # pragma: no cover - provided by AlertEngine
+        raise NotImplementedError
+
+    def _should_nag(
+        self, flag: Dict[str, Any], now: float
+    ) -> bool:  # pragma: no cover - provided by AlertEngine
+        raise NotImplementedError
+
+    def _seed_nag(
+        self, flag: Dict[str, Any], now: float
     ) -> None:  # pragma: no cover - provided by AlertEngine
         raise NotImplementedError
 
@@ -143,9 +155,15 @@ class AlertHealthDetectorsMixin:
                 is_recovery=True,
             )
             flag["alerted"] = False
+            flag["last_nag"] = None
 
     def _check_jam(
-        self, entity_id: str, value: str, severity: str, flag: Dict[str, Any]
+        self,
+        entity_id: str,
+        value: str,
+        severity: str,
+        flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> bool:
         """Fire the jam alert if the member is currently jammed (shared core).
 
@@ -159,11 +177,21 @@ class AlertHealthDetectorsMixin:
         - Outputs: bool — True if it recorded a NEW jam alert this call.
         """
         jammed = value == "jammed" or self._jam_sensor_on(entity_id)
-        if jammed and not flag.get("alerted"):
-            self._record(entity_id, ALERT_JAM, severity, "Lock jammed")
-            flag["alerted"] = True
-            return True
-        return False
+        if not jammed:
+            return False
+        now = time.time()
+        if flag.get("alerted"):
+            # Ongoing jam: only timer-origin sweeps re-fire, throttled.
+            if origin == "timer" and self._should_nag(flag, now):
+                self._record(
+                    entity_id, ALERT_JAM, severity, "Still jammed", origin="timer"
+                )
+                flag["last_nag"] = now
+            return False
+        self._record(entity_id, ALERT_JAM, severity, "Lock jammed", origin=origin)
+        flag["alerted"] = True
+        self._seed_nag(flag, now)
+        return True
 
     def _jam_sensor_on(self, entity_id: str) -> bool:
         """Return True if the companion jam binary_sensor reads ``on``.
@@ -225,9 +253,15 @@ class AlertHealthDetectorsMixin:
                 is_recovery=True,
             )
             flag["alerted"] = False
+            flag["last_nag"] = None
 
     def _check_low_battery(
-        self, entity_id: str, percent: int, threshold: int, flag: Dict[str, Any]
+        self,
+        entity_id: str,
+        percent: int,
+        threshold: int,
+        flag: Dict[str, Any],
+        origin: str = "state_change",
     ) -> bool:
         """Fire the low-battery alert if below threshold (shared core).
 
@@ -239,16 +273,31 @@ class AlertHealthDetectorsMixin:
           (int), flag (the mutable per-(entity, low_battery) alerted dict).
         - Outputs: bool — True if it recorded a NEW low-battery alert this call.
         """
-        if percent < threshold and not flag.get("alerted"):
-            self._record(
-                entity_id,
-                ALERT_LOW_BATTERY,
-                SEV_WARN,
-                f"Battery low ({percent}%)",
-            )
-            flag["alerted"] = True
-            return True
-        return False
+        if percent >= threshold:
+            return False
+        now = time.time()
+        if flag.get("alerted"):
+            # Ongoing low battery: only timer-origin sweeps re-fire, throttled.
+            if origin == "timer" and self._should_nag(flag, now):
+                self._record(
+                    entity_id,
+                    ALERT_LOW_BATTERY,
+                    SEV_WARN,
+                    f"Battery still low ({percent}%)",
+                    origin="timer",
+                )
+                flag["last_nag"] = now
+            return False
+        self._record(
+            entity_id,
+            ALERT_LOW_BATTERY,
+            SEV_WARN,
+            f"Battery low ({percent}%)",
+            origin=origin,
+        )
+        flag["alerted"] = True
+        self._seed_nag(flag, now)
+        return True
 
     # -- offline ------------------------------------------------------------
 
@@ -313,8 +362,15 @@ class AlertHealthDetectorsMixin:
                 is_recovery=True,
             )
             flag["alerted"] = False
+            flag["last_nag"] = None
 
-    def _check_offline(self, entity_id: str, value: str, flag: Dict[str, Any]) -> bool:
+    def _check_offline(
+        self,
+        entity_id: str,
+        value: str,
+        flag: Dict[str, Any],
+        origin: str = "state_change",
+    ) -> bool:
         """Fire the offline alert if the member is offline (shared core).
 
         - Description: SHARED check called by the debounce-timer ``_fire`` path
@@ -330,10 +386,28 @@ class AlertHealthDetectorsMixin:
           mutable per-(entity, offline) alerted dict).
         - Outputs: bool — True if it recorded a NEW offline alert this call.
         """
-        if value in _OFFLINE_STATES and not flag.get("alerted"):
-            self._record(
-                entity_id, ALERT_OFFLINE, SEV_WARN, "Lock offline (unavailable)"
-            )
-            flag["alerted"] = True
-            return True
-        return False
+        if value not in _OFFLINE_STATES:
+            return False
+        now = time.time()
+        if flag.get("alerted"):
+            # Ongoing offline: only timer-origin sweeps re-fire, throttled.
+            if origin == "timer" and self._should_nag(flag, now):
+                self._record(
+                    entity_id,
+                    ALERT_OFFLINE,
+                    SEV_WARN,
+                    "Still offline (unavailable)",
+                    origin="timer",
+                )
+                flag["last_nag"] = now
+            return False
+        self._record(
+            entity_id,
+            ALERT_OFFLINE,
+            SEV_WARN,
+            "Lock offline (unavailable)",
+            origin=origin,
+        )
+        flag["alerted"] = True
+        self._seed_nag(flag, now)
+        return True
