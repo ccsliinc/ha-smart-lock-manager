@@ -143,7 +143,11 @@ class RenderedEmail:
     Attributes:
         severity: WARN / CRIT / HEALTHY-RECOVERY etc.
         kind: subject-prefix segment (always ``alert`` for SLM alerts).
-        subject: the wrapped ``[fleet/internal/...]`` subject line.
+        subject: the wrapped ``[fleet/internal/...]`` subject line (the email
+            Subject header).
+        clean_subject: the human subject BEFORE fleet-wrapping and BEFORE any
+            marker — fed to the HTML card so its heading carries exactly one
+            marker (the card prepends it) and no ``[fleet/internal/...]`` prefix.
         body: plain-text body.
         recipients: final envelope recipient list (the non-empty zone override
             verbatim, else base ``smtp2go_to`` + the kind-specific extras).
@@ -158,6 +162,7 @@ class RenderedEmail:
     subject: str
     body: str
     recipients: List[str]
+    clean_subject: str = ""
     body_lines: List[str] = field(default_factory=list)
     host_tag: Optional[str] = None
 
@@ -269,6 +274,7 @@ class EmailNotifier:
             subject=_format_subject(sev, subject, kind),
             body=body,
             recipients=recipients,
+            clean_subject=subject,
             body_lines=lines,
             host_tag=host_tag,
         )
@@ -297,9 +303,13 @@ class EmailNotifier:
         msg["X-HA-Kind"] = email.kind
         # actor=None: the alert record carries no triggered-by info today; the
         # renderer omits the line cleanly when actor is falsy.
+        # Pass the CLEAN human subject (pre-fleet-wrap, pre-marker) so the card
+        # heading reads "<marker> <subject>" — the renderer prepends the single
+        # marker. email.subject (the wrapped header) would double-stamp the
+        # marker and leak the [fleet/internal/...] prefix into the heading.
         html = render_alert_html(
             severity=email.severity,
-            subject=email.subject,
+            subject=email.clean_subject,
             body_lines=email.body_lines,
             host_tag=email.host_tag,
             actor=None,

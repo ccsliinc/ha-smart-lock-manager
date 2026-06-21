@@ -76,6 +76,7 @@ def test_build_mime_multipart(hass) -> None:
         subject="[fleet/internal/alert] 🟡 test",
         body="line one\nline two",
         recipients=["a@x"],
+        clean_subject="test",
         body_lines=["line one", "line two"],
         host_tag="ha-office",
     )
@@ -97,6 +98,56 @@ def test_build_mime_multipart(hass) -> None:
     assert "line two" in html
     assert "ha-office" in html
     assert "&middot;" in html
+
+
+async def test_card_heading_single_marker_no_fleet_prefix(hass) -> None:
+    """End-to-end render(): HTML card heading uses the clean subject.
+
+    The heading carries exactly one marker and no fleet prefix, while the email
+    Subject header stays fully wrapped.
+    """
+    clean_subject = "office HA - lock.rear battery low (87%)"
+    notifier = EmailNotifier(hass)
+
+    async def _fake_creds():
+        return {"from": "from@x", "to": "a@x", "kind_to": {"alert": []}}
+
+    async def _fake_host_tag():
+        return "ha-office"
+
+    notifier._creds = _fake_creds  # type: ignore[method-assign]
+    notifier._host_tag = _fake_host_tag  # type: ignore[method-assign]
+
+    rendered = await notifier.render(
+        severity="WARN",
+        subject=clean_subject,
+        body="line one",
+        recipients_override=[],
+        kind="alert",
+        body_lines=["line one"],
+    )
+    assert rendered is not None
+
+    # Subject HEADER stays fully wrapped (prefix + single marker + clean subject).
+    assert rendered.subject == f"[fleet/internal/alert] 🟡 {clean_subject}"
+    assert rendered.clean_subject == clean_subject
+
+    msg = notifier._build_mime({"from": "from@x"}, rendered)
+    assert msg["Subject"] == f"[fleet/internal/alert] 🟡 {clean_subject}"
+
+    parts = msg.get_payload()
+    html = parts[1].get_payload(decode=True).decode("utf-8")
+
+    # Card heading == "<marker> <clean subject>": exactly ONE marker glyph and
+    # NO fleet prefix leaking into the heading.
+    heading = f"🟡 {clean_subject}"
+    assert heading in html
+    assert html.count("🟡") == 1
+    assert "[fleet/internal" not in html
+
+    # text/plain part stays the verbatim body.
+    assert parts[0].get_content_type() == "text/plain"
+    assert parts[0].get_payload(decode=True).decode("utf-8") == rendered.body
 
 
 def test_build_alert_body_parity() -> None:
