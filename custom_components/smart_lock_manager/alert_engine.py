@@ -147,10 +147,11 @@ class AlertEngine(
             return
         # Prime the global-settings cache so _subscribe can read the sweep
         # cadences synchronously inside its callback.
-        from .storage import load_global_settings, load_snooze
+        from .storage import load_global_settings, load_muted, load_snooze
 
         await load_global_settings(self.hass)
         await load_snooze(self.hass)
+        await load_muted(self.hass)
         blob = await load_alert_log(self.hass)
         self.alerts = list(blob.get("alerts", []))[-MAX_ALERTS:]
         self._alerted = dict(blob.get("alerted_state", {}))
@@ -323,6 +324,7 @@ class AlertEngine(
             "is_recovery": is_recovery,
             "origin": origin,
             "snoozed": False,
+            "muted": False,
             # Filled asynchronously by the DRY-RUN dispatcher (see _notify). The
             # engine still records ZERO real sends; these are "would-notify"
             # intents surfaced to the API/panel for parity checking.
@@ -388,6 +390,22 @@ class AlertEngine(
         - Inputs: entity_id (str member lock id), record (dict alert record).
         - Outputs: None.
         """
+        from .storage import is_muted
+
+        # A per-(member, alert_type) MUTE is sticky (manual until cleared) and
+        # fully silent for INITIAL + NAG + RECOVERY alike — checked BEFORE the
+        # snooze gate, which only suppresses timer-origin nags.
+        if is_muted(record["member_entity_id"], record["alert_type"]):
+            record["muted"] = True
+            # notify_intents already []; do NOT dispatch. Still persist for parity.
+            _LOGGER.info(
+                "AlertEngine: alert MUTED for %s/%s -> suppressed",
+                record["member_entity_id"],
+                record["alert_type"],
+            )
+            await self._persist()
+            return
+
         from .storage import snooze_active
 
         snoozed = snooze_active(record.get("zone_id"))

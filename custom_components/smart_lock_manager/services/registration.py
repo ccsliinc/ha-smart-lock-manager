@@ -11,7 +11,6 @@ import logging
 import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from ..const import (
@@ -28,6 +27,7 @@ from ..const import (
     SERVICE_ENABLE_SLOT,
     SERVICE_GENERATE_PACKAGE,
     SERVICE_GET_USAGE_STATS,
+    SERVICE_MUTE_LOCK_ALERT,
     SERVICE_PAUSE_ALERTS,
     SERVICE_READ_ZWAVE_CODES,
     SERVICE_REFRESH_CODES,
@@ -39,15 +39,11 @@ from ..const import (
     SERVICE_SET_CODE,
     SERVICE_SET_CODE_ADVANCED,
     SERVICE_SET_SWEEP_INTERVALS,
+    SERVICE_UNMUTE_LOCK_ALERT,
     SERVICE_UPDATE_GLOBAL_SETTINGS,
     SERVICE_UPDATE_LOCK_SETTINGS,
     SERVICE_UPDATE_ZONE,
     SERVICE_UPDATE_ZONE_SETTINGS,
-)
-from ..dev_mock import (
-    dev_inject_sync_error,
-    fire_mock_notification,
-    is_dev_mock,
 )
 
 # ``map_access_control_event`` + ``_resolve_lock_for_node`` are re-imported so
@@ -70,6 +66,7 @@ from .schemas import (
     ENABLE_DISABLE_SLOT_SCHEMA,
     GENERATE_PACKAGE_SCHEMA,
     GET_USAGE_STATS_SCHEMA,
+    MUTE_LOCK_ALERT_SCHEMA,
     PAUSE_ALERTS_SCHEMA,
     READ_ZWAVE_CODES_SCHEMA,
     REFRESH_CODES_SCHEMA,
@@ -79,6 +76,7 @@ from .schemas import (
     SET_CODE_ADVANCED_SCHEMA,
     SET_CODE_SCHEMA,
     SET_SWEEP_INTERVALS_SCHEMA,
+    UNMUTE_LOCK_ALERT_SCHEMA,
     UPDATE_GLOBAL_SETTINGS_SCHEMA,
     UPDATE_LOCK_SETTINGS_SCHEMA,
     UPDATE_ZONE_SCHEMA,
@@ -211,6 +209,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def resume_alerts_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.resume_alerts(hass, service_call)
+
+    async def mute_lock_alert_wrapper(service_call: ServiceCall) -> None:
+        return await SystemServices.mute_lock_alert(hass, service_call)
+
+    async def unmute_lock_alert_wrapper(service_call: ServiceCall) -> None:
+        return await SystemServices.unmute_lock_alert(hass, service_call)
 
     # Register advanced services using modular classes
     _LOGGER.debug("Registering advanced services...")
@@ -365,6 +369,20 @@ async def async_register_services(hass: HomeAssistant) -> None:
         resume_alerts_wrapper,
         schema=RESUME_ALERTS_SCHEMA,
     )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MUTE_LOCK_ALERT,
+        mute_lock_alert_wrapper,
+        schema=MUTE_LOCK_ALERT_SCHEMA,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UNMUTE_LOCK_ALERT,
+        unmute_lock_alert_wrapper,
+        schema=UNMUTE_LOCK_ALERT_SCHEMA,
+    )
     _LOGGER.debug("Registered system services")
 
     # --- Access-log notification listener ----------------------------------
@@ -385,66 +403,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info("Access log: registered zwave_js_notification listener")
 
     # --- Dev-gated services ------------------------------------------------
-    # DEV-ONLY: register a service to fire a mock zwave_js_notification so the
-    # access-log handler can be driven end-to-end without real Z-Wave hardware.
-    # Registered only under SLM_DEV_MOCK and only once per HA process.
-    if is_dev_mock() and not hass.services.has_service(DOMAIN, "dev_fire_notification"):
+    # SLM_DEV_MOCK-only services live in their own module to keep this file
+    # under the 500-line standard; the gating/idempotency is unchanged.
+    from .dev_services_registration import register_dev_services
 
-        async def dev_fire_notification_wrapper(service_call: ServiceCall) -> None:
-            fire_mock_notification(
-                hass,
-                node_id=service_call.data["node_id"],
-                event_code=service_call.data["event"],
-                user_id=service_call.data.get("user_id"),
-            )
-
-        hass.services.async_register(
-            DOMAIN,
-            "dev_fire_notification",
-            dev_fire_notification_wrapper,
-            schema=vol.Schema(
-                {
-                    vol.Required("node_id"): vol.Coerce(int),
-                    vol.Required("event"): vol.Coerce(int),
-                    vol.Optional("user_id"): vol.Coerce(int),
-                }
-            ),
-        )
-        _LOGGER.info("DEV: registered smart_lock_manager.dev_fire_notification service")
-
-    # DEV-ONLY: force a member lock slot into a hard sync-error state so the
-    # LIVE zone sync-status roll-up (api/zones._derive_slot_sync) reports the
-    # slot as "error" and the panel raises its warning banner — the only way to
-    # exercise that path without real Z-Wave failures. Registered only under
-    # SLM_DEV_MOCK and only once per HA process.
-    if is_dev_mock() and not hass.services.has_service(DOMAIN, "dev_inject_sync_error"):
-
-        async def dev_inject_sync_error_wrapper(service_call: ServiceCall) -> None:
-            found = dev_inject_sync_error(
-                hass,
-                entity_id=service_call.data["entity_id"],
-                code_slot=service_call.data["code_slot"],
-                message=service_call.data.get("message"),
-            )
-            if not found:
-                raise HomeAssistantError(
-                    f"No member lock {service_call.data['entity_id']} with slot "
-                    f"{service_call.data['code_slot']} to fault"
-                )
-
-        hass.services.async_register(
-            DOMAIN,
-            "dev_inject_sync_error",
-            dev_inject_sync_error_wrapper,
-            schema=vol.Schema(
-                {
-                    vol.Required("entity_id"): cv.entity_id,
-                    vol.Required("code_slot"): vol.Coerce(int),
-                    vol.Optional("message"): cv.string,
-                }
-            ),
-        )
-        _LOGGER.info("DEV: registered smart_lock_manager.dev_inject_sync_error service")
+    register_dev_services(hass)
 
 
 async def async_unregister_services(hass: HomeAssistant) -> None:
@@ -497,3 +460,5 @@ async def async_unregister_services(hass: HomeAssistant) -> None:
         hass.services.async_remove(DOMAIN, SERVICE_SET_SWEEP_INTERVALS)
         hass.services.async_remove(DOMAIN, SERVICE_PAUSE_ALERTS)
         hass.services.async_remove(DOMAIN, SERVICE_RESUME_ALERTS)
+        hass.services.async_remove(DOMAIN, SERVICE_MUTE_LOCK_ALERT)
+        hass.services.async_remove(DOMAIN, SERVICE_UNMUTE_LOCK_ALERT)

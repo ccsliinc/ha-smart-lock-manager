@@ -181,3 +181,19 @@ PAUSE_ALERTS_SCHEMA = vol.Schema(
     }
 )
 RESUME_ALERTS_SCHEMA = vol.Schema({vol.Optional("zone_id"): cv.string})
+
+# Mute/unmute a per-member alert. ``entity_id`` is the RAW member entity id
+# string (the mute store keys on it directly, NOT a validated cv.entity_id).
+# ``alert_type`` defaults to ``"all"`` (every type for that member).
+MUTE_LOCK_ALERT_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.string,
+        vol.Optional("alert_type", default="all"): cv.string,
+    }
+)
+UNMUTE_LOCK_ALERT_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.string,
+        vol.Optional("alert_type", default="all"): cv.string,
+    }
+)

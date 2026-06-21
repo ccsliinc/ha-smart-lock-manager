@@ -53,6 +53,7 @@ from custom_components.smart_lock_manager.storage import (
 from custom_components.smart_lock_manager.zone_runtime import ZONE_REGISTRY_KEY
 
 LOCK_ENTITY = "lock.front_test"
+SECOND_LOCK_ENTITY = "lock.back_test"
 BATTERY_ENTITY = "sensor.front_test_battery"
 
 
@@ -1505,3 +1506,325 @@ class TestAlertSnooze:
         )
         assert recovery["is_recovery"] is True
         assert recovery["origin"] == "state_change"
+
+
+class TestHealthNagPolicy:
+    """CHANGE 1: HEALTH conditions alert ONCE then stay silent until recovery.
+
+    DOOR conditions (outside_hours) keep their hourly timer re-nag. These tests
+    drive the cores via the public ``_eval_*`` / sweep entrypoints and assert on
+    the recorded stream — no re-nag for health, recovery still fires.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so detectors don't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    def test_health_alert_fires_once_then_silent_on_sweep(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """low_battery alerts ONCE; repeated sweeps never re-nag; recovery fires."""
+        # Rising-edge alert via the state path -> exactly one record.
+        alert_engine._eval_low_battery(LOCK_ENTITY, "10")
+        assert len(alert_engine.serialize()) == 1
+
+        # Force the nag clock way back and sweep repeatedly: HEALTH must NOT
+        # re-nag even though the nag interval has clearly elapsed.
+        flag = alert_engine._flag(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        hass.states.async_set(LOCK_ENTITY, "locked")
+        hass.states.async_set(BATTERY_ENTITY, "5")
+        for _ in range(3):
+            flag["last_nag"] = 0
+            alert_engine._run_health_sweep(datetime.now())
+        assert len(alert_engine.serialize()) == 1
+
+        # Recovery via the state path still fires (above threshold + hysteresis).
+        alert_engine._eval_low_battery(LOCK_ENTITY, "30")
+        recovered = alert_engine.serialize()
+        assert len(recovered) == 2
+        assert recovered[0]["is_recovery"] is True
+
+    def test_door_alert_still_renags_after_interval(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """outside_hours (DOOR) keeps re-nagging on the timer after the interval."""
+        hass.states.async_set(LOCK_ENTITY, "unlocked")
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine."
+            "get_cached_global_settings",
+            return_value={"nag_interval_minutes": 1},
+        ):
+            with patch.object(AlertEngine, "_in_business_hours", return_value=False):
+                # Initial alert via the state path.
+                alert_engine._eval_outside_hours(LOCK_ENTITY, "unlocked")
+                assert len(alert_engine.serialize()) == 1
+
+                # Elapse the nag clock, then a timer-origin sweep re-nags.
+                flag = alert_engine._flag(LOCK_ENTITY, ALERT_OUTSIDE_HOURS)
+                flag["last_nag"] = 0
+                alert_engine._run_outside_hours_sweep(datetime.now())
+        assert len(alert_engine.serialize()) == 2
+
+
+class TestMutedStore:
+    """CHANGE 2: per-(member, alert_type) mute store semantics (sync)."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_muted_cache(self):
+        """Reset the module-level muted cache around each test."""
+        from custom_components.smart_lock_manager.storage import muted as muted_mod
+
+        muted_mod._CACHE.clear()
+        yield
+        muted_mod._CACHE.clear()
+
+    def test_is_muted_exact_pair_and_all(self) -> None:
+        """is_muted matches the exact (member, type) pair OR the 'all' sentinel."""
+        from custom_components.smart_lock_manager.storage import (
+            clear_mute,
+            is_muted,
+            set_mute,
+        )
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        assert is_muted(LOCK_ENTITY, ALERT_LOW_BATTERY) is True
+        assert is_muted(LOCK_ENTITY, ALERT_JAM) is False
+        assert is_muted("lock.other", ALERT_LOW_BATTERY) is False
+
+        clear_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        assert is_muted(LOCK_ENTITY, ALERT_LOW_BATTERY) is False
+
+        set_mute(LOCK_ENTITY, "all")
+        assert is_muted(LOCK_ENTITY, ALERT_JAM) is True
+        assert is_muted(LOCK_ENTITY, ALERT_OFFLINE) is True
+
+    def test_clear_mute_all_drops_everything(self) -> None:
+        """clear_mute('all') removes every mute for the member."""
+        from custom_components.smart_lock_manager.storage import (
+            clear_mute,
+            is_muted,
+            set_mute,
+        )
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        set_mute(LOCK_ENTITY, ALERT_JAM)
+        clear_mute(LOCK_ENTITY, "all")
+        assert is_muted(LOCK_ENTITY, ALERT_LOW_BATTERY) is False
+        assert is_muted(LOCK_ENTITY, ALERT_JAM) is False
+
+    def test_clear_one_type_drops_member_when_empty(self) -> None:
+        """Clearing the last type for a member drops the member entirely."""
+        from custom_components.smart_lock_manager.storage import (
+            clear_mute,
+            muted_state_for_api,
+            set_mute,
+        )
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        clear_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        assert LOCK_ENTITY not in muted_state_for_api()["muted"]
+
+    def test_muted_state_for_api_shape(self) -> None:
+        """muted_state_for_api returns sorted JSON-safe lists keyed by member."""
+        from custom_components.smart_lock_manager.storage import (
+            muted_state_for_api,
+            set_mute,
+        )
+
+        set_mute(LOCK_ENTITY, ALERT_OFFLINE)
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        state = muted_state_for_api()
+        assert state == {
+            "muted": {LOCK_ENTITY: sorted([ALERT_OFFLINE, ALERT_LOW_BATTERY])}
+        }
+
+
+class TestMuteSuppression:
+    """CHANGE 2: a muted (member, type) is fully silent in the notify path."""
+
+    @pytest.fixture(autouse=True)
+    def _no_persist(self) -> None:
+        """Stub alert-log persistence so recording doesn't hit storage."""
+        with patch(
+            "custom_components.smart_lock_manager.alert_engine.save_alert_log",
+            AsyncMock(),
+        ):
+            yield
+
+    @pytest.fixture(autouse=True)
+    def _clear_muted_cache(self):
+        """Reset the module-level muted cache around each test."""
+        from custom_components.smart_lock_manager.storage import muted as muted_mod
+
+        muted_mod._CACHE.clear()
+        yield
+        muted_mod._CACHE.clear()
+
+    @pytest.fixture
+    def notify_engine(self, hass: HomeAssistant) -> AlertEngine:
+        """Build an engine over a zone with BOTH notify channels enabled."""
+        zone = _build_zone()
+        zone.settings.notify.email.enabled = True
+        zone.settings.notify.mobile.enabled = True
+        _register_zone(hass, zone)
+        return AlertEngine(hass)
+
+    @pytest.fixture
+    def two_member_notify_engine(self, hass: HomeAssistant) -> AlertEngine:
+        """Build an engine over a TWO-member zone, both notify channels on.
+
+        Member A is ``LOCK_ENTITY``; member B is ``SECOND_LOCK_ENTITY``. Both
+        resolve to the same notify-enabled zone (``has_member`` matches either),
+        which lets a per-(member, type) mute on A be proven NOT to silence B.
+        """
+        zone = _build_zone()
+        zone.member_lock_entity_ids = [LOCK_ENTITY, SECOND_LOCK_ENTITY]
+        zone.settings.notify.email.enabled = True
+        zone.settings.notify.mobile.enabled = True
+        _register_zone(hass, zone)
+        return AlertEngine(hass)
+
+    async def test_mute_does_not_affect_different_member(
+        self, hass: HomeAssistant, two_member_notify_engine: AlertEngine
+    ) -> None:
+        """Muting member A's low_battery leaves member B's low_battery LIVE.
+
+        Spec requirement: a per-(member, type) mute is scoped to that ONE
+        member. With two member locks in the same zone, muting A's low_battery
+        must NOT silence the SAME alert_type on a DIFFERENT member B.
+        """
+        from custom_components.smart_lock_manager.storage import set_mute
+
+        engine = two_member_notify_engine
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        creds = {
+            "user": "u",
+            "pass": "p",
+            "from": "from@x",
+            "to": "to@x",
+            "kind_to": {"alert": []},
+        }
+        with patch.object(
+            engine._dispatcher.email, "_creds", AsyncMock(return_value=creds)
+        ):
+            engine._eval_low_battery(LOCK_ENTITY, "10")
+            engine._eval_low_battery(SECOND_LOCK_ENTITY, "10")
+            await engine.hass.async_block_till_done()
+
+        records = engine.serialize()
+        member_a = next(
+            r
+            for r in records
+            if r["member_entity_id"] == LOCK_ENTITY
+            and r["alert_type"] == ALERT_LOW_BATTERY
+        )
+        member_b = next(
+            r
+            for r in records
+            if r["member_entity_id"] == SECOND_LOCK_ENTITY
+            and r["alert_type"] == ALERT_LOW_BATTERY
+        )
+        # A (muted): suppressed and silent.
+        assert member_a["muted"] is True
+        assert member_a["notify_intents"] == []
+        # B (different member, same type): STILL dispatches.
+        assert member_b["muted"] is False
+        assert member_b["notify_intents"] != []
+
+    async def _record_low_battery(self, engine: AlertEngine) -> dict:
+        """Fire a low_battery alert and return its (post-dispatch) record."""
+        creds = {
+            "user": "u",
+            "pass": "p",
+            "from": "from@x",
+            "to": "to@x",
+            "kind_to": {"alert": []},
+        }
+        with patch.object(
+            engine._dispatcher.email, "_creds", AsyncMock(return_value=creds)
+        ):
+            engine._eval_low_battery(LOCK_ENTITY, "10")
+            await engine.hass.async_block_till_done()
+        return next(
+            a for a in engine.serialize() if a["alert_type"] == ALERT_LOW_BATTERY
+        )
+
+    async def test_mute_suppresses_initial_nag_recovery(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """A muted (member, type) records muted=True and dispatches nothing."""
+        from custom_components.smart_lock_manager.storage import set_mute
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        record = await self._record_low_battery(notify_engine)
+        assert record["muted"] is True
+        assert record["notify_intents"] == []
+
+    async def test_mute_does_not_affect_other_type(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """Muting low_battery leaves a jam alert on the SAME member un-muted.
+
+        NOTE: the one-member fixture can't exercise a DIFFERENT member; the
+        different-TYPE case is covered here, which is sufficient for the gate.
+        """
+        from custom_components.smart_lock_manager.storage import set_mute
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        creds = {
+            "user": "u",
+            "pass": "p",
+            "from": "from@x",
+            "to": "to@x",
+            "kind_to": {"alert": []},
+        }
+        with patch.object(
+            notify_engine._dispatcher.email, "_creds", AsyncMock(return_value=creds)
+        ):
+            notify_engine._eval_jam(LOCK_ENTITY, "jammed", {})
+            await notify_engine.hass.async_block_till_done()
+        jam = next(a for a in notify_engine.serialize() if a["alert_type"] == ALERT_JAM)
+        assert jam["muted"] is False
+        assert jam["notify_intents"] != []
+
+    async def test_unmute_re_enables(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """After clear_mute, a fresh alert dispatches normally (not muted)."""
+        from custom_components.smart_lock_manager.storage import clear_mute, set_mute
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        clear_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        record = await self._record_low_battery(notify_engine)
+        assert record["muted"] is False
+        assert record["notify_intents"] != []
+
+    async def test_mute_all_mutes_every_type(
+        self, hass: HomeAssistant, notify_engine: AlertEngine
+    ) -> None:
+        """set_mute('all') mutes every type and suppresses an alert."""
+        from custom_components.smart_lock_manager.storage import is_muted, set_mute
+
+        set_mute(LOCK_ENTITY, "all")
+        assert is_muted(LOCK_ENTITY, ALERT_JAM) is True
+        assert is_muted(LOCK_ENTITY, ALERT_LOW_BATTERY) is True
+        record = await self._record_low_battery(notify_engine)
+        assert record["muted"] is True
+        assert record["notify_intents"] == []
+
+    def test_muted_appears_in_zones_payload(
+        self, hass: HomeAssistant, alert_engine: AlertEngine
+    ) -> None:
+        """The zones DATA API payload surfaces the muted state for the panel."""
+        from custom_components.smart_lock_manager.api.zones import build_zones_payload
+        from custom_components.smart_lock_manager.storage import set_mute
+
+        set_mute(LOCK_ENTITY, ALERT_LOW_BATTERY)
+        payload = build_zones_payload(hass)
+        assert "muted" in payload
+        assert ALERT_LOW_BATTERY in payload["muted"]["muted"][LOCK_ENTITY]

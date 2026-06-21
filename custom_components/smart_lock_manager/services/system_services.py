@@ -16,11 +16,15 @@ from ..const import (
 )
 from ..storage import (
     clear_global_snooze,
+    clear_mute,
     clear_zone_snooze,
+    get_cached_muted,
     get_cached_snooze,
     save_global_settings,
+    save_muted,
     save_snooze,
     set_global_snooze,
+    set_mute,
     set_zone_snooze,
 )
 from ..storage.global_settings import (
@@ -181,6 +185,48 @@ class SystemServices:
         hass.bus.async_fire(
             "smart_lock_manager_snooze_updated",
             {"zone_id": zone_id, "cleared": True},
+        )
+
+    @staticmethod
+    async def mute_lock_alert(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Permanently mute alerts for one lock member (manual until unmuted).
+
+        - Description: Adds ``alert_type`` (or the ``"all"`` sentinel) to the
+          member's muted set, persists the muted blob, then fires
+          ``smart_lock_manager_muted_updated``. A mute is sticky (NOT
+          time-based) and fully silences INITIAL + NAG + RECOVERY for the
+          member/type until an explicit unmute.
+        - Inputs (service_call.data): ``entity_id`` (str, required, raw member
+          entity id) and optional ``alert_type`` (str, default ``"all"``).
+        - Outputs: None.
+        """
+        entity_id = service_call.data["entity_id"]
+        alert_type = service_call.data.get("alert_type", "all")
+        set_mute(entity_id, alert_type)
+        await save_muted(hass, get_cached_muted())
+        hass.bus.async_fire(
+            "smart_lock_manager_muted_updated",
+            {"entity_id": entity_id, "alert_type": alert_type, "muted": True},
+        )
+
+    @staticmethod
+    async def unmute_lock_alert(hass: HomeAssistant, service_call: ServiceCall) -> None:
+        """Re-enable alerts for a previously muted lock member.
+
+        - Description: Removes ``alert_type`` from the member's muted set, or
+          clears ALL mutes for the member when ``alert_type == "all"``. Persists
+          the muted blob, then fires ``smart_lock_manager_muted_updated``.
+        - Inputs (service_call.data): ``entity_id`` (str, required, raw member
+          entity id) and optional ``alert_type`` (str, default ``"all"``).
+        - Outputs: None.
+        """
+        entity_id = service_call.data["entity_id"]
+        alert_type = service_call.data.get("alert_type", "all")
+        clear_mute(entity_id, alert_type)
+        await save_muted(hass, get_cached_muted())
+        hass.bus.async_fire(
+            "smart_lock_manager_muted_updated",
+            {"entity_id": entity_id, "alert_type": alert_type, "muted": False},
         )
 
     @staticmethod

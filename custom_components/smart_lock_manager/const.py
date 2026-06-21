@@ -102,6 +102,8 @@ SERVICE_UPDATE_LOCK_SETTINGS = "update_lock_settings"
 SERVICE_SET_SWEEP_INTERVALS = "set_sweep_intervals"
 SERVICE_PAUSE_ALERTS = "pause_alerts"
 SERVICE_RESUME_ALERTS = "resume_alerts"
+SERVICE_MUTE_LOCK_ALERT = "mute_lock_alert"
+SERVICE_UNMUTE_LOCK_ALERT = "unmute_lock_alert"
 
 # Zone-management services (replace retired parent/child services)
 SERVICE_CREATE_ZONE = "create_zone"

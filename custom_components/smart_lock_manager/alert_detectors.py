@@ -105,6 +105,16 @@ ALERT_JAM = "jam"
 ALERT_LOW_BATTERY = "low_battery"
 ALERT_OFFLINE = "offline"
 
+# Nag-policy classes (single source of truth). HEALTH conditions are persistent
+# fault states (battery/jam/offline) that, once alerted, stay logically true on
+# their own — so they alert ONCE then go silent until recovery (no hourly nag).
+# DOOR conditions describe an operator-actionable open door that should keep
+# nagging on the timer until the door is dealt with.
+# - HEALTH_ALERT_TYPES: alert-type ids whose detector cores must NOT re-nag.
+# - DOOR_ALERT_TYPES: alert-type ids that retain timer-driven re-alerting.
+HEALTH_ALERT_TYPES = frozenset({ALERT_LOW_BATTERY, ALERT_JAM, ALERT_OFFLINE})
+DOOR_ALERT_TYPES = frozenset({ALERT_OUTSIDE_HOURS, ALERT_SUSTAINED})
+
 # Lock states the engine treats as "offline".
 _OFFLINE_STATES = {"unavailable", "unknown"}
 

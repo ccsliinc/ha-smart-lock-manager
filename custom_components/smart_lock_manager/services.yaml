@@ -592,3 +592,37 @@ resume_alerts:
       required: false
       selector:
         text:
+
+mute_lock_alert:
+  name: Mute Lock Alert
+  description: Permanently suppress alerts for one lock member (optionally one alert type) until unmuted. Not time-based.
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The member lock entity id to mute.
+      required: true
+      selector:
+        text:
+    alert_type:
+      name: Alert Type
+      description: Which alert type to mute (jam, low_battery, offline, outside_hours, sustained_unlock). Omit or 'all' to mute every type.
+      required: false
+      selector:
+        text:
+
+unmute_lock_alert:
+  name: Unmute Lock Alert
+  description: Re-enable alerts for a previously muted lock member. Omit alert_type (or 'all') to clear all mutes for that member.
+  fields:
+    entity_id:
+      name: Entity ID
+      description: The member lock entity id to unmute.
+      required: true
+      selector:
+        text:
+    alert_type:
+      name: Alert Type
+      description: Which alert type to unmute. Omit or 'all' to clear every mute for this member.
+      required: false
+      selector:
+        text:

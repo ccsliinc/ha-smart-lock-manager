@@ -34,7 +34,7 @@ from ..gating import (
     real_notify_enabled,
 )
 from ..models.lock import SmartLockManagerLock
-from ..storage import snooze_state_for_api
+from ..storage import muted_state_for_api, snooze_state_for_api
 from ..zone_runtime import (
     get_unhomed_lock_entity_ids,
     get_zone_registry,
@@ -147,6 +147,7 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
         "real_autolock": real_autolock_enabled(),
         "observe_only": mode != MODE_OFF,
         "snooze": snooze_api,
+        "muted": muted_state_for_api(),
     }
 
 

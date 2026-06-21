@@ -7,6 +7,15 @@ from .global_settings import (
     save_global_settings,
 )
 from .lock_storage import load_lock_data, save_lock_data
+from .muted import (
+    clear_mute,
+    get_cached_muted,
+    is_muted,
+    load_muted,
+    muted_state_for_api,
+    save_muted,
+    set_mute,
+)
 from .snooze import (
     clear_global_snooze,
     clear_zone_snooze,
@@ -52,4 +61,11 @@ __all__ = [
     "clear_global_snooze",
     "clear_zone_snooze",
     "snooze_state_for_api",
+    "load_muted",
+    "save_muted",
+    "get_cached_muted",
+    "is_muted",
+    "set_mute",
+    "clear_mute",
+    "muted_state_for_api",
 ]

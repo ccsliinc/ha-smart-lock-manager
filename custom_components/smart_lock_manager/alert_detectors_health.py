@@ -181,12 +181,9 @@ class AlertHealthDetectorsMixin:
             return False
         now = time.time()
         if flag.get("alerted"):
-            # Ongoing jam: only timer-origin sweeps re-fire, throttled.
-            if origin == "timer" and self._should_nag(flag, now):
-                self._record(
-                    entity_id, ALERT_JAM, severity, "Still jammed", origin="timer"
-                )
-                flag["last_nag"] = now
+            # HEALTH alert (see HEALTH_ALERT_TYPES): a persistent jam alerts ONCE
+            # then stays silent until recovery — no timer re-nag. Recovery is
+            # owned by the state path (_eval_jam), not this core.
             return False
         self._record(entity_id, ALERT_JAM, severity, "Lock jammed", origin=origin)
         flag["alerted"] = True
@@ -277,16 +274,10 @@ class AlertHealthDetectorsMixin:
             return False
         now = time.time()
         if flag.get("alerted"):
-            # Ongoing low battery: only timer-origin sweeps re-fire, throttled.
-            if origin == "timer" and self._should_nag(flag, now):
-                self._record(
-                    entity_id,
-                    ALERT_LOW_BATTERY,
-                    SEV_WARN,
-                    f"Battery still low ({percent}%)",
-                    origin="timer",
-                )
-                flag["last_nag"] = now
+            # HEALTH alert (see HEALTH_ALERT_TYPES): a persistent low battery
+            # alerts ONCE then stays silent until recovery — no timer re-nag.
+            # Recovery (with hysteresis) is owned by the state path
+            # (_eval_low_battery), not this core.
             return False
         self._record(
             entity_id,
@@ -390,16 +381,10 @@ class AlertHealthDetectorsMixin:
             return False
         now = time.time()
         if flag.get("alerted"):
-            # Ongoing offline: only timer-origin sweeps re-fire, throttled.
-            if origin == "timer" and self._should_nag(flag, now):
-                self._record(
-                    entity_id,
-                    ALERT_OFFLINE,
-                    SEV_WARN,
-                    "Still offline (unavailable)",
-                    origin="timer",
-                )
-                flag["last_nag"] = now
+            # HEALTH alert (see HEALTH_ALERT_TYPES): a persistent offline state
+            # alerts ONCE then stays silent until recovery — no timer re-nag.
+            # Recovery (back online) is owned by the state path (_eval_offline),
+            # not this core.
             return False
         self._record(
             entity_id,
