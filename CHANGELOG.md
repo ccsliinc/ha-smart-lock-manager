@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.6.1]
+
+### Documentation
+- Rewrote `README.md`, `docs/API.md`, and `CLAUDE.md` for the zone model; dropped the
+  retired parent/child and `sync_child_locks` references.
+- Regenerated an accurate service reference from `services.yaml`.
+- Corrected the Events section (removed events that don't actually fire).
+- Added an "Enabling alerting & auto-lock" guide (flags file + env vars).
+
+### Internal
+- Code sanitization with no behavior change: removed ~540 lines of dead code (legacy
+  `const.py` constants, child-lock remnants, orphan helpers).
+- Deduplicated lock lookup (`find_lock`) and slot reset (`CodeSlot.reset_definition`).
+- Split 3 files over 500 lines into focused modules via re-export façades.
+- 249 tests green.
+
+## [2026.6.0] - Zone model, opt-in alerting & auto-lock
+
+### Changed
+- **Zone model replaces parent/child hierarchy**: the retired `is_main_lock` /
+  `parent_lock_id` / `sync_to_child_locks` "main lock + child locks" model is gone.
+  A `Zone` is now the canonical owner of a code-slot set; every member lock obeys it
+  uniformly. Each lock belongs to exactly one zone (a single lock is a 1-member zone);
+  locks not yet placed in a zone sit in an unhomed pool. Member locks mirror the zone's
+  codes, while per-lock state (usage counters, last-used, sync state, access log) stays
+  on the member. A one-time migration lifts each former main/standalone lock's codes into
+  a new zone named after it.
+- **Zone services replace child-lock services**: `create_zone`, `delete_zone`,
+  `add_lock_to_zone`, `remove_lock_from_zone`, `apply_zone_codes`, `clear_zone_codes`,
+  `update_zone`, and `update_zone_settings` replace the removed `sync_child_locks` /
+  `remove_child_lock`. Per-zone operational config (business hours, scheduled/idle
+  auto-lock, alert toggles, notify channels) is edited via `update_zone_settings` with a
+  per-block merge.
+
+### Added
+- **Opt-in lock-health alerting** (off by default): detects outside-hours unlocks,
+  sustained-unlock escalation (tiered), jam, low-battery, and offline conditions, records
+  them to a rolling alert log, and fires a recovery notice when each clears. Email
+  notifications render as HTML alert cards. The engine runs OBSERVE-only until explicitly
+  enabled and sends nothing until real-notify is enabled.
+- **Opt-in auto-lock** (off by default): per-zone scheduled close-of-business lockdown and
+  idle-timeout auto-lock. Records "would auto-lock" intents until real-autolock is enabled,
+  at which point it issues a real `lock.lock` with verify/retry.
+- **Per-lock mute + snooze**: `mute_lock_alert` / `unmute_lock_alert` permanently silence
+  one lock (optionally one alert type) until cleared; `pause_alerts` / `resume_alerts`
+  snooze a zone (or everything) for a set number of hours. A mute silences initial alert,
+  nags, and recovery alike; a snooze only suppresses repeat timer-origin nags.
+- **Nag policy**: configurable sweep cadences via `set_sweep_intervals`
+  (`outside_hours_sweep_minutes`, `health_sweep_minutes`, `nag_interval_minutes`). Health
+  conditions alert once then stay silent; outside-hours / door episodes re-nag at the
+  configured interval. State-change alerts and recoveries are never throttled.
+- **Safe-by-default opt-in gating** (`gating.py`): three independent flags, all default
+  OFF — `enable_engines`, `real_notify`, `real_autolock`. Sourced from
+  `/config/smart_lock_manager_flags.json` (the way on HA OS) OR-combined with the env vars
+  `SLM_ENABLE_ENGINES` / `SLM_ENABLE_REAL_NOTIFY` / `SLM_ENABLE_REAL_AUTOLOCK`. With all
+  off the engines are never even constructed, so production behaviour is unchanged.
+
+### Security
+- Alert records carry entity ids, door names, severities, and human-readable messages
+  only — never PIN codes.
+
+## [2026.6.x] - Code sanitization
+
+### Changed
+- Dead-code removal, de-duplication, and module file-splits to keep every source file
+  under the 500-line standard (notifications, alert engine, service registration, and
+  zone settings were split into focused modules). No user-facing behaviour change.
+
 ## [2025.1.4] - 2026-05-31 - Fix access-log unsub registry pollution crash
 
 ### Fixed

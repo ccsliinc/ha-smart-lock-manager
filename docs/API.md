@@ -1,38 +1,55 @@
 # Smart Lock Manager API Documentation
 
-This document provides comprehensive documentation for all services, entities, and automation capabilities provided by Smart Lock Manager.
+This document documents every service, entity, and automation capability provided by
+Smart Lock Manager. Every service listed here exists in
+`custom_components/smart_lock_manager/services.yaml`.
 
 ## Table of Contents
 
 - [Services](#services)
+  - [Slot & code services](#slot--code-services)
+  - [Z-Wave services](#z-wave-services)
+  - [Zone services](#zone-services)
+  - [Alerting & auto-lock](#alerting--auto-lock)
+  - [Mute & snooze](#mute--snooze)
+  - [System services](#system-services)
+- [Enabling the engines](#enabling-the-engines)
 - [Entities](#entities)
-- [Events](#events)
+- [Events & automation triggers](#events--automation-triggers)
 - [Attributes](#attributes)
 - [Automation Examples](#automation-examples)
 
 ## Services
 
-Smart Lock Manager provides comprehensive lock and slot management through Home Assistant services.
+All services are in the `smart_lock_manager` domain. Slot/code services target a `lock`
+entity; zone services take a `zone_id` string.
 
-### Core Lock Services
+### Slot & code services
 
-#### `smart_lock_manager.set_code_advanced`
+#### `set_code`
 
-Set a user code with advanced scheduling and restrictions.
+Set a user code on a slot.
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
-- `code_slot` (required): Slot number (1-30)
-- `usercode` (required): 4-8 digit PIN code
-- `code_slot_name` (required): Display name for the user
-- `start_date` (optional): Access start date/time (ISO format)
-- `end_date` (optional): Access end date/time (ISO format)
-- `allowed_hours` (optional): List of allowed hours [0-23]
-- `allowed_days` (optional): List of allowed days [0-6] (Monday=0)
-- `max_uses` (optional): Maximum usage count (-1 = unlimited)
-- `notify_on_use` (optional): Enable usage notifications (default: false)
+- `entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number (1-50).
+- `usercode` (required) — PIN to set.
+- `code_slot_name` (optional) — friendly name for the slot.
 
-**Example:**
+#### `set_code_advanced`
+
+Set a user code with scheduling and usage restrictions.
+
+- `entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number (1-50).
+- `usercode` (required) — PIN to set.
+- `code_slot_name` (optional) — friendly name.
+- `start_date` (optional) — datetime when the code becomes active.
+- `end_date` (optional) — datetime when the code expires.
+- `allowed_hours` (optional) — list of hours 0-23 when the code is allowed.
+- `allowed_days` (optional) — list of days 0-6 (0=Mon, 6=Sun).
+- `max_uses` (optional, default -1) — usage cap (-1 = unlimited).
+- `notify_on_use` (optional, default false) — notify when the code is used.
+
 ```yaml
 service: smart_lock_manager.set_code_advanced
 target:
@@ -41,107 +58,271 @@ data:
   code_slot: 1
   usercode: "1234"
   code_slot_name: "Delivery Person"
-  allowed_hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]  # 9 AM - 5 PM
-  allowed_days: [0, 1, 2, 3, 4]  # Monday-Friday
-  start_date: "2025-01-01T00:00:00"
-  end_date: "2025-12-31T23:59:59"
+  allowed_hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
+  allowed_days: [0, 1, 2, 3, 4]
   max_uses: 50
   notify_on_use: true
 ```
 
-#### `smart_lock_manager.clear_code`
+#### `clear_code`
 
-Remove a user code from a specific slot.
+Clear a user code from a slot.
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
-- `code_slot` (required): Slot number to clear
+- `entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number to clear.
 
-**Example:**
-```yaml
-service: smart_lock_manager.clear_code
-target:
-  entity_id: lock.front_door
-data:
-  code_slot: 1
-```
+#### `clear_all_slots`
 
-### Slot Management Services
+Clear every code slot on a lock.
 
-#### `smart_lock_manager.enable_slot`
+- `entity_id` (required) — lock entity.
 
-Enable a previously disabled slot (preserves PIN and settings).
+#### `enable_slot` / `disable_slot`
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
-- `code_slot` (required): Slot number to enable
+Enable or disable a slot (disable preserves the slot's data).
 
-#### `smart_lock_manager.disable_slot`
+- `entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number.
 
-Disable a slot (removes from lock but preserves data).
-
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
-- `code_slot` (required): Slot number to disable
-
-#### `smart_lock_manager.reset_slot_usage`
+#### `reset_slot_usage`
 
 Reset the usage counter for a slot.
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
-- `code_slot` (required): Slot number to reset
+- `entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number.
 
-#### `smart_lock_manager.resize_slots`
+#### `reset_sync`
 
-Change the total number of available slots.
+Reset a slot's sync state, clearing the error and allowing a fresh sync attempt. Targets
+the lock via the standard `target:` selector.
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
-- `slot_count` (required): New total slot count
+- `target.entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number.
 
-### Z-Wave Integration Services
+#### `resize_slots`
 
-#### `smart_lock_manager.read_codes`
+Change the number of available code slots on a lock.
 
-Read all codes directly from the Z-Wave lock.
+- `entity_id` (required) — lock entity.
+- `slot_count` (required) — new slot count (1-50).
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
+#### `get_usage_stats`
 
-#### `smart_lock_manager.sync_to_zwave`
+Retrieve usage statistics for all slots on a lock.
 
-Force synchronization of all codes to the Z-Wave lock.
+- `entity_id` (required) — lock entity.
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
+#### `update_lock_settings`
 
-### Advanced Management Services
+Update a lock's settings.
 
-#### `smart_lock_manager.sync_child_locks`
+- `entity_id` (required) — lock entity.
+- `friendly_name` (optional) — display name.
+- `slot_count` (optional) — number of code slots (1-50).
 
-Synchronize codes from parent lock to all child locks.
+### Z-Wave services
 
-**Parameters:**
-- `entity_id` (required): Parent lock entity ID
+#### `refresh_codes`
 
-#### `smart_lock_manager.get_usage_stats`
+Refresh all code slots from the lock hardware.
 
-Retrieve comprehensive usage statistics.
+- `entity_id` (required) — lock entity.
 
-**Parameters:**
-- `entity_id` (required): Target lock entity ID
+#### `read_zwave_codes`
 
-### System Services
+Read all code slots directly from the Z-Wave hardware.
 
-#### `smart_lock_manager.update_global_settings`
+- `entity_id` (required) — lock entity.
+
+#### `sync_slot_to_zwave`
+
+Sync a specific slot's state to the Z-Wave hardware.
+
+- `entity_id` (required) — lock entity.
+- `code_slot` (required) — slot number.
+- `action` (optional, default `auto`) — one of `auto`, `enable`, `disable`.
+
+#### `generate_package`
+
+Generate a Home Assistant package YAML for a lock node.
+
+- `node_id` (required) — the Z-Wave node ID of the lock.
+
+### Zone services
+
+A zone owns the canonical code-slot set; every member lock obeys it. Each lock belongs to
+exactly one zone, and locks not yet in a zone sit in the unhomed pool.
+
+#### `create_zone`
+
+Create a new zone, optionally pre-populated with unhomed member locks.
+
+- `name` (required) — display name.
+- `member_lock_entity_ids` (optional) — list of unhomed lock entity IDs to add.
+
+#### `delete_zone`
+
+Delete a zone, wiping its codes off every member's hardware and returning members to the
+unhomed pool. Lock entries are preserved.
+
+- `zone_id` (required) — zone to delete.
+
+#### `add_lock_to_zone`
+
+Move an unhomed lock into a zone and apply the zone's codes. Rejected if the lock already
+belongs to another zone.
+
+- `zone_id` (required) — target zone.
+- `lock_entity_id` (required) — unhomed lock to add.
+
+#### `remove_lock_from_zone`
+
+Remove a lock from its zone, wiping the zone's codes off the lock and returning it to the
+unhomed pool.
+
+- `zone_id` (required) — zone the lock currently belongs to.
+- `lock_entity_id` (required) — member lock to remove.
+
+#### `apply_zone_codes`
+
+Re-push the zone's canonical code set to all member locks (idempotent).
+
+- `zone_id` (required) — zone whose codes should be re-applied.
+
+#### `clear_zone_codes`
+
+Clear every code slot on a zone and wipe those codes off every member's hardware. Members
+remain in the zone.
+
+- `zone_id` (required) — zone whose codes should be cleared.
+
+#### `update_zone`
+
+Update a zone's display name.
+
+- `zone_id` (required) — zone to update.
+- `name` (required) — new display name.
+
+#### `update_zone_settings`
+
+Edit a zone's operational settings. The `settings` object is merged **per block** — only
+the blocks you supply are changed; unspecified blocks are preserved.
+
+- `zone_id` (required) — zone to update.
+- `settings` (required) — nested object with any subset of these blocks:
+  - `business_hours` — `enabled`, `open_time`, `close_time`, `days` (0-6),
+    `use_workday_sensor`, `workday_entity`.
+  - `scheduled_auto_lock` — `enabled`, `time`, `days`, `max_attempts`, `settle_seconds`,
+    `verify_boltstatus`.
+  - `idle_auto_lock` — `enabled`, `minutes`, `sun_aware`, `night_minutes`, `day_minutes`.
+  - `alerts` — toggles + thresholds for `outside_hours`, `sustained_unlock`, `jam`,
+    `low_battery`, `offline`.
+  - `notify` — `email` (`enabled`, `recipients_override`) and `mobile` (`enabled`,
+    `targets`).
+
+```yaml
+service: smart_lock_manager.update_zone_settings
+data:
+  zone_id: "<zone_id>"
+  settings:
+    business_hours:
+      enabled: true
+      open_time: "08:30"
+      close_time: "17:30"
+      days: [0, 1, 2, 3, 4]
+    alerts:
+      outside_hours: { enabled: true, severity: "CRIT" }
+      low_battery: { enabled: true, threshold: 20 }
+    notify:
+      email: { enabled: true }
+```
+
+### Alerting & auto-lock
+
+The alert and auto-lock engines are **off by default** and only act once explicitly
+enabled — see [Enabling the engines](#enabling-the-engines). The services below tune the
+engine cadences.
+
+#### `set_sweep_intervals`
+
+Set the engine-wide periodic alert-sweep and nag cadences (minutes). Changes reschedule
+the sweeps live without a Home Assistant restart.
+
+- `outside_hours_sweep_minutes` (optional, 1-1440) — minutes between outside-hours
+  boundary sweeps (catches doors left unlocked past close).
+- `health_sweep_minutes` (optional, 1-1440) — minutes between jam / low-battery / offline
+  health sweeps.
+- `nag_interval_minutes` (optional, 1-1440) — minimum minutes between repeated
+  timer-origin re-alerts (nags) of the same ongoing episode. State-change alerts and
+  recoveries are never throttled.
+
+### Mute & snooze
+
+#### `mute_lock_alert`
+
+Permanently suppress alerts for one lock (optionally one alert type) until unmuted. Not
+time-based; silences initial alert, nags, and recovery alike.
+
+- `entity_id` (required) — member lock entity id.
+- `alert_type` (optional) — `jam`, `low_battery`, `offline`, `outside_hours`,
+  `sustained_unlock`, or `all` (default) for every type.
+
+#### `unmute_lock_alert`
+
+Re-enable alerts for a previously muted lock.
+
+- `entity_id` (required) — member lock entity id.
+- `alert_type` (optional) — type to unmute, or `all` (default) to clear every mute.
+
+#### `pause_alerts`
+
+Temporarily suppress alert notifications (alerts are still recorded). Auto-expires. Only
+suppresses repeat timer-origin nags; a fresh state-change alert/recovery still notifies.
+
+- `hours` (required, 0.25-24) — how long to snooze.
+- `zone_id` (optional) — zone to snooze; omit to snooze ALL zones globally.
+
+#### `resume_alerts`
+
+Clear an active alert snooze (global or per-zone).
+
+- `zone_id` (optional) — zone to resume; omit to clear the global snooze.
+
+### System services
+
+#### `update_global_settings`
 
 Update global component settings.
 
-**Parameters:**
-- `auto_disable_expired` (optional): Auto-disable expired codes (boolean)
-- `sync_on_lock_events` (optional): Sync when lock events occur (boolean)
-- `debug_logging` (optional): Enable debug logging (boolean)
+- `coordinator_interval` (optional) — data update interval: `30`, `60`, `120`, or `300`
+  seconds.
+- `auto_disable_expired` (optional) — auto-disable expired code slots (boolean).
+- `sync_on_lock_events` (optional) — trigger sync when lock state changes (boolean).
+- `debug_logging` (optional) — enable debug-level logging (boolean).
+
+## Enabling the engines
+
+The alert / auto-lock / notification engines are gated by three independent flags, all
+default OFF. With all off, the engines are never constructed.
+
+| Flag | Flags-file key | Env var | Effect |
+| --- | --- | --- | --- |
+| Enable engines | `enable_engines` | `SLM_ENABLE_ENGINES` | Construct engines in safe observe / dry-run mode — detect + record alerts, render "would-notify" / "would-auto-lock" intents, send nothing, lock nothing. |
+| Real notify | `real_notify` | `SLM_ENABLE_REAL_NOTIFY` | Let recorded alerts actually send (email / mobile). No effect unless engines are enabled. |
+| Real auto-lock | `real_autolock` | `SLM_ENABLE_REAL_AUTOLOCK` | Let auto-lock issue a real `lock.lock`. No effect unless engines are enabled. |
+
+A flag is ON if **either** its env var **or** its flags-file key is truthy.
+
+**Flags file (Home Assistant OS).** HA OS cannot set process env vars, so use:
+
+```json
+// /config/smart_lock_manager_flags.json
+{ "enable_engines": true, "real_notify": false, "real_autolock": false }
+```
+
+Env vars accept `1` / `true` / `yes` / `on` (case-insensitive). File changes take effect
+on the next prime (HA restart, integration reload, or a zone-settings change), since the
+engines are constructed once at setup.
 
 ## Entities
 
@@ -150,99 +331,84 @@ Update global component settings.
 Main summary sensor with comprehensive attributes.
 
 **State Values:**
-- `active` - Lock has active code slots
-- `inactive` - No active code slots
-- `unavailable` - Lock connection issues
+
+- `active` — lock has active code slots.
+- `inactive` — no active code slots.
+- `unavailable` — lock connection issues.
 
 **Key Attributes:**
-- `integration`: Always "smart_lock_manager"
-- `lock_entity_id`: Original lock entity ID
-- `lock_name`: Friendly lock name
-- `total_slots`: Total available slots
-- `active_codes_count`: Number of currently active codes
-- `valid_codes_count`: Codes valid right now (time-based)
-- `slot_details`: Detailed information for each slot
-- `usage_stats`: Usage analytics and statistics
 
-## Events
+- `integration`: Always `smart_lock_manager`.
+- `lock_entity_id`: Original lock entity ID.
+- `lock_name`: Friendly lock name.
+- `total_slots`: Total available slots.
+- `active_codes_count`: Number of currently active codes.
+- `valid_codes_count`: Codes valid right now (time-based).
+- `slot_details`: Detailed information for each slot.
+- `usage_stats`: Usage analytics and statistics.
+- `access_log`: Recent physical lock/unlock/jam events with user attribution.
 
-### `smart_lock_manager_codes_read`
+## Events & automation triggers
 
-Fired when Z-Wave codes are successfully read.
+Smart Lock Manager does **not** expose a documented, stable public event API for
+automations. Build automations off these two stable surfaces instead:
 
-**Event Data:**
-- `entity_id`: Lock entity that was read
-- `codes`: Dictionary of slot numbers and code data
-- `total_found`: Number of codes found
-- `timestamp`: When the read occurred
+- **The underlying lock entity.** Trigger on the `lock.*` entity's standard Home Assistant
+  state (`locked` / `unlocked` / `jammed` / `unavailable`) — the normal, supported way to
+  react to physical lock activity.
+- **The summary sensor's attributes.** Trigger on
+  `sensor.smart_lock_manager_[lock_name]` and read its attributes (see
+  [Attributes](#attributes)). The `access_log` attribute holds recent physical
+  lock/unlock/jam events with user attribution, and per-slot detail lives in
+  `slot_details`.
 
-### `smart_lock_manager_lock_state_changed`
-
-Fired when lock state changes are detected.
-
-**Event Data:**
-- `entity_id`: Lock entity ID
-- `action_code`: Z-Wave action code
-- `action_text`: Human-readable action description
-- `code_slot_name`: User name (if applicable)
+> The integration does fire internal `hass.bus` signals (e.g.
+> `smart_lock_manager_zone_settings_updated` and other zone/coordinator/system refresh
+> events) so the custom panel can refresh live. These are **internal, unstable refresh
+> signals — not a supported automation API.** Do not key automations off them; their names
+> and payloads may change without notice.
 
 ## Attributes
 
 ### Slot Detail Attributes
 
-Each slot in the `slot_details` attribute contains:
+Each slot in `slot_details` contains:
 
-- `slot_number`: Slot position (1-30)
-- `user_name`: Display name for the user
-- `pin_code`: Masked PIN code ("****")
-- `is_active`: Whether slot is currently active
-- `use_count`: Number of times used
-- `max_uses`: Maximum allowed uses (-1 = unlimited)
-- `created_at`: When slot was created
-- `last_used_at`: Last usage timestamp
-- `start_date`: Access start date/time
-- `end_date`: Access end date/time
-- `allowed_hours`: List of allowed hours
-- `allowed_days`: List of allowed days
-- `notify_on_use`: Whether notifications are enabled
-- `is_valid_now`: Whether code is valid right now
-- `display_title`: Frontend display title
-- `status`: Current status object with name, label, color, description
+- `slot_number`, `user_name`, `pin_code` (masked `****`), `is_active`, `use_count`,
+  `max_uses` (-1 = unlimited), `created_at`, `last_used`, `start_date`, `end_date`,
+  `allowed_hours`, `allowed_days`, `notify_on_use`, `is_valid_now`, `display_title`, and
+  a `status` object (name, label, color, description).
 
 ### Usage Statistics Attributes
 
-The `usage_stats` attribute contains:
-
-- `total_uses`: Total usage count across all slots
-- `active_slots`: Number of currently active slots
-- `expired_slots`: Number of expired slots
-- `most_used_slot`: Slot number with highest usage
-- `least_used_slot`: Slot number with lowest usage
-- `average_uses_per_slot`: Average usage per active slot
-- `last_activity`: Timestamp of last code usage
-- `codes_expiring_soon`: List of slots expiring within 7 days
+The `usage_stats` attribute contains aggregate counters such as `total_uses`,
+`active_slots`, `expired_slots`, `most_used_slot`, `least_used_slot`,
+`average_uses_per_slot`, `last_activity`, and `codes_expiring_soon`.
 
 ## Automation Examples
 
-### Basic Usage Notifications
+### Notify on a physical unlock
+
+Trigger on the underlying lock entity's standard state change. For richer context (who/how),
+read the summary sensor's `access_log` attribute.
 
 ```yaml
 automation:
-  - alias: "Smart Lock Code Used"
+  - alias: "Smart Lock Unlocked"
     trigger:
-      platform: event
-      event_type: smart_lock_manager_lock_state_changed
-    condition:
-      condition: template
-      value_template: "{{ trigger.event.data.action_text == 'Manual Unlock' }}"
+      platform: state
+      entity_id: lock.front_door
+      to: "unlocked"
     action:
       service: notify.mobile_app
       data:
-        title: "🔓 Front Door Unlocked"
-        message: "{{ trigger.event.data.code_slot_name }} used code slot {{ trigger.event.data.code_slot }}"
+        title: "Front Door Unlocked"
+        message: >-
+          Front door unlocked.
+          Recent activity: {{ state_attr('sensor.smart_lock_manager_front_door', 'access_log') }}
 ```
 
-### High Usage Alert
+### High-usage alert
 
 ```yaml
 automation:
@@ -251,60 +417,35 @@ automation:
       platform: state
       entity_id: sensor.front_door_smart_lock_manager
     condition:
-      condition: template
-      value_template: >
-        {% set slots = trigger.to_state.attributes.slot_details %}
-        {% for slot_num, slot in slots.items() %}
-          {% if slot.use_count > 40 %}
-            true
-          {% endif %}
-        {% endfor %}
+      - "{{ trigger.to_state.attributes.slot_details.slot_1.use_count > 40 }}"
     action:
       service: notify.admin_notifications
       data:
-        message: "Code slot has high usage - consider reviewing access"
+        message: "Code slot 1 has high usage - consider reviewing access"
 ```
 
-### Expired Code Cleanup
+### Re-apply zone codes after editing the canonical set
 
 ```yaml
 automation:
-  - alias: "Clean Up Expired Codes"
+  - alias: "Re-apply zone codes nightly"
     trigger:
       platform: time
-      at: "02:00:00"  # Daily at 2 AM
+      at: "03:00:00"
     action:
-      - service: python_script.cleanup_expired_codes
-        data:
-          lock_entity: "lock.front_door"
-      - service: notify.admin_notifications
-        data:
-          message: "Daily expired code cleanup completed"
+      service: smart_lock_manager.apply_zone_codes
+      data:
+        zone_id: "<zone_id>"
 ```
 
-### Lock Synchronization
-
-```yaml
-automation:
-  - alias: "Sync Child Locks When Parent Changes"
-    trigger:
-      platform: state
-      entity_id: sensor.main_lock_smart_lock_manager
-      attribute: active_codes_count
-    action:
-      service: smart_lock_manager.sync_child_locks
-      target:
-        entity_id: lock.main_entrance
-```
-
-### Weekend Access Control
+### Weekend access control
 
 ```yaml
 automation:
   - alias: "Enable Weekend Access"
     trigger:
       platform: time
-      at: "18:00:00"  # Friday 6 PM
+      at: "18:00:00"
     condition:
       condition: time
       weekday:
@@ -317,115 +458,16 @@ automation:
         code_slot: 10
         usercode: "9999"
         code_slot_name: "Weekend Guest"
-        allowed_days: [5, 6]  # Saturday, Sunday
+        allowed_days: [5, 6]
         end_date: "{{ (now() + timedelta(days=3)).strftime('%Y-%m-%dT23:59:59') }}"
-```
-
-### Advanced Template Usage
-
-```yaml
-# Get all slots expiring in next 7 days
-template:
-  - sensor:
-      name: "Codes Expiring Soon"
-      state: >
-        {% set slots = states.sensor.front_door_smart_lock_manager.attributes.slot_details %}
-        {% set expiring = [] %}
-        {% for slot_num, slot in slots.items() %}
-          {% if slot.end_date %}
-            {% set end_date = strptime(slot.end_date, '%Y-%m-%dT%H:%M:%S') %}
-            {% if end_date < (now() + timedelta(days=7)) %}
-              {% set expiring = expiring + [slot.user_name] %}
-            {% endif %}
-          {% endif %}
-        {% endfor %}
-        {{ expiring | length }}
-      attributes:
-        expiring_users: >
-          {% set slots = states.sensor.front_door_smart_lock_manager.attributes.slot_details %}
-          {% set expiring = [] %}
-          {% for slot_num, slot in slots.items() %}
-            {% if slot.end_date %}
-              {% set end_date = strptime(slot.end_date, '%Y-%m-%dT%H:%M:%S') %}
-              {% if end_date < (now() + timedelta(days=7)) %}
-                {% set expiring = expiring + [slot.user_name] %}
-              {% endif %}
-            {% endif %}
-          {% endfor %}
-          {{ expiring }}
 ```
 
 ## Error Handling
 
-### Service Call Validation
+All services validate their input and raise `HomeAssistantError` with a clear message on
+failure — for example a PIN that collides with an existing code's vendor prefix, an
+out-of-range slot number, a lock that isn't found, or adding a lock that already belongs
+to another zone. PIN values are never logged in full.
 
-All services validate input parameters and return appropriate errors:
-
-- **Invalid PIN Code**: Must be 4-8 digits, numeric only
-- **Invalid Slot Number**: Must be within configured range
-- **Invalid Date Format**: Must be ISO format (YYYY-MM-DDTHH:MM:SS)
-- **Lock Not Found**: Entity ID must exist and be accessible
-- **Z-Wave Communication**: Automatic retry with exponential backoff
-
-### Automation Error Handling
-
-```yaml
-automation:
-  - alias: "Safe Code Setting"
-    trigger:
-      platform: event
-      event_type: call_service
-    action:
-      - service: smart_lock_manager.set_code_advanced
-        target:
-          entity_id: lock.front_door
-        data:
-          code_slot: 1
-          usercode: "1234"
-          code_slot_name: "Test User"
-        continue_on_error: true
-      - service: notify.admin_notifications
-        data:
-          message: >
-            {% if wait.trigger %}
-              Code set successfully
-            {% else %}
-              Failed to set code - check logs
-            {% endif %}
-```
-
-## Performance Considerations
-
-### Batch Operations
-
-For multiple slot operations, use individual service calls rather than loops:
-
-```yaml
-# Preferred: Individual calls
-script:
-  setup_delivery_codes:
-    sequence:
-      - service: smart_lock_manager.set_code_advanced
-        target:
-          entity_id: lock.front_door
-        data:
-          code_slot: 1
-          usercode: "1111"
-          code_slot_name: "UPS"
-      - service: smart_lock_manager.set_code_advanced
-        target:
-          entity_id: lock.front_door
-        data:
-          code_slot: 2
-          usercode: "2222"
-          code_slot_name: "FedEx"
-```
-
-### Caching and Updates
-
-- Sensor attributes update automatically when changes occur
-- Z-Wave synchronization is performed asynchronously
-- Use `smart_lock_manager.read_codes` sparingly (every few hours max)
-- Child lock synchronization is optimized for bulk operations
-
-This documentation covers all public APIs and common usage patterns for Smart Lock Manager. For additional examples and advanced configurations, see the [main README](../README.md) and [examples directory](../examples/).
+This documentation covers all public services and common usage patterns. For an overview,
+see the [main README](../README.md).

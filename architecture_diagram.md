@@ -1,7 +1,27 @@
 # Smart Lock Manager Architecture
 
+> **Note (v2026.6.1):** The detailed ASCII diagram below predates the **zone refactor**
+> and the **opt-in engine layers**. It is kept for its accurate frontend → HTTP API →
+> service → model → coordinator → sensor → Z-Wave flow, but the following has changed:
+>
+> - **Parent/child is gone.** A `Zone` (`models/zone.py`) is now the canonical owner of
+>   the code-slot set; member locks mirror it. Each lock belongs to exactly one zone;
+>   unhomed locks sit in a pool. The `management_services.sync_child_locks` box below is
+>   replaced by the **zone services** (`zone_services.py`: create / delete / add / remove
+>   / apply / clear / update, plus `zone_settings_service.py` for `update_zone_settings`).
+> - **New opt-in engine layer** sits beside the service layer: `alert_engine.py`
+>   (OBSERVE-only health detection + recording), `auto_lock.py` (scheduled + idle), and
+>   the `notifications*` dispatcher. All three are gated by `gating.py` and are NOT
+>   constructed unless `is_dev_mock() OR engines_enabled()`. Three flags
+>   (`enable_engines` / `real_notify` / `real_autolock`) from
+>   `/config/smart_lock_manager_flags.json` or `SLM_ENABLE_*` env vars control them.
+> - **New storage:** `zone_storage.py`, `muted.py` (per-lock mute), `snooze.py`
+>   (global/per-zone snooze), `alert_storage.py` (rolling alert log).
+
 ## Overview
-Smart Lock Manager is a revolutionary Home Assistant custom component that features a pure object-oriented architecture with zero sensor pollution, advanced scheduling capabilities, and a professional custom panel interface.
+Smart Lock Manager is a Home Assistant custom component that features an object-oriented
+architecture with zero sensor pollution, a zone-based canonical code model, opt-in
+alerting / auto-lock engines, and a professional custom panel interface.
 
 ## Architectural Principles
 
@@ -88,13 +108,15 @@ Smart Lock Manager is a revolutionary Home Assistant custom component that featu
 │  │  └─────────────────┘  └─────────────────┘  └─────────────────────────┘ │   │
 │  │                                                                         │   │
 │  │  ┌─────────────────┐  ┌─────────────────┐                             │   │
-│  │  │management_      │  │ system_services │                             │   │
-│  │  │services         │  │                 │                             │   │
-│  │  │                 │  │ - generate_     │                             │   │
-│  │  │ - sync_child_   │  │   package()     │                             │   │
-│  │  │   locks()       │  │ - update_global │                             │   │
-│  │  │ - get_usage_    │  │   _settings()   │                             │   │
-│  │  │   stats()       │  │                 │                             │   │
+│  │  │management_      │  │ system_services │  ┌─────────────────────────┐│   │
+│  │  │services         │  │                 │  │ zone_services           ││   │
+│  │  │                 │  │ - generate_     │  │ + zone_settings_service ││   │
+│  │  │ - get_usage_    │  │   package()     │  │                         ││   │
+│  │  │   stats()       │  │ - update_global │  │ - create/delete_zone()  ││   │
+│  │  │ - update_lock_  │  │   _settings()   │  │ - add/remove_lock()     ││   │
+│  │  │   settings()    │  │ - pause/resume  │  │ - apply/clear_codes()   ││   │
+│  │  │ - clear_all_    │  │ - mute/unmute   │  │ - update_zone_settings()││   │
+│  │  │   slots()       │  │ - sweep_intervals│ └─────────────────────────┘│   │
 │  │  └─────────────────┘  └─────────────────┘                             │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────────┘
