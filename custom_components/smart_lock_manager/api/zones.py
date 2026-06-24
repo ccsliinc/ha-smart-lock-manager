@@ -71,12 +71,12 @@ def _all_locks(hass: HomeAssistant) -> Dict[str, SmartLockManagerLock]:
     return locks
 
 
-def _all_dev_alerts(hass: HomeAssistant) -> List[Dict[str, Any]]:
-    """Return every recorded dev alert (most-recent first), or empty.
+def _all_alerts(hass: HomeAssistant) -> List[Dict[str, Any]]:
+    """Return every recorded alert (most-recent first), or empty.
 
-    - Description: Reads the OBSERVE-ONLY alert engine's recorded alerts. The
-      engine is only present under ``SLM_DEV_MOCK``; outside dev this is always
-      empty. Records are already PIN-free by construction (the engine never
+    - Description: Reads the alert engine's recorded alerts. When no engine is
+      constructed (engines off) this is always empty. Records are already
+      PIN-free by construction (the engine never
       stores PINs). Each record may carry a ``notify_intents`` list — the
       DRY-RUN "would-notify" intents ({channel, recipients|targets, subject})
       rendered by the notification layer; nothing was actually sent.
@@ -90,7 +90,7 @@ def _all_dev_alerts(hass: HomeAssistant) -> List[Dict[str, Any]]:
 
 
 def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
-    """Build the full zones DATA payload (zones + unhomed pool + dev alerts).
+    """Build the full zones DATA payload (zones + unhomed pool + alerts).
 
     - Description: Serializes the entire in-memory zone registry (including
       empty zones) plus the unhomed lock pool, enriching each member with live
@@ -102,19 +102,19 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
       engines are off (production default) the alert/record lists are empty and
       ``engine_mode`` is ``off``. Never includes raw PINs.
     - Inputs: hass (HomeAssistant).
-    - Outputs: dict with ``zones``, ``unhomed_locks``, ``dev_alerts``,
+    - Outputs: dict with ``zones``, ``unhomed_locks``, ``alerts``,
       ``auto_lock_records``, ``engine_mode``, ``real_notify``,
       ``real_autolock`` and ``observe_only``.
     """
     mode = current_engine_mode()
     locks = _all_locks(hass)
     registry = get_zone_registry(hass)
-    dev_alerts = _all_dev_alerts(hass)
+    alerts = _all_alerts(hass)
 
     # Bucket alerts by zone_id so each zone card can show its own slice.
     # Alerts whose member is unhomed (zone_id is None) only appear top-level.
     alerts_by_zone: Dict[str, List[Dict[str, Any]]] = {}
-    for alert in dev_alerts:
+    for alert in alerts:
         zone_id = alert.get("zone_id")
         if zone_id is not None:
             alerts_by_zone.setdefault(zone_id, []).append(alert)
@@ -125,7 +125,7 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
     zones: List[Dict[str, Any]] = []
     for zone in sorted(registry.values(), key=lambda z: z.name.lower()):
         serialized = _serialize_zone(hass, zone, locks)
-        serialized["dev_alerts"] = alerts_by_zone.get(zone.zone_id, [])
+        serialized["alerts"] = alerts_by_zone.get(zone.zone_id, [])
         serialized["snoozed_until"] = zone_snoozes.get(zone.zone_id)
         zones.append(serialized)
 
@@ -136,7 +136,7 @@ def build_zones_payload(hass: HomeAssistant) -> Dict[str, Any]:
     return {
         "zones": zones,
         "unhomed_locks": unhomed,
-        "dev_alerts": dev_alerts,
+        "alerts": alerts,
         "auto_lock_records": _all_auto_lock_records(hass),
         # Phase 4d engine-mode surface. ``engine_mode`` drives the panel banner;
         # the real-flag booleans tell the user whether a real send / real

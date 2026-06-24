@@ -18,8 +18,8 @@ class SmartLockManagerPanel extends HTMLElement {
     this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
     this._zones = [];           // Zone model from /api/smart_lock_manager/zones
     this._unhomedLocks = [];    // Locks in no zone (the "+" picker pool)
-    this._observeOnly = false;  // True when an engine is constructed (gates Dev Alerts UI)
-    this._devAlerts = [];       // OBSERVE-ONLY recorded dev alerts
+    this._observeOnly = false;  // True when an engine is constructed (gates Alerts UI)
+    this._alerts = [];          // Recorded alert log
     this._engineMode = 'off';   // 'dev' | 'observe' | 'off' (Phase 4d engine-mode banner)
     this._realNotify = false;   // SLM_ENABLE_REAL_NOTIFY — real sends possible
     this._realAutolock = false; // SLM_ENABLE_REAL_AUTOLOCK — real lock.lock possible
@@ -167,10 +167,10 @@ class SmartLockManagerPanel extends HTMLElement {
       // Alert-pause (snooze) state: { global_until: <iso|null>, zones: { <id>: <iso> } }.
       // Per-zone snoozed_until is also carried on each zone object.
       this._snooze = payload?.snooze || null;
-      // OBSERVE recorded alert log. ``observe_only`` is true whenever an engine
-      // is constructed (dev OR observe); the Dev Alerts section renders then.
+      // Recorded alert log. ``observe_only`` is true whenever an engine
+      // is constructed (dev OR observe); the Alerts section renders then.
       this._observeOnly = !!payload?.observe_only;
-      this._devAlerts = Array.isArray(payload?.dev_alerts) ? payload.dev_alerts : [];
+      this._alerts = Array.isArray(payload?.alerts) ? payload.alerts : [];
       // Phase 4d engine-mode surface for the header banner.
       this._engineMode = payload?.engine_mode || 'off';
       this._realNotify = !!payload?.real_notify;
@@ -1391,17 +1391,16 @@ class SmartLockManagerPanel extends HTMLElement {
     return { icon: 'mdi:alert', color: '#f0a020', label: 'Warning' };
   }
 
-  // Render a zone's OBSERVE-ONLY "Dev Alerts" section: a collapsible header
-  // over uniform single-line rows (severity marker / door / type / message /
-  // time), recovery rows styled distinctly. Only shown under SLM_DEV_MOCK
-  // (the API only carries dev_alerts then). Clearly labeled observe-only —
-  // NO notifications are sent by the engine that records these.
-  // - Inputs: zone (zone obj with dev_alerts[]).
-  // - Outputs: HTML string ('' when not in observe-only mode).
+  // Render a zone's "Alerts" section: a collapsible header over uniform
+  // single-line rows (severity marker / door / type / message / time),
+  // recovery rows styled distinctly. Only shown when an alert engine is
+  // constructed (the API only carries alerts then).
+  // - Inputs: zone (zone obj with alerts[]).
+  // - Outputs: HTML string ('' when no engine is constructed).
   renderZoneDevAlerts(zone) {
     if (!this._observeOnly) return '';
     const zid = this._esc(zone.zone_id);
-    const alerts = Array.isArray(zone.dev_alerts) ? zone.dev_alerts : [];
+    const alerts = Array.isArray(zone.alerts) ? zone.alerts : [];
 
     const rows = alerts.map(alert => {
       const p = this.getDevAlertPresentation(alert);
@@ -1430,14 +1429,14 @@ class SmartLockManagerPanel extends HTMLElement {
     return `
       <div class="access-log-section dev-alerts-section">
         <div class="access-log-header" onclick="SmartLockManagerPanel.toggleSection('${zid}', 'alerts')">
-          <span>Dev Alerts${alerts.length ? ` (${alerts.length})` : ''}</span>
+          <span>Alerts${alerts.length ? ` (${alerts.length})` : ''}</span>
           <ha-icon icon="${chevron}" class="zone-section-chevron${expanded ? ' expanded' : ''}" style="width:18px;height:18px;"></ha-icon>
         </div>
         <div class="dev-alerts-banner" style="${expanded ? '' : 'display:none;'}">
           Dev / observe-only — no notifications sent
         </div>
         <div class="access-log-body" style="${expanded ? '' : 'display:none;'}">
-          ${alerts.length ? rows : '<div class="access-log-empty">No dev alerts recorded yet.</div>'}
+          ${alerts.length ? rows : '<div class="access-log-empty">No alerts recorded yet.</div>'}
         </div>
       </div>
     `;
@@ -2528,7 +2527,7 @@ class SmartLockManagerPanel extends HTMLElement {
           flex-shrink: 0;
         }
 
-        /* OBSERVE-ONLY Dev Alerts section. */
+        /* Alerts section. */
         .dev-alerts-banner {
           padding: 5px 12px;
           font-size: 11px;
