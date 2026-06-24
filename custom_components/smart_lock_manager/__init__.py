@@ -159,9 +159,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # OBSERVE/DRY-RUN alert detection engine (Phase 4d). Instantiated exactly
     # once per HA process when ``engines_active()`` (dev-mock OR the explicit
     # SLM_ENABLE_ENGINES flag). With both off (production default) it is never
-    # constructed and stays fully inert. In dev it drives mock locks; in PROD
-    # OBSERVE it detects + records against the REAL office entities in parallel
-    # with the live pyscripts. It sends ZERO notifications unless the
+    # constructed and stays fully inert. In dev it drives mock locks; in
+    # OBSERVE it detects + records against real entities. It sends ZERO
+    # notifications unless the
     # independent SLM_ENABLE_REAL_NOTIFY flag is set (and not dev). Started
     # after zones load so it can enumerate every member lock. The companion
     # dev_simulate_alert service is DEV-MOCK-ONLY (see its own guard below).

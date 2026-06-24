@@ -1,9 +1,9 @@
 """Per-zone operational settings for Smart Lock Manager (Phase 4a, backend).
 
-This module defines the structured, JSON-round-trippable config blocks that fold
-the legacy office/home pyscript behaviour (business hours, scheduled COB
-auto-lock, idle auto-lock, alerting, notification) onto the :class:`~.zone.Zone`
-data model. The blocks live here (not in ``zone.py``) so the Zone module stays
+This module defines the structured, JSON-round-trippable config blocks that
+carry per-zone behaviour (business hours, scheduled COB auto-lock, idle
+auto-lock, alerting, notification) on the :class:`~.zone.Zone` data model. The
+blocks live here (not in ``zone.py``) so the Zone module stays
 under the 500-line limit and the settings schema has one clear home.
 
 Design contract:

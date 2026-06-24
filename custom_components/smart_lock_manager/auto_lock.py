@@ -1,40 +1,37 @@
-"""AUTO-LOCK engine for Smart Lock Manager (Phase 4c, dev-gated).
+"""AUTO-LOCK engine for Smart Lock Manager (dev-gated).
 
-This folds the legacy office/home auto-lock pyscripts onto the zone model. It
-runs two modes per zone, driven entirely by the zone's ``settings``:
+This drives auto-locking on the zone model. It runs two modes per zone, driven
+entirely by the zone's ``settings``:
 
-* **Scheduled COB** (port of ``office/.../automations/lock_doors.py``) — at a
-  configured ``time`` on configured ``days`` it locks every member with a
-  verify + retry loop (up to ``max_attempts``, ``settle_seconds`` apart),
-  verifying via Door Lock CC (98) ``boltStatus`` when ``verify_boltstatus`` is
-  set, else a heuristic on lock state + jam sensor. Per-member failure
-  isolation; a final failure is routed through the existing alert/notify path
-  (CRIT) so it shows in Dev Alerts + dry-run notify intents.
-* **Idle** (port of ``home/.../home_autolock_front_door.yaml``) — N minutes
-  after a member unlocks it auto-locks (same verify/retry). When ``sun_aware``
-  it uses ``night_minutes`` after dusk / ``day_minutes`` in daytime, computed
-  from ``sun.sun`` ``next_dusk`` / ``next_dawn``. The timer is cancelled/reset
-  on re-lock or re-unlock.
+* **Scheduled COB** (close-of-business) — at a configured ``time`` on configured
+  ``days`` it locks every member with a verify + retry loop (up to
+  ``max_attempts``, ``settle_seconds`` apart), verifying via Door Lock CC (98)
+  ``boltStatus`` when ``verify_boltstatus`` is set, else a heuristic on lock
+  state + jam sensor. Per-member failure isolation; a final failure is routed
+  through the existing alert/notify path (CRIT) so it shows in the alert log +
+  dry-run notify intents.
+* **Idle** — N minutes after a member unlocks it auto-locks (same verify/retry).
+  When ``sun_aware`` it uses ``night_minutes`` after dusk / ``day_minutes`` in
+  daytime, computed from ``sun.sun`` ``next_dusk`` / ``next_dawn``. The timer is
+  cancelled/reset on re-lock or re-unlock.
 
-Two ORTHOGONAL layers of gating make this safe to run beside the live pyscripts:
+Two ORTHOGONAL layers of gating make this safe:
 
-* **MODE-GATED construction** (Phase 4d). The engine is instantiated when
+* **MODE-GATED construction**. The engine is instantiated when
   ``is_dev_mock() OR engines_enabled()`` (see :func:`.gating.engines_active` and
   ``async_setup_entry`` in ``__init__.py``), exactly like
   :class:`~.alert_engine.AlertEngine`. With both flags off (production default)
-  the class is never built, so production behaviour is 100% unchanged. Under
-  ``SLM_ENABLE_ENGINES`` (dev-mock off) it runs in PROD OBSERVE against the real
-  office zones.
+  the class is never built, so production behaviour is unchanged. Under
+  ``SLM_ENABLE_ENGINES`` (dev-mock off) it runs in OBSERVE against real zones.
 * **Execution gating** (INDEPENDENT of construction). Issuing an ACTUAL
   ``lock.lock`` is permitted only when :func:`is_dev_mock` is true (the lock
   entities are dev template locks backed by ``input_boolean`` — never hardware)
   OR the single explicit env flag :data:`REAL_AUTOLOCK_ENV`
   (``SLM_ENABLE_REAL_AUTOLOCK``, default OFF) is set. When NEITHER holds the
   engine is in OBSERVE posture: it RECORDS a "would auto-lock" intent (members +
-  scheduled time/mode) for parity and issues NO ``lock.lock``, and it does NOT
-  read boltStatus / verify (nothing was locked). This phase ships the real flag
-  OFF, so in PROD OBSERVE the engine records intents only and cannot double-lock
-  a real door alongside the live pyscripts.
+  scheduled time/mode) and issues NO ``lock.lock``, and it does NOT read
+  boltStatus / verify (nothing was locked). The real flag ships OFF, so in
+  OBSERVE the engine records intents only and issues no real lock.
 
 The engine only acts on zones whose corresponding mode is ``enabled`` in
 settings — it respects the opt-in and never auto-locks a zone that did not.

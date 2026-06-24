@@ -1,7 +1,7 @@
 """OBSERVE-ONLY alert detection engine for Smart Lock Manager (dev-gated).
 
-This is the FIRST push of folding the office/home pyscript alerting into the
-SLM integration. It is deliberately constrained:
+It detects lock-health conditions across zones and records them. It is
+deliberately constrained:
 
 * **OBSERVE-ONLY detection** — it DETECTS and RECORDS alerts only. Notification
   is delegated to the DRY-RUN dispatcher (see :mod:`.notifications`), which sends
@@ -11,13 +11,9 @@ SLM integration. It is deliberately constrained:
 * **MODE-GATED construction** (Phase 4d) — the engine is instantiated when
   ``is_dev_mock() OR engines_enabled()`` (see :func:`.gating.engines_active` and
   ``async_setup_entry`` in ``__init__.py``). With both flags off (production
-  default) the class is never constructed, so it cannot run alongside the live
-  pyscripts and production behavior is 100% unchanged. Under ``SLM_ENABLE_ENGINES``
-  (dev-mock off) it runs in PROD OBSERVE against the REAL office entities,
-  detecting + recording in parallel with the pyscripts but sending nothing.
-* **Pyscripts untouched** — the detection thresholds here MIRROR the existing
-  pyscripts so the two can be compared, but the pyscripts are not modified or
-  imported.
+  default) the class is never constructed and production behavior is unchanged.
+  Under ``SLM_ENABLE_ENGINES`` (dev-mock off) it runs in OBSERVE against real
+  entities, detecting + recording but sending nothing.
 
 This module owns the engine ORCHESTRATION (lifecycle, subscription topology,
 event routing, recording + persistence, the read API and the external-alert
@@ -474,7 +470,7 @@ class AlertEngine(
         - Description: Public entrypoint so the :mod:`..auto_lock` engine can
           surface a final lock-failure into the SAME recorded-alert + DRY-RUN
           notify stream the detectors use. It reuses :meth:`_record`, so the
-          alert lands in Dev Alerts and produces "would-notify" intents per the
+          alert lands in the alert log and produces "would-notify" intents per the
           owning zone's notify config — exactly like a detector alert. Recording
           is the only action; nothing is ever really sent in dev.
         - Inputs: entity_id (str member lock id), alert_type (str id, e.g.

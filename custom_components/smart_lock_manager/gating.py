@@ -12,7 +12,7 @@ Three independent env flags, all default OFF:
   harness. Mock Z-Wave; engines drive dummy template locks; notify forced
   dry-run. Unchanged by this phase.
 * ``SLM_ENABLE_ENGINES`` (:data:`ENABLE_ENGINES_ENV`) — the NEW Phase-4d flag.
-  When set against the REAL office HA (dev-mock OFF) the engines run in a SAFE
+  When set against a REAL HA install (dev-mock OFF) the engines run in a SAFE
   OBSERVE / DRY-RUN posture: alert detects + records against real entities,
   notify renders dry-run intents only, auto-lock records "would auto-lock"
   intents but issues NO real ``lock.lock``.
@@ -102,8 +102,8 @@ from .dev_mock import is_dev_mock
 _LOGGER = logging.getLogger(__name__)
 
 # The NEW Phase-4d flag: run the engines in a SAFE observe/dry-run posture on
-# the REAL office HA (dev-mock OFF) in parallel with the live pyscripts. Default
-# OFF -> in production the engines are not even constructed.
+# a REAL HA install (dev-mock OFF). Default OFF -> in production the engines are
+# not even constructed.
 ENABLE_ENGINES_ENV = "SLM_ENABLE_ENGINES"
 
 # Engine-mode identifiers returned by :func:`current_engine_mode`.
@@ -236,7 +236,7 @@ def engines_enabled() -> bool:
     - Description: Reads :data:`ENABLE_ENGINES_ENV` OR-combined with the flags
       file's ``enable_engines`` (env truthy OR file truthy -> enabled). Default
       OFF. This is the switch that lets the engines run in OBSERVE mode against
-      the real office HA; it does NOT by itself enable any real side-effect.
+      a real HA install; it does NOT by itself enable any real side-effect.
     - Inputs: none (reads process environment + flags file).
     - Outputs: bool.
     """

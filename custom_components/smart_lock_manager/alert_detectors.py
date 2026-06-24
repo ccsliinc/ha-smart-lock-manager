@@ -73,8 +73,8 @@ def _parse_hhmm(value: str, fallback: time) -> time:
 def _tiers_with_severity(seconds_list: List[int]) -> tuple:
     """Map a list of tier seconds to ``(seconds, severity)`` pairs.
 
-    - Description: First tier is WARN, all later tiers CRIT — the legacy
-      front_middle_lock.py escalation shape.
+    - Description: First tier is WARN, all later tiers CRIT (escalating
+      sustained-unlock severity).
     - Inputs: seconds_list (list[int]).
     - Outputs: tuple of (int seconds, str severity).
     """
@@ -84,14 +84,13 @@ def _tiers_with_severity(seconds_list: List[int]) -> tuple:
     )
 
 
-# Outside-hours window + gate (mirror unlocked_outside_business.py), sourced
-# from the shared zone-settings defaults.
+# Outside-hours window + gate, sourced from the shared zone-settings defaults.
 DEFAULT_BUSINESS_OPEN = _parse_hhmm(DEFAULT_OPEN_TIME, time(8, 30))
 DEFAULT_BUSINESS_CLOSE = _parse_hhmm(DEFAULT_CLOSE_TIME, time(17, 30))
 DEFAULT_WORKDAY_SENSOR = DEFAULT_WORKDAY_ENTITY
 
 # Sustained-unlock tiers as (seconds, severity), derived from the shared tier
-# seconds (mirror front_middle_lock.py: first tier WARN, later tiers CRIT).
+# seconds (first tier WARN, later tiers CRIT).
 DEFAULT_SUSTAINED_TIERS_WITH_SEV = _tiers_with_severity(DEFAULT_SUSTAINED_TIERS)
 
 # Low-battery threshold (percent) and offline-debounce window (seconds).

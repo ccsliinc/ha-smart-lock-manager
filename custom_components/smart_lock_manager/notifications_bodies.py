@@ -5,10 +5,10 @@ notification dispatcher stays lean. This module owns the two data-driven
 builder families that turn a recorded alert record into the exact email
 SUBJECT and BODY text:
 
-* **Subjects** reproduce the legacy pyscripts' ``send_alert`` subject wording
-  VERBATIM (keyed on the member entity id) so the user's mail filters keep
-  matching. The fleet wrapper + severity marker are applied separately by
-  :func:`.notifications._format_subject`.
+* **Subjects** build a concise, self-labeled subject line per alert type
+  (keyed on the member entity id). The subject prefix is derived from the
+  install's Home Assistant location name. The fleet wrapper + severity marker
+  are applied separately by :func:`.notifications_channels._format_subject`.
 * **Bodies** give each alert type a small, recovery-aware multi-line body so
   the dev/parity panel and any real send carry a human-readable description
   (door friendly name, state, timestamps, severity / percent / detail).
@@ -23,8 +23,10 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List
 
-# Subject prefix shared by every SLM alert subject (plain-hyphen variant).
-_SUBJECT_PREFIX = "office HA -"
+# Default subject prefix when no Home Assistant location name is available.
+# The live prefix is normally derived from ``hass.config.location_name`` (see
+# :func:`subject_prefix_for`) so each install's alert subjects are self-labeled.
+_DEFAULT_SUBJECT_PREFIX = "Home Assistant -"
 
 # Extracts the elapsed seconds out of a sustained-unlock message body
 # ("Unlocked >15s without re-lock" / "...(dev-simulated)").
@@ -94,78 +96,94 @@ def _iso_of(alert: Dict[str, Any]) -> str:
 # --- Subject builders -------------------------------------------------------
 
 
-def _subj_sustained(alert: Dict[str, Any]) -> str:
-    """Sustained-unlock subject — mirrors front_middle_lock.py.
+def subject_prefix_for(location_name: Any) -> str:
+    """Return the alert subject prefix derived from the HA location name.
 
-    Alert:    ``office HA - {entity} unlocked >{n}s``
-    Recovery: ``office HA - {entity} locked again``
+    - Description: Each install labels its alert subjects with its own Home
+      Assistant location name (``hass.config.location_name``) so a fleet of
+      installs stays distinguishable in a shared mailbox. Falls back to
+      :data:`_DEFAULT_SUBJECT_PREFIX` when the name is missing/blank.
+    - Inputs: location_name (str | None — usually ``hass.config.location_name``).
+    - Outputs: str prefix ending in a plain hyphen, e.g. ``"My Home -"``.
+    - Example: ``subject_prefix_for("My Home") == "My Home -"``.
+    """
+    name = str(location_name or "").strip()
+    if not name:
+        return _DEFAULT_SUBJECT_PREFIX
+    return f"{name} -"
+
+
+def _subj_sustained(alert: Dict[str, Any], prefix: str) -> str:
+    """Sustained-unlock subject.
+
+    Alert:    ``{prefix} {entity} unlocked >{n}s``
+    Recovery: ``{prefix} {entity} locked again``
     """
     entity = _entity_of(alert)
     if alert.get("is_recovery"):
-        return f"{_SUBJECT_PREFIX} {entity} locked again"
+        return f"{prefix} {entity} locked again"
     seconds = _first_int(_SECONDS_RE, str(alert.get("message")), 15)
-    return f"{_SUBJECT_PREFIX} {entity} unlocked >{seconds}s"
+    return f"{prefix} {entity} unlocked >{seconds}s"
 
 
-def _subj_outside_hours(alert: Dict[str, Any]) -> str:
-    """Outside-hours subject — mirrors unlocked_outside_business.py.
+def _subj_outside_hours(alert: Dict[str, Any], prefix: str) -> str:
+    """Outside-hours subject.
 
-    Alert:    ``office HA - door {entity} unlocked outside business hours``
-    Recovery: ``office HA - {entity} locked again``
+    Alert:    ``{prefix} door {entity} unlocked outside business hours``
+    Recovery: ``{prefix} {entity} locked again``
     """
     entity = _entity_of(alert)
     if alert.get("is_recovery"):
-        return f"{_SUBJECT_PREFIX} {entity} locked again"
-    return f"{_SUBJECT_PREFIX} door {entity} unlocked outside business hours"
+        return f"{prefix} {entity} locked again"
+    return f"{prefix} door {entity} unlocked outside business hours"
 
 
-def _subj_auto_lock_failed(alert: Dict[str, Any]) -> str:
-    """COB auto-lock failure subject — mirrors lock_doors.py (EM-DASH).
+def _subj_auto_lock_failed(alert: Dict[str, Any], prefix: str) -> str:
+    """COB auto-lock failure subject.
 
-    Alert: ``office HA — {name} FAILED to auto-lock at COB``
+    Alert: ``{prefix} {name} FAILED to auto-lock at COB``
     """
-    # NOTE: em-dash, and uses the friendly NAME (lock_doors.py keys on name).
-    return f"office HA — {_name_of(alert)} FAILED to auto-lock at COB"
+    return f"{prefix} {_name_of(alert)} FAILED to auto-lock at COB"
 
 
-def _subj_jam(alert: Dict[str, Any]) -> str:
-    """Jam subject — SLM-only house style (no pyscript equivalent).
+def _subj_jam(alert: Dict[str, Any], prefix: str) -> str:
+    """Jam subject.
 
-    Alert:    ``office HA - {entity} jammed``
-    Recovery: ``office HA - {entity} jam cleared``
+    Alert:    ``{prefix} {entity} jammed``
+    Recovery: ``{prefix} {entity} jam cleared``
     """
     entity = _entity_of(alert)
     state = "jam cleared" if alert.get("is_recovery") else "jammed"
-    return f"{_SUBJECT_PREFIX} {entity} {state}"
+    return f"{prefix} {entity} {state}"
 
 
-def _subj_low_battery(alert: Dict[str, Any]) -> str:
-    """Low-battery subject — SLM-only house style.
+def _subj_low_battery(alert: Dict[str, Any], prefix: str) -> str:
+    """Low-battery subject.
 
-    Alert:    ``office HA - {entity} battery low ({pct}%)``
-    Recovery: ``office HA - {entity} battery recovered ({pct}%)``
+    Alert:    ``{prefix} {entity} battery low ({pct}%)``
+    Recovery: ``{prefix} {entity} battery recovered ({pct}%)``
     """
     entity = _entity_of(alert)
     pct = _first_int(_PERCENT_RE, str(alert.get("message")), 0)
     state = "battery recovered" if alert.get("is_recovery") else "battery low"
-    return f"{_SUBJECT_PREFIX} {entity} {state} ({pct}%)"
+    return f"{prefix} {entity} {state} ({pct}%)"
 
 
-def _subj_offline(alert: Dict[str, Any]) -> str:
-    """Offline subject — SLM-only house style.
+def _subj_offline(alert: Dict[str, Any], prefix: str) -> str:
+    """Offline subject.
 
-    Alert:    ``office HA - {entity} offline``
-    Recovery: ``office HA - {entity} back online``
+    Alert:    ``{prefix} {entity} offline``
+    Recovery: ``{prefix} {entity} back online``
     """
     entity = _entity_of(alert)
     state = "back online" if alert.get("is_recovery") else "offline"
-    return f"{_SUBJECT_PREFIX} {entity} {state}"
+    return f"{prefix} {entity} {state}"
 
 
 # alert_type -> subject builder. Single source of truth so the subject wording
 # stays data-driven (add a row, not an if/else). Keys mirror the ``ALERT_*``
 # ids in :mod:`.alert_detectors` / :mod:`.auto_lock_verify`.
-_SUBJECT_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
+_SUBJECT_BUILDERS: Dict[str, Callable[[Dict[str, Any], str], str]] = {
     "sustained_unlock": _subj_sustained,
     "outside_hours": _subj_outside_hours,
     "auto_lock_failed": _subj_auto_lock_failed,
@@ -175,23 +193,26 @@ _SUBJECT_BUILDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
 }
 
 
-def build_alert_subject(alert: Dict[str, Any]) -> str:
-    """Build the pyscript-parity (pre-wrap) email subject for an alert record.
+def build_alert_subject(alert: Dict[str, Any], prefix: str | None = None) -> str:
+    """Build the (pre-wrap) email subject for an alert record.
 
-    - Description: Dispatches on ``alert_type`` to the matching pyscript-style
-      builder (see :data:`_SUBJECT_BUILDERS`). Unknown types fall back to a
-      consistent ``office HA - {entity} {message}`` line so a new alert type can
-      never produce an empty/garbled subject. The fleet wrapper + severity
-      marker are added afterwards by :func:`.notifications._format_subject`.
-    - Inputs: alert (dict alert record from the engine).
+    - Description: Dispatches on ``alert_type`` to the matching subject builder
+      (see :data:`_SUBJECT_BUILDERS`). Unknown types fall back to a consistent
+      ``{prefix} {entity} {message}`` line so a new alert type can never produce
+      an empty/garbled subject. The fleet wrapper + severity marker are added
+      afterwards by :func:`.notifications_channels._format_subject`.
+    - Inputs: alert (dict alert record from the engine), prefix (subject prefix,
+      normally from :func:`subject_prefix_for`; defaults to the generic prefix).
     - Outputs: str pre-wrap subject body.
     """
+    if prefix is None:
+        prefix = _DEFAULT_SUBJECT_PREFIX
     builder = _SUBJECT_BUILDERS.get(str(alert.get("alert_type")))
     if builder is not None:
-        return builder(alert)
+        return builder(alert, prefix)
     entity = _entity_of(alert)
     message = alert.get("message") or alert.get("alert_type") or "alert"
-    return f"{_SUBJECT_PREFIX} {entity} {message}"
+    return f"{prefix} {entity} {message}"
 
 
 # --- Body builders ----------------------------------------------------------

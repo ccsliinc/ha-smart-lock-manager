@@ -6,8 +6,8 @@ notification *intents* and, in a future production build, into real sends.
 * **DRY-RUN is the DEFAULT and is forced ON under ``SLM_DEV_MOCK``.** In dry-run
   the layer NEVER hits SMTP2GO and NEVER calls a ``notify`` /
   ``persistent_notification`` service; it only LOGS the fully-rendered payload
-  and RETURNS a structured "would-notify" intent for the dev API/panel, so it
-  can run alongside the user's live pyscripts without ever double-notifying.
+  and RETURNS a structured "would-notify" intent for the API/panel, so it can
+  run in OBSERVE without ever sending a real notification.
 * **One explicit real-send flag.** Real sending is gated by the single env var
   :data:`REAL_NOTIFY_ENV` (``SLM_ENABLE_REAL_NOTIFY``, default OFF) AND requires
   that dry-run is NOT forced. So dev never sends, and prod stays silent until
@@ -35,6 +35,7 @@ from .notifications_bodies import (
     build_alert_body,
     build_alert_body_lines,
     build_alert_subject,
+    subject_prefix_for,
 )
 from .notifications_channels import (
     CHANNEL_EMAIL,
@@ -52,19 +53,17 @@ _LOGGER = logging.getLogger(__name__)
 # when set, real sending is suppressed whenever dry-run is forced (dev mock).
 REAL_NOTIFY_ENV = "SLM_ENABLE_REAL_NOTIFY"
 
-# --- Pyscript-parity subject/body builders ---------------------------------
-# The user's mail filters key on the EXACT subject body the legacy pyscripts
-# pass to ``send_alert(...)``; SLM reproduces that wording verbatim (keyed on
-# the MEMBER ENTITY ID, e.g. ``lock.front_north``, NOT the zone display name).
-# Punctuation parity matters: the sustained / outside-hours pyscripts use a
-# plain hyphen ("office HA - ..."), while ``lock_doors.py`` (COB auto-lock)
-# uses an EM-DASH ("office HA — ..."); both are reproduced exactly. The actual
-# subject AND body builders now live in :mod:`.notifications_bodies`, and the
-# SMTP2GO / mobile channel notifiers + the fleet subject wrapper live in
-# :mod:`.notifications_channels` (both split out to keep this module under the
-# 500-line limit). ``build_alert_subject`` / ``build_alert_body`` are
-# re-exported above so ``from .notifications import build_alert_subject`` (and
-# ``...body``) both keep working.
+# --- Subject/body builders --------------------------------------------------
+# Alert subjects are keyed on the MEMBER ENTITY ID (e.g. ``lock.front_door``,
+# NOT the zone display name) and prefixed with the install's Home Assistant
+# location name so a fleet of installs stays distinguishable in a shared
+# mailbox. The actual subject AND body builders live in
+# :mod:`.notifications_bodies`, and the SMTP2GO / mobile channel notifiers +
+# the fleet subject wrapper live in :mod:`.notifications_channels` (both split
+# out to keep this module under the 500-line limit).
+# ``build_alert_subject`` / ``build_alert_body`` are re-exported above so
+# ``from .notifications import build_alert_subject`` (and ``...body``) both
+# keep working.
 
 
 def real_send_enabled() -> bool:
@@ -147,7 +146,8 @@ class NotificationDispatcher:
         """
         intents: List[Dict[str, Any]] = []
         severity = self._severity_for(alert)
-        subject = build_alert_subject(alert)
+        prefix = subject_prefix_for(self.hass.config.location_name)
+        subject = build_alert_subject(alert, prefix)
         body = build_alert_body(alert)
         body_lines = build_alert_body_lines(alert)
 

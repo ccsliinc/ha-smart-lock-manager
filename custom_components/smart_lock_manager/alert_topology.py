@@ -111,9 +111,9 @@ class AlertTopologyMixin:
           :meth:`_resolve_battery_entity` resolver (explicit
           ``member_meta.battery_entity`` first, auto-discovery
           ``sensor.<object_id>_battery`` second).
-        - Inputs: lock_entity_id (str), e.g. ``lock.front_north``.
+        - Inputs: lock_entity_id (str), e.g. ``lock.front_door``.
         - Outputs: str, e.g. ``sensor.front_battery_level`` (override) or
-          ``sensor.front_north_battery`` (auto-discovery fallback).
+          ``sensor.front_door_battery`` (auto-discovery fallback).
         """
         return self._resolve_battery_entity(lock_entity_id)
 

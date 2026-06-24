@@ -747,8 +747,31 @@ class TestDetectorGating:
 class TestAlertSubjects:
     """Pyscript-parity email subject wording (keyed on member entity id)."""
 
-    def test_sustained_subject_matches_pyscript(self) -> None:
-        """sustained_unlock -> 'office HA - {entity} unlocked >{n}s'."""
+    def test_subject_prefix_derived_from_location_name(self) -> None:
+        """The subject prefix is derived from the HA location name."""
+        from custom_components.smart_lock_manager.notifications_bodies import (
+            subject_prefix_for,
+        )
+
+        assert subject_prefix_for("My Home") == "My Home -"
+        # Blank / missing location name falls back to the generic prefix.
+        assert subject_prefix_for("") == "Home Assistant -"
+        assert subject_prefix_for(None) == "Home Assistant -"
+
+    def test_subject_uses_supplied_prefix(self) -> None:
+        """A supplied prefix is used verbatim for the subject line."""
+        alert = {
+            "alert_type": ALERT_SUSTAINED,
+            "member_entity_id": "lock.front_north",
+            "message": "Unlocked >15s without re-lock",
+            "is_recovery": False,
+        }
+        assert build_alert_subject(alert, "My Home -") == (
+            "My Home - lock.front_north unlocked >15s"
+        )
+
+    def test_sustained_subject_default_prefix(self) -> None:
+        """sustained_unlock -> '{prefix} {entity} unlocked >{n}s'."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
             "member_entity_id": "lock.front_north",
@@ -756,12 +779,12 @@ class TestAlertSubjects:
             "message": "Unlocked >15s without re-lock",
             "is_recovery": False,
         }
-        assert (
-            build_alert_subject(alert) == "office HA - lock.front_north unlocked >15s"
+        assert build_alert_subject(alert) == (
+            "Home Assistant - lock.front_north unlocked >15s"
         )
 
     def test_sustained_recovery_subject(self) -> None:
-        """sustained_unlock recovery -> 'office HA - {entity} locked again'."""
+        """sustained_unlock recovery -> '{prefix} {entity} locked again'."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
             "member_entity_id": "lock.front_middle_door_lock",
@@ -770,11 +793,11 @@ class TestAlertSubjects:
         }
         assert (
             build_alert_subject(alert)
-            == "office HA - lock.front_middle_door_lock locked again"
+            == "Home Assistant - lock.front_middle_door_lock locked again"
         )
 
-    def test_outside_hours_subject_matches_pyscript(self) -> None:
-        """outside_hours -> 'office HA - door {entity} unlocked outside ...'."""
+    def test_outside_hours_subject(self) -> None:
+        """outside_hours -> '{prefix} door {entity} unlocked outside ...'."""
         alert = {
             "alert_type": ALERT_OUTSIDE_HOURS,
             "member_entity_id": "lock.rear",
@@ -782,29 +805,29 @@ class TestAlertSubjects:
             "is_recovery": False,
         }
         assert build_alert_subject(alert) == (
-            "office HA - door lock.rear unlocked outside business hours"
+            "Home Assistant - door lock.rear unlocked outside business hours"
         )
 
     def test_outside_hours_recovery_subject(self) -> None:
-        """outside_hours recovery -> 'office HA - {entity} locked again'."""
+        """outside_hours recovery -> '{prefix} {entity} locked again'."""
         alert = {
             "alert_type": ALERT_OUTSIDE_HOURS,
             "member_entity_id": "lock.rear",
             "is_recovery": True,
         }
-        assert build_alert_subject(alert) == "office HA - lock.rear locked again"
+        assert build_alert_subject(alert) == "Home Assistant - lock.rear locked again"
 
-    def test_auto_lock_failed_subject_uses_emdash_and_name(self) -> None:
-        """auto_lock_failed -> 'office HA — {name} FAILED to auto-lock at COB'."""
+    def test_auto_lock_failed_subject_uses_name(self) -> None:
+        """auto_lock_failed -> '{prefix} {name} FAILED to auto-lock at COB'."""
         alert = {
             "alert_type": "auto_lock_failed",
             "member_entity_id": "lock.front_north",
             "door_name": "Front North",
             "message": "scheduled auto-lock FAILED after 3 attempt(s)",
         }
-        # EM-DASH (—), and the friendly NAME, exactly like lock_doors.py.
+        # Uses the friendly NAME (not the entity id).
         assert build_alert_subject(alert) == (
-            "office HA — Front North FAILED to auto-lock at COB"
+            "Home Assistant - Front North FAILED to auto-lock at COB"
         )
 
     def test_slm_only_subjects(self) -> None:
@@ -814,7 +837,7 @@ class TestAlertSubjects:
             "member_entity_id": "lock.bathroom",
             "is_recovery": False,
         }
-        assert build_alert_subject(jam) == "office HA - lock.bathroom jammed"
+        assert build_alert_subject(jam) == "Home Assistant - lock.bathroom jammed"
 
         battery = {
             "alert_type": ALERT_LOW_BATTERY,
@@ -823,7 +846,7 @@ class TestAlertSubjects:
             "is_recovery": False,
         }
         assert build_alert_subject(battery) == (
-            "office HA - lock.suite_105 battery low (8%)"
+            "Home Assistant - lock.suite_105 battery low (8%)"
         )
 
         offline = {
@@ -831,16 +854,18 @@ class TestAlertSubjects:
             "member_entity_id": "lock.suite_106",
             "is_recovery": False,
         }
-        assert build_alert_subject(offline) == "office HA - lock.suite_106 offline"
+        assert build_alert_subject(offline) == "Home Assistant - lock.suite_106 offline"
 
     def test_unknown_type_falls_back_to_house_style(self) -> None:
-        """An unknown alert_type still yields a non-empty 'office HA - ...'."""
+        """An unknown alert_type still yields a non-empty '{prefix} ...'."""
         alert = {
             "alert_type": "brand_new_type",
             "member_entity_id": "lock.x",
             "message": "something happened",
         }
-        assert build_alert_subject(alert) == ("office HA - lock.x something happened")
+        assert build_alert_subject(alert) == (
+            "Home Assistant - lock.x something happened"
+        )
 
 
 class TestNotificationRouting:
@@ -899,8 +924,9 @@ class TestNotificationRouting:
             assert all(i["dry_run"] is True for i in intents), alert_type
             assert all(i["sent"] is False for i in intents), alert_type
             email = next(i for i in intents if i["channel"] == "email")
-            # The new pyscript-style subject (post-wrap) is present.
-            assert "office HA -" in email["subject"], alert_type
+            # The alert subject (post-wrap) carries the per-install prefix
+            # (derived from the HA location name) plus the entity line.
+            assert LOCK_ENTITY in email["subject"], alert_type
 
 
 class TestAutoLockEngine:

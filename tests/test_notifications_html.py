@@ -106,7 +106,7 @@ async def test_card_heading_single_marker_no_fleet_prefix(hass) -> None:
     The heading carries exactly one marker and no fleet prefix, while the email
     Subject header stays fully wrapped.
     """
-    clean_subject = "office HA - lock.rear battery low (87%)"
+    clean_subject = "Home Assistant - lock.rear battery low (87%)"
     notifier = EmailNotifier(hass)
 
     async def _fake_creds():

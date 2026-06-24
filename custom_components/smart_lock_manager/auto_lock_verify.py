@@ -336,7 +336,7 @@ class AutoLockVerifyMixin:
     ) -> None:
         """Route a final auto-lock failure to the AlertEngine (CRIT).
 
-        - Description: Surfaces the failure into the SAME Dev Alerts + DRY-RUN
+        - Description: Surfaces the failure into the SAME alert log + DRY-RUN
           notify stream the detectors use, via ``AlertEngine.record_external``.
           A no-op (logged) if the alert engine is somehow absent.
         - Inputs: zone (Zone), entity_id (str), mode (str), attempts (int),
