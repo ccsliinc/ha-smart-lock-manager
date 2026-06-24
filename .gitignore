@@ -42,6 +42,10 @@ Thumbs.db
 .coverage
 .pytest_cache/
 htmlcov/
+.mypy_cache/
+
+# Claude Code working dir
+.claude/
 
 # Distribution / packaging
 .Python
