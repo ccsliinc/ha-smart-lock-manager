@@ -39,7 +39,7 @@ class TestCodeSlot:
         sample_code_slot.pin_code = None
         assert not sample_code_slot.is_valid_now()
 
-    @patch("custom_components.smart_lock_manager.models.lock.datetime")
+    @patch("custom_components.smart_lock_manager.models.slot.datetime")
     def test_is_valid_now_time_restrictions(self, mock_datetime, weekend_code_slot):
         """Test time-based validity checking."""
         # Mock current time as Monday (weekday=0)
@@ -54,7 +54,7 @@ class TestCodeSlot:
         # Weekend-only slot should be valid on Saturday
         assert weekend_code_slot.is_valid_now()
 
-    @patch("custom_components.smart_lock_manager.models.lock.datetime")
+    @patch("custom_components.smart_lock_manager.models.slot.datetime")
     def test_is_valid_now_hour_restrictions(self, mock_datetime, sample_code_slot):
         """Test hour-based validity checking."""
         # Set hour restrictions (9-17, business hours)
@@ -202,7 +202,7 @@ class TestSmartLockManagerLock:
     def test_get_valid_slots_now(self, lock_with_slots):
         """Test getting currently valid slots."""
         with patch(
-            "custom_components.smart_lock_manager.models.lock.datetime"
+            "custom_components.smart_lock_manager.models.slot.datetime"
         ) as mock_dt:
             # Mock current time as Saturday morning (weekend slot should be valid)
             mock_dt.now.return_value = datetime(2024, 1, 6, 10, 0)  # Saturday

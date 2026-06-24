@@ -19,7 +19,6 @@ from homeassistant.core import HomeAssistant, ServiceCall
 
 from ..const import ATTR_CODE_SLOT, ATTR_ENTITY_ID, DOMAIN, PRIMARY_LOCK
 from ..dev_mock import (
-    MOCK_DB,
     is_dev_mock,
     mock_get_usercode,
     mock_node_for_entity,
@@ -31,6 +30,11 @@ from ..models.lock import (
     SmartLockManagerLock,
 )
 from .helpers import find_lock
+from .zwave_io import (  # re-exported: external callers import these from here
+    _clear_usercode,
+    _refresh_slot_cache,
+    _set_usercode_with_status,
+)
 
 
 def _reject_for_prefix_collision(
@@ -92,62 +96,6 @@ except (ModuleNotFoundError, ImportError):
     ZWAVE_JS_AVAILABLE = False
 
 
-async def _set_usercode_with_status(
-    hass: HomeAssistant,
-    entity_id: str,
-    code_slot: int,
-    usercode: str,
-    node: Any = None,
-) -> None:
-    """Write a user code to the lock via HA service.
-
-    Simple write — no explicit userIdStatus set, no sleep, no cache refresh.
-    The OLD working behavior: just write the code and let the lock handle it.
-
-    Args:
-        hass: Home Assistant instance.
-        entity_id: Lock entity ID.
-        code_slot: Slot number to program.
-        usercode: PIN code string (numeric, 4-8 digits).
-        node: Z-Wave JS node object (unused, kept for call-site compatibility).
-    """
-    if is_dev_mock():
-        # DEV: write into the in-memory MockValueDB instead of Z-Wave. The
-        # MockValueDB raises on an armed fail_next() to simulate supervision
-        # failure, which propagates exactly like a real service-call failure.
-        mock_node = mock_node_for_entity(entity_id)
-        node_id = getattr(mock_node, "node_id", None)
-        if node_id is None:
-            raise ValueError(f"Dev mock: unknown lock entity {entity_id}")
-        MOCK_DB.set_usercode(node_id, code_slot, usercode)
-        _LOGGER.info(
-            "DEV mock set_lock_usercode succeeded for slot %s on %s",
-            code_slot,
-            entity_id,
-        )
-        return
-    await hass.services.async_call(
-        "zwave_js",
-        "set_lock_usercode",
-        {"entity_id": entity_id, "code_slot": code_slot, "usercode": usercode},
-        blocking=True,
-    )
-    _LOGGER.info(
-        "set_lock_usercode service call succeeded for slot %s on %s",
-        code_slot,
-        entity_id,
-    )
-
-
-async def _refresh_slot_cache(node: Any, code_slot: int, entity_id: str) -> None:
-    """Skip cache refresh to reduce Z-Wave mesh traffic.
-
-    The coordinator's 30-second cycle will pick up cache changes naturally.
-    Kept as a no-op for call-site compatibility.
-    """
-    pass
-
-
 def _resolve_node(hass: HomeAssistant, entity_id: str) -> Any:
     """Return the Z-Wave node for ``entity_id`` (mock-aware).
 
@@ -173,33 +121,6 @@ def _read_usercode(node: Any, slot: int) -> Any:
     if is_dev_mock():
         return mock_get_usercode(node, slot)
     return get_usercode(node, slot)
-
-
-async def _clear_usercode(hass: HomeAssistant, entity_id: str, code_slot: int) -> None:
-    """Clear a usercode for ``entity_id``/``code_slot`` (mock-aware).
-
-    - Description: Under ``SLM_DEV_MOCK`` clear from the MockValueDB (honoring
-      failure injection); otherwise call the real ``zwave_js.clear_lock_usercode``
-      service.
-    - Inputs: hass (HomeAssistant), entity_id (str), code_slot (int).
-    - Outputs: None.
-    """
-    if is_dev_mock():
-        mock_node = mock_node_for_entity(entity_id)
-        node_id = getattr(mock_node, "node_id", None)
-        if node_id is None:
-            raise ValueError(f"Dev mock: unknown lock entity {entity_id}")
-        MOCK_DB.clear_usercode(node_id, code_slot)
-        _LOGGER.info(
-            "DEV mock clear_lock_usercode for slot %s on %s", code_slot, entity_id
-        )
-        return
-    await hass.services.async_call(
-        "zwave_js",
-        "clear_lock_usercode",
-        {"entity_id": entity_id, "code_slot": code_slot},
-        blocking=True,
-    )
 
 
 class ZWaveServices:
@@ -547,3 +468,11 @@ async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
     )
     if codes_found:
         _LOGGER.info("Found codes in slots: %s", list(codes_found.keys()))
+
+
+__all__ = [
+    "ZWaveServices",
+    "_clear_usercode",
+    "_refresh_slot_cache",
+    "_set_usercode_with_status",
+]
