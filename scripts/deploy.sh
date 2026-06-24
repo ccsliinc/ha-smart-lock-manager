@@ -13,12 +13,16 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-REMOTE_HOST="root@10.0.17.11"
+# Host-specific values (REMOTE_HOST, HA_URL) come from a gitignored local file
+# or the environment. See scripts/.deploy.env.example for the format.
+[ -f "$(dirname "${BASH_SOURCE[0]}")/.deploy.env" ] && . "$(dirname "${BASH_SOURCE[0]}")/.deploy.env"
+
+REMOTE_HOST="${REMOTE_HOST:?Set REMOTE_HOST in scripts/.deploy.env or env (see scripts/.deploy.env.example)}"
 REMOTE_BASE="/homeassistant/custom_components"
 REMOTE_PATH="${REMOTE_BASE}/smart_lock_manager"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_SOURCE="${SCRIPT_DIR}/../custom_components/smart_lock_manager"
-HA_URL="http://homeassistant.office.sugamele.com"
+HA_URL="${HA_URL:-}"
 TARBALL="/tmp/slm-deploy.tar.gz"
 
 # ─── Flags ────────────────────────────────────────────────────────────────────
@@ -204,5 +208,5 @@ fi
 # ─── Done ─────────────────────────────────────────────────────────────────────
 header "Deploy Complete"
 success "Smart Lock Manager deployed successfully!"
-echo -e "${CYAN}  HA URL: ${HA_URL}${RESET}"
+[[ -n "$HA_URL" ]] && echo -e "${CYAN}  HA URL: ${HA_URL}${RESET}"
 echo ""
