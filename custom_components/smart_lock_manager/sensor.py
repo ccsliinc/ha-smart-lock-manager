@@ -36,9 +36,25 @@ async def async_setup_entry(
     lock = hass.data[DOMAIN][entry.entry_id][PRIMARY_LOCK]
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    # Create ONE summary sensor per lock with rich attributes
-    sensor = SmartLockManagerSensor(hass, entry, lock, coordinator)
-    async_add_entities([sensor], True)
+    entities: list = []
+
+    # Per-lock hardware-state sensor (lock/unlock, battery, jam) + per-lock
+    # access log. Now zone-aware (exposes zone_id/zone_name/member_locks).
+    entities.append(SmartLockManagerSensor(hass, entry, lock, coordinator))
+
+    # Zone model (Phase 1): the PER-ZONE sensor is the primary surface. Create
+    # it on the config entry that owns the zone's FIRST member (the former main
+    # lock), so each zone gets exactly one zone sensor across the fleet.
+    from .zone_runtime import get_zone_registry
+
+    for zone in get_zone_registry(hass).values():
+        members = zone.member_lock_entity_ids
+        if members and members[0] == lock.lock_entity_id:
+            entities.append(
+                SmartLockManagerZoneSensor(hass, entry, zone.zone_id, coordinator)
+            )
+
+    async_add_entities(entities, True)
 
 
 class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
@@ -88,6 +104,19 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
         if found_lock:
             return found_lock  # type: ignore[no-any-return]
         return self._lock
+
+    def _get_owning_zone(self, entity_id: str) -> Any:
+        """Return the Zone that owns ``entity_id``, or None if unhomed.
+
+        - Description: Looks up the in-memory zone registry for the zone that
+          lists ``entity_id`` as a member. Returns None when the lock belongs
+          to no zone (unhomed).
+        - Inputs: entity_id (str lock entity id).
+        - Outputs: Zone object or None.
+        """
+        from .zone_runtime import get_zone_for_lock
+
+        return get_zone_for_lock(self._hass, entity_id)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -151,10 +180,15 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 "status_reason": status.description,
             }
 
-        # Get usage statistics and lock hierarchy info
+        # Get usage statistics and zone membership info
         usage_stats = lock_to_use.get_usage_statistics()
         valid_slot_numbers = list(valid_slots_now.keys())
         final_friendly_name = lock_to_use.settings.friendly_name
+
+        # Zone model (Phase 1): resolve the zone that owns this lock so the
+        # sensor exposes zone identity/membership instead of the retired
+        # parent/child hierarchy attributes.
+        zone = self._get_owning_zone(lock_to_use.lock_entity_id)
 
         return {
             # Basic lock info
@@ -162,7 +196,7 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             "lock_entity_id": lock_to_use.lock_entity_id,
             "total_slots": lock_to_use.slots,
             "start_from": lock_to_use.start_from,
-            # Lock settings and hierarchy
+            # Lock settings
             "custom_friendly_name": final_friendly_name,
             "auto_lock_time": (
                 lock_to_use.settings.auto_lock_time.isoformat()
@@ -174,9 +208,12 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 if lock_to_use.settings.auto_unlock_time
                 else None
             ),
-            "is_main_lock": lock_to_use.is_main_lock,
-            "parent_lock_id": lock_to_use.parent_lock_id,
-            "child_lock_ids": lock_to_use.child_lock_ids,
+            # Zone membership (replaces is_main_lock/parent_lock_id/child_lock_ids)
+            "zone_id": zone.zone_id if zone else None,
+            "zone_name": zone.name if zone else None,
+            "member_locks": list(zone.member_lock_entity_ids) if zone else [],
+            # Unhomed = loaded lock that belongs to no zone (Phase-3 "+" pool).
+            "is_unhomed": zone is None,
             # Status and counts (perfect for automations!)
             "active_codes_count": lock_to_use.get_active_codes_count(),
             "configured_codes_count": lock_to_use.get_configured_codes_count(),
@@ -348,3 +385,109 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
     def available(self) -> bool:
         """Return if entity is available."""
         return self.coordinator.last_update_success and self._lock.is_connected
+
+
+class SmartLockManagerZoneSensor(CoordinatorEntity, SensorEntity):
+    """Primary per-ZONE sensor exposing zone identity, members, and code summary.
+
+    The zone owns the canonical code set; this sensor is the automation/UI
+    surface for it. It resolves the live ``Zone`` from the in-memory registry
+    on every read so renames and membership changes are reflected immediately.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        zone_id: str,
+        coordinator: DataUpdateCoordinator,
+    ) -> None:
+        """Initialize the zone sensor.
+
+        - Inputs: hass, entry (the config entry that owns the zone's first
+          member), zone_id (str), coordinator.
+        """
+        super().__init__(coordinator)
+        self._hass = hass
+        self._entry = entry
+        self._zone_id = zone_id
+        self._attr_unique_id = f"smart_lock_manager_zone_{zone_id}"
+        self._attr_icon = "mdi:home-group"
+
+    def _get_zone(self) -> Any:
+        """Return the live Zone object from the registry, or None if deleted."""
+        from .zone_runtime import get_zone_registry
+
+        return get_zone_registry(self._hass).get(self._zone_id)
+
+    @property
+    def name(self) -> str:
+        """Return the zone's display name."""
+        zone = self._get_zone()
+        return f"Zone {zone.name}" if zone else f"Zone {self._zone_id[:8]}"
+
+    @property
+    def state(self) -> str:
+        """Return a compact summary state: '<name> - N codes / M members'."""
+        zone = self._get_zone()
+        if not zone:
+            return "deleted"
+        return (
+            f"{zone.name} - {zone.get_configured_codes_count()} codes"
+            f" / {len(zone.member_lock_entity_ids)} members"
+        )
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return zone identity, members, and a per-slot code summary."""
+        from .zone_runtime import get_unhomed_lock_entity_ids
+
+        zone = self._get_zone()
+        if not zone:
+            return {"zone_id": self._zone_id, "deleted": True}
+
+        slot_summary: Dict[str, Any] = {}
+        for slot_num, slot in zone.code_slots.items():
+            slot_summary[f"slot_{slot_num}"] = {
+                "slot_number": slot_num,
+                "user_name": slot.user_name,
+                "is_active": slot.is_active,
+                "has_code": bool(slot.pin_code),
+                "max_uses": slot.max_uses,
+                "allowed_hours": slot.allowed_hours,
+                "allowed_days": slot.allowed_days,
+            }
+
+        return {
+            "zone_id": zone.zone_id,
+            "zone_name": zone.name,
+            "member_locks": list(zone.member_lock_entity_ids),
+            "member_count": len(zone.member_lock_entity_ids),
+            "total_slots": zone.slots,
+            "start_from": zone.start_from,
+            "active_codes_count": zone.get_active_codes_count(),
+            "configured_codes_count": zone.get_configured_codes_count(),
+            "slot_summary": slot_summary,
+            # Fleet-wide unhomed pool — the locks the "+" picker can add here.
+            "unhomed_locks": get_unhomed_lock_entity_ids(self._hass),
+            "integration_version": "1.0.0",
+            "architecture": "zone_model",
+        }
+
+    @property
+    def device_info(self) -> Dict[str, Any]:
+        """Return device info grouping the zone sensor under its own device."""
+        zone = self._get_zone()
+        name = f"Zone {zone.name}" if zone else f"Zone {self._zone_id[:8]}"
+        return {
+            "identifiers": {(DOMAIN, f"zone_{self._zone_id}")},
+            "name": name,
+            "manufacturer": "Smart Lock Manager",
+            "model": "Zone",
+            "sw_version": "1.0.0",
+        }
+
+    @property
+    def available(self) -> bool:
+        """True when the coordinator last update succeeded and the zone exists."""
+        return self.coordinator.last_update_success and self._get_zone() is not None

@@ -7,7 +7,7 @@ from homeassistant.components.lock import LockState
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_lock_manager"
-VERSION = "2025.1.5"
+VERSION = "2026.6.0"
 ISSUE_URL = "https://github.com/ccsliinc/ha-smart-lock-manager"
 PLATFORMS = ["sensor"]
 ZWAVE_NETWORK = "zwave_network"
@@ -68,6 +68,12 @@ CONF_SENSOR_NAME = "sensor_name"
 CONF_SLOTS = "slots"
 CONF_START = "start_from"
 
+# Maximum Z-Wave write dispatches for a slot before it is treated as a hard
+# sync failure (``sync_error`` is set). Used by the per-lock sync planner and
+# the zone API's member-derived sync-status aggregation so both agree on what
+# counts as a genuine error vs. an in-flight pending write.
+MAX_SYNC_ATTEMPTS = 10
+
 # Defaults
 DEFAULT_CODE_SLOTS = 10
 DEFAULT_DOOR_SENSOR = "binary_sensor.fake"
@@ -88,13 +94,26 @@ SERVICE_READ_ZWAVE_CODES = "read_zwave_codes"
 SERVICE_REFRESH_CODES = "refresh_codes"
 SERVICE_RESET_SLOT_USAGE = "reset_slot_usage"
 SERVICE_RESET_SYNC = "reset_sync"
-SERVICE_REMOVE_CHILD_LOCK = "remove_child_lock"
 SERVICE_RESIZE_SLOTS = "resize_slots"
 SERVICE_SET_CODE = "set_code"
 SERVICE_SET_CODE_ADVANCED = "set_code_advanced"
-SERVICE_SYNC_CHILD_LOCKS = "sync_child_locks"
 SERVICE_UPDATE_GLOBAL_SETTINGS = "update_global_settings"
 SERVICE_UPDATE_LOCK_SETTINGS = "update_lock_settings"
+SERVICE_SET_SWEEP_INTERVALS = "set_sweep_intervals"
+SERVICE_PAUSE_ALERTS = "pause_alerts"
+SERVICE_RESUME_ALERTS = "resume_alerts"
+SERVICE_MUTE_LOCK_ALERT = "mute_lock_alert"
+SERVICE_UNMUTE_LOCK_ALERT = "unmute_lock_alert"
+
+# Zone-management services (replace retired parent/child services)
+SERVICE_CREATE_ZONE = "create_zone"
+SERVICE_DELETE_ZONE = "delete_zone"
+SERVICE_ADD_LOCK_TO_ZONE = "add_lock_to_zone"
+SERVICE_REMOVE_LOCK_FROM_ZONE = "remove_lock_from_zone"
+SERVICE_APPLY_ZONE_CODES = "apply_zone_codes"
+SERVICE_UPDATE_ZONE = "update_zone"
+SERVICE_CLEAR_ZONE_CODES = "clear_zone_codes"
+SERVICE_UPDATE_ZONE_SETTINGS = "update_zone_settings"
 
 # Misc
 LOCK_STATE = [LockState.LOCKED, LockState.UNLOCKED]

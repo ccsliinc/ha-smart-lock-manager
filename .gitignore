@@ -42,6 +42,10 @@ Thumbs.db
 .coverage
 .pytest_cache/
 htmlcov/
+.mypy_cache/
+
+# Claude Code working dir
+.claude/
 
 # Distribution / packaging
 .Python
@@ -106,6 +110,9 @@ test_environment.py
 .env
 .env.local
 .env.*.local
+
+# Deploy host config (host-specific, never commit — see scripts/.deploy.env.example)
+scripts/.deploy.env
 
 # Development and debugging
 *.debug

@@ -62,6 +62,50 @@ def _check_prefix_collision(
 _LOGGER = logging.getLogger(__name__)
 
 
+async def _propagate_slot_to_zone(
+    hass: HomeAssistant, lock: SmartLockManagerLock, code_slot: int
+) -> None:
+    """Mirror a member lock's just-edited slot up to its owning zone.
+
+    Zone model (Phase 1): the zone owns the canonical code set. When a code is
+    set/cleared on any member lock via the existing per-lock services, copy the
+    resulting slot DEFINITION onto the owning zone's matching slot and persist
+    the zone. The coordinator's per-cycle mirror then pushes the change down to
+    EVERY member lock, so a single set_code applies uniformly across the zone.
+
+    No-op when the lock is unhomed (in no zone).
+
+    - Inputs: hass (HomeAssistant), lock (the edited member lock),
+      code_slot (the slot number that changed).
+    - Outputs: None.
+    """
+    # Imported lazily to avoid a circular import at module load time.
+    from ..models.zone import _CODE_DEFINITION_FIELDS
+    from ..storage import save_zone
+    from ..zone_runtime import get_zone_for_lock
+
+    zone = get_zone_for_lock(hass, lock.lock_entity_id)
+    if zone is None:
+        return
+
+    source_slot = lock.code_slots.get(code_slot)
+    zone_slot = zone.code_slots.get(code_slot)
+    if source_slot is None or zone_slot is None:
+        return
+
+    for fname in _CODE_DEFINITION_FIELDS:
+        setattr(zone_slot, fname, getattr(source_slot, fname))
+
+    await save_zone(hass, zone)
+    _LOGGER.info(
+        "Zone '%s' slot %s updated from %s; will sync to members %s",
+        zone.name,
+        code_slot,
+        lock.lock_entity_id,
+        zone.member_lock_entity_ids,
+    )
+
+
 class LockServices:
     """Service handler for basic lock operations."""
 
@@ -107,38 +151,10 @@ class LockServices:
                         await _save_lock_data(hass, lock, entry_id)
                         _LOGGER.debug("SET_CODE: saved slot data to storage")
 
-                        # Trigger immediate child sync for a main lock with children
-                        if lock.is_main_lock and lock.child_lock_ids:
-                            _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Main lock %s slot %s code set, "
-                                "triggering immediate child sync to %s children",
-                                lock.lock_name,
-                                code_slot,
-                                len(lock.child_lock_ids),
-                            )
-
-                            try:
-                                from ..const import SERVICE_SYNC_CHILD_LOCKS
-
-                                await hass.services.async_call(
-                                    DOMAIN,
-                                    SERVICE_SYNC_CHILD_LOCKS,
-                                    {ATTR_ENTITY_ID: lock.lock_entity_id},
-                                )
-                                _LOGGER.info(
-                                    "🔄 IMMEDIATE SYNC - Successfully triggered "
-                                    "immediate child sync for %s after slot %s "
-                                    "code set",
-                                    lock.lock_name,
-                                    code_slot,
-                                )
-                            except Exception as e:
-                                _LOGGER.error(
-                                    "🔄 IMMEDIATE SYNC - Failed to trigger "
-                                    "immediate child sync for %s: %s",
-                                    lock.lock_name,
-                                    e,
-                                )
+                        # Zone model: propagate the change to the owning zone so
+                        # it reaches every member lock on the next coordinator
+                        # cycle (replaces the legacy main->child fan-out).
+                        await _propagate_slot_to_zone(hass, lock, code_slot)
 
                     else:
                         _LOGGER.error(
@@ -236,24 +252,6 @@ class LockServices:
                     from ..storage.lock_storage import save_lock_data
 
                     await save_lock_data(hass, lock, entry_id)
-
-                    # Propagate metadata to child locks if applicable.
-                    if lock.is_main_lock and lock.child_lock_ids:
-                        try:
-                            from ..const import SERVICE_SYNC_CHILD_LOCKS
-
-                            await hass.services.async_call(
-                                DOMAIN,
-                                SERVICE_SYNC_CHILD_LOCKS,
-                                {ATTR_ENTITY_ID: lock.lock_entity_id},
-                            )
-                        except Exception as e:
-                            _LOGGER.error(
-                                "Failed child sync after metadata-only update "
-                                "for %s: %s",
-                                lock.lock_name,
-                                e,
-                            )
                     return
 
                 # Pre-flight: reject PIN-prefix collisions before any write
@@ -281,38 +279,9 @@ class LockServices:
 
                     await save_lock_data(hass, lock, entry_id)
 
-                    # Trigger immediate child sync for a main lock with children
-                    if lock.is_main_lock and lock.child_lock_ids:
-                        _LOGGER.info(
-                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s advanced code "
-                            "set, triggering immediate child sync to %s children",
-                            lock.lock_name,
-                            code_slot,
-                            len(lock.child_lock_ids),
-                        )
-
-                        try:
-                            from ..const import SERVICE_SYNC_CHILD_LOCKS
-
-                            await hass.services.async_call(
-                                DOMAIN,
-                                SERVICE_SYNC_CHILD_LOCKS,
-                                {ATTR_ENTITY_ID: lock.lock_entity_id},
-                            )
-                            _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Successfully triggered "
-                                "immediate child sync for %s after slot %s "
-                                "advanced code set",
-                                lock.lock_name,
-                                code_slot,
-                            )
-                        except Exception as e:
-                            _LOGGER.error(
-                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate "
-                                "child sync for %s: %s",
-                                lock.lock_name,
-                                e,
-                            )
+                    # Zone model: propagate the change to the owning zone so it
+                    # reaches every member lock on the next coordinator cycle.
+                    await _propagate_slot_to_zone(hass, lock, code_slot)
                 else:
                     _LOGGER.error(
                         "Failed to set advanced code for slot %s in lock %s",
@@ -348,14 +317,12 @@ class LockServices:
                         lock.lock_name,
                     )
 
-                    # Also clear from physical Z-Wave lock
+                    # Also clear from physical Z-Wave lock (mock-aware: under
+                    # SLM_DEV_MOCK this clears the in-memory MockValueDB).
                     try:
-                        await hass.services.async_call(
-                            "zwave_js",
-                            "clear_lock_usercode",
-                            {"entity_id": entity_id, "code_slot": code_slot},
-                            blocking=True,
-                        )
+                        from .zwave_services import _clear_usercode
+
+                        await _clear_usercode(hass, entity_id, code_slot)
                         _LOGGER.info(
                             "Successfully cleared code from Z-Wave lock %s slot %s",
                             entity_id,
@@ -373,38 +340,9 @@ class LockServices:
 
                     await save_lock_data(hass, lock, entry_id)
 
-                    # Trigger immediate child sync for a main lock with children
-                    if lock.is_main_lock and lock.child_lock_ids:
-                        _LOGGER.info(
-                            "🔄 IMMEDIATE SYNC - Main lock %s slot %s code cleared, "
-                            "triggering immediate child sync to %s children",
-                            lock.lock_name,
-                            code_slot,
-                            len(lock.child_lock_ids),
-                        )
-
-                        try:
-                            from ..const import SERVICE_SYNC_CHILD_LOCKS
-
-                            await hass.services.async_call(
-                                DOMAIN,
-                                SERVICE_SYNC_CHILD_LOCKS,
-                                {ATTR_ENTITY_ID: lock.lock_entity_id},
-                            )
-                            _LOGGER.info(
-                                "🔄 IMMEDIATE SYNC - Successfully triggered "
-                                "immediate child sync for %s after slot %s "
-                                "code clear",
-                                lock.lock_name,
-                                code_slot,
-                            )
-                        except Exception as e:
-                            _LOGGER.error(
-                                "🔄 IMMEDIATE SYNC - Failed to trigger immediate "
-                                "child sync for %s: %s",
-                                lock.lock_name,
-                                e,
-                            )
+                    # Zone model: propagate the clear to the owning zone so it
+                    # reaches every member lock on the next coordinator cycle.
+                    await _propagate_slot_to_zone(hass, lock, code_slot)
 
                 else:
                     _LOGGER.error(

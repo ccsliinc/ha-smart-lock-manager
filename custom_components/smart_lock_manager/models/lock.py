@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
+from ..const import MAX_SYNC_ATTEMPTS
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -335,12 +337,16 @@ class SmartLockManagerLock:
         # Validate PIN code format for Z-Wave locks
         if pin_code:
             if not pin_code.isdigit():
-                _LOGGER.error("PIN code must be numeric only: %s", pin_code)
+                _LOGGER.error(
+                    "PIN code for slot %s must be numeric only (length: %d)",
+                    slot_number,
+                    len(pin_code),
+                )
                 return False
             if len(pin_code) < 4 or len(pin_code) > 8:
                 _LOGGER.error(
-                    "PIN code must be 4-8 digits: %s (length: %d)",
-                    pin_code,
+                    "PIN code for slot %s must be 4-8 digits (length: %d)",
+                    slot_number,
                     len(pin_code),
                 )
                 return False
@@ -502,11 +508,13 @@ class SmartLockManagerLock:
             if slot.is_active and slot.pin_code and slot.is_valid_now():
                 # Check if code matches what's in the lock
                 if not zwave_code or zwave_code != slot.pin_code:
-                    if slot.sync_attempts < 10:
+                    if slot.sync_attempts < MAX_SYNC_ATTEMPTS:
                         add_slots.append(slot_number)
                     else:
                         retry_slots.append(slot_number)
-                        slot.sync_error = "Failed to sync after 10 attempts"
+                        slot.sync_error = (
+                            f"Failed to sync after {MAX_SYNC_ATTEMPTS} attempts"
+                        )
                 # Code matches — it's synced, don't re-write regardless of in_use
 
             # Only remove codes that SLM intentionally disabled

@@ -9,7 +9,7 @@ sensor per lock instead of dozens of entities.
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/ccsliinc/ha-smart-lock-manager)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.8+-blue.svg)](https://www.home-assistant.io/)
-[![Version](https://img.shields.io/badge/Version-2025.1.5-green.svg)](#)
+[![Version](https://img.shields.io/badge/Version-2026.6.0-green.svg)](#)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/ccsliinc)
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?logo=paypal)](https://paypal.me/jsugamele)
 
@@ -20,7 +20,12 @@ sensor per lock instead of dozens of entities.
   date ranges. Codes outside their window are disabled and re-enabled automatically.
 - Usage limits: cap a code at a fixed number of uses, then auto-disable it.
 - Lock groups: designate a main lock and sync its codes to child locks.
+- Zones: group locks into zones in the panel for shared management and at-a-glance status.
 - Access log and per-slot usage counters.
+- Lock-health alerting (opt-in): detect sustained-unlock, outside-hours,
+  jam, low-battery, and offline conditions and record them to a per-zone alert
+  log. The detection engine is off by default and ships in a safe observe /
+  dry-run posture — it sends no notifications until you explicitly enable them.
 - One summary sensor per lock. All slot state lives in Python objects and is exposed as
   sensor attributes, so your entity list stays clean.
 - UI config flow for setup, plus a Configure dialog to change the lock name, lock entity,
@@ -44,9 +49,9 @@ sensor per lock instead of dozens of entities.
 ### Manual
 
 ```bash
-wget https://github.com/ccsliinc/ha-smart-lock-manager/archive/refs/tags/v2025.1.5.zip
-unzip v2025.1.5.zip
-cp -r ha-smart-lock-manager-2025.1.5/custom_components/smart_lock_manager /config/custom_components/
+wget https://github.com/ccsliinc/ha-smart-lock-manager/archive/refs/tags/v2026.6.0.zip
+unzip v2026.6.0.zip
+cp -r ha-smart-lock-manager-2026.6.0/custom_components/smart_lock_manager /config/custom_components/
 ```
 
 Restart Home Assistant after copying the files.

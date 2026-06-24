@@ -42,6 +42,8 @@ repos:
       - id: mypy
         args:
           - --ignore-missing-imports
+        additional_dependencies:
+          - types-PyYAML
         files: ^custom_components/.+\.py$
 
   - repo: https://github.com/pycqa/bandit
@@ -96,15 +98,8 @@ repos:
 
       - id: check-pin-logging
         name: Check PIN code logging security
-        entry: bash
+        entry: bash scripts/check_pin_logging.sh
         language: system
-        args:
-          - -c
-          - |
-            if grep -r "pin.*:.*{" custom_components/smart_lock_manager/ --include="*.py" | grep -v "\*\*\*"; then
-              echo "❌ Found potential PIN code logging without masking"
-              exit 1
-            fi
         pass_filenames: false
 
       - id: validate-manifest
