@@ -30,6 +30,7 @@ from ..models.lock import (
     USER_ID_STATUS_ENABLED,
     SmartLockManagerLock,
 )
+from .helpers import find_lock
 
 
 def _reject_for_prefix_collision(
@@ -257,17 +258,11 @@ class ZWaveServices:
             return
 
         # Find the lock object
-        lock = None
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            if isinstance(entry_data, dict):  # Skip global_settings
-                lock_obj = entry_data.get(PRIMARY_LOCK)
-                if lock_obj and lock_obj.lock_entity_id == entity_id:
-                    lock = lock_obj
-                    break
-
-        if not lock:
+        result = find_lock(hass, entity_id)
+        if result is None:
             _LOGGER.error("No lock found for entity_id: %s", entity_id)
             return
+        lock = result[0]
 
         slot = lock.code_slots.get(slot_number)
         if not slot:
@@ -441,7 +436,6 @@ class ZWaveServices:
             # Update sync status
             slot.is_synced = True
             slot.sync_error = None
-            slot.last_synced = None  # Will be updated by coordinator
 
         except Exception as e:
             _LOGGER.error(

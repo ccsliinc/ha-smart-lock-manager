@@ -135,18 +135,7 @@ async def _wipe_zone_codes_from_lock(
         for slot_num in zone.code_slots:
             member_slot = lock.code_slots.get(slot_num)
             if member_slot is not None and member_slot.pin_code:
-                member_slot.pin_code = None
-                member_slot.user_name = None
-                member_slot.is_active = False
-                member_slot.is_synced = False
-                member_slot.sync_error = None
-                member_slot.sync_attempts = 0
-                member_slot.start_date = None
-                member_slot.end_date = None
-                member_slot.allowed_hours = None
-                member_slot.allowed_days = None
-                member_slot.max_uses = -1
-                member_slot.notify_on_use = False
+                member_slot.reset_definition()
         if entry_id is not None:
             from .. import _save_lock_data
 
@@ -494,18 +483,7 @@ class ZoneServices:
         # Blank the zone's canonical slots so the coordinator does not re-push
         # the (now cleared) codes back onto members.
         for slot in zone.code_slots.values():
-            slot.pin_code = None
-            slot.user_name = None
-            slot.is_active = False
-            slot.is_synced = False
-            slot.sync_error = None
-            slot.sync_attempts = 0
-            slot.start_date = None
-            slot.end_date = None
-            slot.allowed_hours = None
-            slot.allowed_days = None
-            slot.max_uses = -1
-            slot.notify_on_use = False
+            slot.reset_definition()
         await save_zone(hass, zone)
 
         _LOGGER.info(

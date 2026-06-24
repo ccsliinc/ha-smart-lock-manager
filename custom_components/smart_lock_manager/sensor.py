@@ -1,7 +1,6 @@
 """Smart Lock Manager Summary Sensor."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from homeassistant.components.sensor import SensorEntity
@@ -263,110 +262,6 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
             return f"Slot {slot_num}: {slot.user_name}"
         else:
             return f"Slot {slot_num}:"
-
-    def _get_slot_status_text(self, slot: CodeSlot, is_valid_now: bool) -> str:
-        """Calculate definitive slot status text in backend."""
-        # Empty slot - no PIN code configured
-        if not slot.pin_code:
-            return "Click to configure"
-
-        # Priority 1: Disabling - disabled but still in physical lock
-        if not slot.is_active and slot.pin_code and not slot.is_synced:
-            return "Disabling"
-
-        # Priority 2: Disabled - manually disabled and cleared from lock
-        if not slot.is_active:
-            return "Disabled"
-
-        # Priority 2: Check if slot should be auto-disabled due to expiration/usage
-        if slot.should_disable():
-            if slot.end_date and datetime.now() > slot.end_date:
-                return "Disabled"
-            if slot.max_uses > 0 and slot.use_count >= slot.max_uses:
-                return "Disabled"
-
-        # Priority 3: Outside allowed hours/days (time-restricted)
-        if slot.is_active and not is_valid_now:
-            return "Outside Hours"
-
-        # Priority 4: Active and should be valid, check sync status
-        if slot.is_active and is_valid_now:
-            # Check for amber/syncing state first
-            if slot.sync_attempts > 0:
-                return f"{slot.use_count} uses • Synchronizing"
-            if not slot.is_synced:
-                return f"{slot.use_count} uses • Sync Error"
-            return f"{slot.use_count} uses • Synchronized"
-
-        return "Unknown Status"
-
-    def _get_slot_status_color(self, slot: CodeSlot, is_valid_now: bool) -> str:
-        """Calculate definitive slot status color in backend."""
-        # Grey - empty slot (no PIN code)
-        if not slot.pin_code:
-            return "#9e9e9e"  # Grey
-
-        # Priority 1: Amber - disabling (disabled but still clearing from lock)
-        if not slot.is_active and slot.pin_code and not slot.is_synced:
-            return "#ff9800"  # Amber
-
-        # Priority 2: Grey - disabled (manually or auto-disabled and cleared)
-        if not slot.is_active or slot.should_disable():
-            return "#9e9e9e"  # Grey
-
-        # Priority 2: Blue - outside allowed hours/days (time-restricted)
-        if slot.is_active and not is_valid_now:
-            return "#2196f3"  # Blue
-
-        # Priority 3: Amber - awaiting Z-Wave update (syncing)
-        if slot.is_active and is_valid_now and slot.sync_attempts > 0:
-            return "#ff9800"  # Amber
-
-        # Priority 4: Red - sync error (should be in lock but isn't)
-        if slot.is_active and is_valid_now and not slot.is_synced:
-            return "#f44336"  # Red
-
-        # Priority 5: Green - active and properly synced
-        if slot.is_active and is_valid_now and slot.is_synced:
-            return "#4caf50"  # Green
-
-        return "#9e9e9e"  # Default grey
-
-    def _get_slot_status_reason(self, slot: CodeSlot, is_valid_now: bool) -> str:
-        """Provide detailed status explanation."""
-        if not slot.is_active and slot.pin_code and not slot.is_synced:
-            return "Clearing code from physical lock"
-        if not slot.is_active or not slot.pin_code:
-            return "No PIN code configured"
-
-        if slot.should_disable():
-            if slot.end_date and datetime.now() > slot.end_date:
-                return f"Expired on {slot.end_date.strftime('%Y-%m-%d')}"
-            if slot.max_uses > 0 and slot.use_count >= slot.max_uses:
-                return f"Used {slot.use_count}/{slot.max_uses} times"
-
-        if slot.is_active and not is_valid_now:
-            reasons = []
-            if slot.allowed_days:
-                days_str = ", ".join(
-                    [
-                        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d]
-                        for d in slot.allowed_days
-                    ]
-                )
-                reasons.append(f"Only allowed on: {days_str}")
-            if slot.allowed_hours:
-                end_hour = max(slot.allowed_hours) + 1
-                hours_str = f"{min(slot.allowed_hours):02d}:00-{end_hour:02d}:00"
-                reasons.append(f"Only allowed during: {hours_str}")
-            return "; ".join(reasons) if reasons else "Time restrictions active"
-
-        if slot.is_active and is_valid_now:
-            if not slot.is_synced:
-                return "Code not found in physical lock"
-            return "Code active and synced with lock"
-
-        return "Status unclear"
 
     @property
     def device_info(self) -> Dict[str, Any]:

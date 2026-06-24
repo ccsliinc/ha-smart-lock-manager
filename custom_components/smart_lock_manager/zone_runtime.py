@@ -99,15 +99,6 @@ def get_unhomed_lock_entity_ids(hass: HomeAssistant) -> List[str]:
     return sorted(unhomed)
 
 
-def is_lock_unhomed(hass: HomeAssistant, entity_id: str) -> bool:
-    """Return True if ``entity_id`` is loaded but belongs to no zone.
-
-    - Inputs: hass (HomeAssistant), entity_id (str).
-    - Outputs: bool.
-    """
-    return get_zone_for_lock(hass, entity_id) is None
-
-
 def _all_locks(hass: HomeAssistant) -> Dict[str, SmartLockManagerLock]:
     """Return every loaded lock object keyed by entity_id.
 

@@ -197,10 +197,6 @@ class Zone:
         self.member_lock_entity_ids.remove(entity_id)
         return True
 
-    def is_empty(self) -> bool:
-        """Return True if the zone has no member locks."""
-        return not self.member_lock_entity_ids
-
     # -- code helpers -------------------------------------------------------
 
     def get_active_codes_count(self) -> int:

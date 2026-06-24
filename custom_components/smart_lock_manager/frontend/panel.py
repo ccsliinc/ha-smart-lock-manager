@@ -7,10 +7,8 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
-PANEL_URL = "/smart-lock-manager-panel"
 PANEL_TITLE = "Smart Lock Manager"
 PANEL_ICON = "mdi:lock-smart"
-PANEL_CONFIG_PANEL_DOMAIN = "smart_lock_manager_panel"
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:

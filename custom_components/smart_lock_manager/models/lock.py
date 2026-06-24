@@ -192,6 +192,26 @@ class CodeSlot:
         """Reset usage counter to 0."""
         self.use_count = 0
 
+    def reset_definition(self) -> None:
+        """Clear this slot back to an empty, unconfigured definition.
+
+        Resets identity, activation, sync state, schedule, usage limit and
+        notification fields to their cleared defaults. Mirrors the wipe
+        performed when a lock leaves a zone or a zone's codes are cleared.
+        """
+        self.pin_code = None
+        self.user_name = None
+        self.is_active = False
+        self.is_synced = False
+        self.sync_error = None
+        self.sync_attempts = 0
+        self.start_date = None
+        self.end_date = None
+        self.allowed_hours = None
+        self.allowed_days = None
+        self.max_uses = -1
+        self.notify_on_use = False
+
     def should_disable(self) -> bool:
         """Check if slot should be automatically disabled due to rules."""
         # Check if expired
@@ -415,10 +435,6 @@ class SmartLockManagerLock:
         ]
         return len(configured_slots)
 
-    def get_slot_info(self, slot_number: int) -> Optional[CodeSlot]:
-        """Get information about a specific slot."""
-        return self.code_slots.get(slot_number)
-
     def find_prefix_conflict(
         self, new_pin: Optional[str], target_slot: int
     ) -> Optional[CodeSlot]:
@@ -606,20 +622,6 @@ class SmartLockManagerLock:
         self.code_slots[slot_number].reset_usage()
         return True
 
-    def increment_slot_usage(self, slot_number: int) -> bool:
-        """Increment usage counter for a slot (called when lock is used)."""
-        if slot_number not in self.code_slots:
-            return False
-
-        slot = self.code_slots[slot_number]
-        slot.increment_usage()
-
-        # Check if slot should be disabled after use
-        if slot.should_disable():
-            slot.is_active = False
-
-        return True
-
     def add_access_log_entry(
         self,
         action: str,
@@ -692,29 +694,6 @@ class SmartLockManagerLock:
         slot.sync_attempts = 0
 
         return True
-
-    def sync_to_child_locks(self, child_locks: List["SmartLockManagerLock"]) -> None:
-        """Sync this main lock's codes to all child locks."""
-        if not self.is_main_lock:
-            return
-
-        for child_lock in child_locks:
-            if child_lock.parent_lock_id == self.lock_entity_id:
-                # Copy all active slots to child lock
-                for slot_num, slot in self.code_slots.items():
-                    if slot_num in child_lock.code_slots:
-                        child_slot = child_lock.code_slots[slot_num]
-                        child_slot.pin_code = slot.pin_code
-                        child_slot.user_name = slot.user_name
-                        child_slot.is_active = slot.is_active
-                        child_slot.start_date = slot.start_date
-                        child_slot.end_date = slot.end_date
-                        child_slot.allowed_hours = slot.allowed_hours
-                        child_slot.allowed_days = slot.allowed_days
-                        child_slot.max_uses = slot.max_uses
-                        child_slot.notify_on_use = slot.notify_on_use
-                        child_slot.user_id_status = slot.user_id_status
-                        # Don't sync usage counters - each lock tracks its own usage
 
     def get_usage_statistics(self) -> Dict[str, Any]:
         """Get usage statistics for this lock."""

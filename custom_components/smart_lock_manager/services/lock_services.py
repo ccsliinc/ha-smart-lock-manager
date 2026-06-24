@@ -12,10 +12,9 @@ from ..const import (
     ATTR_CODE_SLOT_NAME,
     ATTR_ENTITY_ID,
     ATTR_USER_CODE,
-    DOMAIN,
-    PRIMARY_LOCK,
 )
 from ..models.lock import SmartLockManagerLock
+from .helpers import find_lock
 
 
 def _check_prefix_collision(
@@ -124,48 +123,47 @@ class LockServices:
         )
 
         # Find the lock object for this entity_id
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            if isinstance(entry_data, dict):  # Skip global_settings
-                lock = entry_data.get(PRIMARY_LOCK)
-                if lock and lock.lock_entity_id == entity_id:
-                    _LOGGER.debug(
-                        "found lock %s, setting slot %s",
-                        lock.lock_name,
-                        code_slot,
-                    )
+        result = find_lock(hass, entity_id)
+        if result is None:
+            _LOGGER.error(
+                "🔄 SET_CODE DEBUG - No lock found for entity_id: %s", entity_id
+            )
+            return
+        lock, entry_id, _entry_data = result
+        _LOGGER.debug(
+            "found lock %s, setting slot %s",
+            lock.lock_name,
+            code_slot,
+        )
 
-                    # Pre-flight: reject PIN-prefix collisions before any write
-                    _check_prefix_collision(lock, code_slot, user_code)
+        # Pre-flight: reject PIN-prefix collisions before any write
+        _check_prefix_collision(lock, code_slot, user_code)
 
-                    success = lock.set_code(code_slot, user_code, user_name)
-                    if success:
-                        _LOGGER.debug(
-                            "set code success slot %s in lock %s",
-                            code_slot,
-                            lock.lock_name,
-                        )
+        success = lock.set_code(code_slot, user_code, user_name)
+        if success:
+            _LOGGER.debug(
+                "set code success slot %s in lock %s",
+                code_slot,
+                lock.lock_name,
+            )
 
-                        # Save changes to storage
-                        from .. import _save_lock_data
+            # Save changes to storage
+            from .. import _save_lock_data
 
-                        await _save_lock_data(hass, lock, entry_id)
-                        _LOGGER.debug("SET_CODE: saved slot data to storage")
+            await _save_lock_data(hass, lock, entry_id)
+            _LOGGER.debug("SET_CODE: saved slot data to storage")
 
-                        # Zone model: propagate the change to the owning zone so
-                        # it reaches every member lock on the next coordinator
-                        # cycle (replaces the legacy main->child fan-out).
-                        await _propagate_slot_to_zone(hass, lock, code_slot)
+            # Zone model: propagate the change to the owning zone so
+            # it reaches every member lock on the next coordinator
+            # cycle (replaces the legacy main->child fan-out).
+            await _propagate_slot_to_zone(hass, lock, code_slot)
 
-                    else:
-                        _LOGGER.error(
-                            "🔄 SET_CODE DEBUG - Failed to set code for "
-                            "slot %s in lock %s",
-                            code_slot,
-                            lock.lock_name,
-                        )
-                    return
-
-        _LOGGER.error("🔄 SET_CODE DEBUG - No lock found for entity_id: %s", entity_id)
+        else:
+            _LOGGER.error(
+                "🔄 SET_CODE DEBUG - Failed to set code for " "slot %s in lock %s",
+                code_slot,
+                lock.lock_name,
+            )
 
     @staticmethod
     async def set_code_advanced(hass: HomeAssistant, service_call: ServiceCall) -> None:
@@ -213,84 +211,79 @@ class LockServices:
         )
 
         # Find the lock object for this entity_id
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            # Skip non-dict entries (e.g. stray runtime callbacks) so a polluted
-            # registry can never crash this loop with an AttributeError.
-            if not isinstance(entry_data, dict):
-                continue
-            lock = entry_data.get(PRIMARY_LOCK)
-            if lock and lock.lock_entity_id == entity_id:
-                # Metadata-only fast path: if the incoming PIN matches the PIN
-                # already stored for this slot, the caller only edited the
-                # username/scheduling metadata. Update those fields in place
-                # WITHOUT marking the slot unsynced — this avoids a spurious
-                # Z-Wave re-write (which can surface transient Kwikset errors)
-                # even if a caller redundantly re-sends the existing PIN.
-                existing_slot = lock.code_slots.get(code_slot)
-                if (
-                    existing_slot is not None
-                    and existing_slot.pin_code
-                    and user_code
-                    and existing_slot.pin_code == user_code
-                ):
-                    _LOGGER.info(
-                        "Metadata-only update for slot %s in lock %s "
-                        "(PIN unchanged) — skipping Z-Wave re-write",
-                        code_slot,
-                        lock.lock_name,
-                    )
-                    existing_slot.user_name = user_name
-                    existing_slot.start_date = start_date
-                    existing_slot.end_date = end_date
-                    existing_slot.allowed_hours = allowed_hours
-                    existing_slot.allowed_days = allowed_days
-                    existing_slot.max_uses = max_uses
-                    existing_slot.notify_on_use = notify_on_use
-                    # Deliberately do NOT touch is_synced — the physical lock
-                    # already holds this PIN, so no re-sync is required.
+        result = find_lock(hass, entity_id)
+        if result is None:
+            _LOGGER.error("No lock found for entity_id: %s", entity_id)
+            return
+        lock, entry_id, _entry_data = result
+        # Metadata-only fast path: if the incoming PIN matches the PIN
+        # already stored for this slot, the caller only edited the
+        # username/scheduling metadata. Update those fields in place
+        # WITHOUT marking the slot unsynced — this avoids a spurious
+        # Z-Wave re-write (which can surface transient Kwikset errors)
+        # even if a caller redundantly re-sends the existing PIN.
+        existing_slot = lock.code_slots.get(code_slot)
+        if (
+            existing_slot is not None
+            and existing_slot.pin_code
+            and user_code
+            and existing_slot.pin_code == user_code
+        ):
+            _LOGGER.info(
+                "Metadata-only update for slot %s in lock %s "
+                "(PIN unchanged) — skipping Z-Wave re-write",
+                code_slot,
+                lock.lock_name,
+            )
+            existing_slot.user_name = user_name
+            existing_slot.start_date = start_date
+            existing_slot.end_date = end_date
+            existing_slot.allowed_hours = allowed_hours
+            existing_slot.allowed_days = allowed_days
+            existing_slot.max_uses = max_uses
+            existing_slot.notify_on_use = notify_on_use
+            # Deliberately do NOT touch is_synced — the physical lock
+            # already holds this PIN, so no re-sync is required.
 
-                    from ..storage.lock_storage import save_lock_data
+            from ..storage.lock_storage import save_lock_data
 
-                    await save_lock_data(hass, lock, entry_id)
-                    return
+            await save_lock_data(hass, lock, entry_id)
+            return
 
-                # Pre-flight: reject PIN-prefix collisions before any write
-                _check_prefix_collision(lock, code_slot, user_code)
+        # Pre-flight: reject PIN-prefix collisions before any write
+        _check_prefix_collision(lock, code_slot, user_code)
 
-                success = lock.set_code(
-                    code_slot,
-                    user_code,
-                    user_name,
-                    start_date,
-                    end_date,
-                    allowed_hours,
-                    allowed_days,
-                    max_uses,
-                    notify_on_use,
-                )
-                if success:
-                    _LOGGER.info(
-                        "Successfully set advanced code for slot %s in lock %s",
-                        code_slot,
-                        lock.lock_name,
-                    )
-                    # Save slot data to persistent storage
-                    from ..storage.lock_storage import save_lock_data
+        success = lock.set_code(
+            code_slot,
+            user_code,
+            user_name,
+            start_date,
+            end_date,
+            allowed_hours,
+            allowed_days,
+            max_uses,
+            notify_on_use,
+        )
+        if success:
+            _LOGGER.info(
+                "Successfully set advanced code for slot %s in lock %s",
+                code_slot,
+                lock.lock_name,
+            )
+            # Save slot data to persistent storage
+            from ..storage.lock_storage import save_lock_data
 
-                    await save_lock_data(hass, lock, entry_id)
+            await save_lock_data(hass, lock, entry_id)
 
-                    # Zone model: propagate the change to the owning zone so it
-                    # reaches every member lock on the next coordinator cycle.
-                    await _propagate_slot_to_zone(hass, lock, code_slot)
-                else:
-                    _LOGGER.error(
-                        "Failed to set advanced code for slot %s in lock %s",
-                        code_slot,
-                        lock.lock_name,
-                    )
-                return
-
-        _LOGGER.error("No lock found for entity_id: %s", entity_id)
+            # Zone model: propagate the change to the owning zone so it
+            # reaches every member lock on the next coordinator cycle.
+            await _propagate_slot_to_zone(hass, lock, code_slot)
+        else:
+            _LOGGER.error(
+                "Failed to set advanced code for slot %s in lock %s",
+                code_slot,
+                lock.lock_name,
+            )
 
     @staticmethod
     async def clear_code(hass: HomeAssistant, service_call: ServiceCall) -> None:
@@ -301,55 +294,50 @@ class LockServices:
         _LOGGER.debug("Clear code service called: slot %s", code_slot)
 
         # Find the lock object for this entity_id
-        for entry_id, entry_data in hass.data[DOMAIN].items():
-            # Skip non-dict entries so a polluted registry can never crash here.
-            if not isinstance(entry_data, dict):
-                continue
-            lock = entry_data.get(PRIMARY_LOCK)
-            if lock and lock.lock_entity_id == entity_id:
-                # Clear from Smart Lock Manager storage
-                success = lock.clear_code(code_slot)
-                if success:
-                    _LOGGER.info(
-                        "Successfully cleared code for slot %s in Smart Lock "
-                        "Manager %s",
-                        code_slot,
-                        lock.lock_name,
-                    )
+        result = find_lock(hass, entity_id)
+        if result is None:
+            _LOGGER.error("No lock found for entity_id: %s", entity_id)
+            return
+        lock, entry_id, _entry_data = result
+        # Clear from Smart Lock Manager storage
+        success = lock.clear_code(code_slot)
+        if success:
+            _LOGGER.info(
+                "Successfully cleared code for slot %s in Smart Lock " "Manager %s",
+                code_slot,
+                lock.lock_name,
+            )
 
-                    # Also clear from physical Z-Wave lock (mock-aware: under
-                    # SLM_DEV_MOCK this clears the in-memory MockValueDB).
-                    try:
-                        from .zwave_services import _clear_usercode
+            # Also clear from physical Z-Wave lock (mock-aware: under
+            # SLM_DEV_MOCK this clears the in-memory MockValueDB).
+            try:
+                from .zwave_services import _clear_usercode
 
-                        await _clear_usercode(hass, entity_id, code_slot)
-                        _LOGGER.info(
-                            "Successfully cleared code from Z-Wave lock %s slot %s",
-                            entity_id,
-                            code_slot,
-                        )
-                    except Exception as e:
-                        _LOGGER.warning(
-                            "Failed to clear Z-Wave lock code for slot %s: %s",
-                            code_slot,
-                            e,
-                        )
+                await _clear_usercode(hass, entity_id, code_slot)
+                _LOGGER.info(
+                    "Successfully cleared code from Z-Wave lock %s slot %s",
+                    entity_id,
+                    code_slot,
+                )
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to clear Z-Wave lock code for slot %s: %s",
+                    code_slot,
+                    e,
+                )
 
-                    # Save changes to storage
-                    from ..storage.lock_storage import save_lock_data
+            # Save changes to storage
+            from ..storage.lock_storage import save_lock_data
 
-                    await save_lock_data(hass, lock, entry_id)
+            await save_lock_data(hass, lock, entry_id)
 
-                    # Zone model: propagate the clear to the owning zone so it
-                    # reaches every member lock on the next coordinator cycle.
-                    await _propagate_slot_to_zone(hass, lock, code_slot)
+            # Zone model: propagate the clear to the owning zone so it
+            # reaches every member lock on the next coordinator cycle.
+            await _propagate_slot_to_zone(hass, lock, code_slot)
 
-                else:
-                    _LOGGER.error(
-                        "Failed to clear code for slot %s in lock %s",
-                        code_slot,
-                        lock.lock_name,
-                    )
-                return
-
-        _LOGGER.error("No lock found for entity_id: %s", entity_id)
+        else:
+            _LOGGER.error(
+                "Failed to clear code for slot %s in lock %s",
+                code_slot,
+                lock.lock_name,
+            )

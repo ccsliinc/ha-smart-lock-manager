@@ -1,7 +1,7 @@
 """Test the Smart Lock Manager sensor."""
 
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from homeassistant.config_entries import ConfigEntry
@@ -223,13 +223,10 @@ class TestSmartLockManagerSensor:
         assert slot_5["is_active"] is False
         assert slot_5["status"]["name"] == "EMPTY"
 
-    @patch("custom_components.smart_lock_manager.sensor.datetime")
-    def test_time_based_validation(self, mock_datetime, sensor_instance):
+    def test_time_based_validation(self, sensor_instance):
         """Test time-based slot validation does not break attribute building."""
-        # Mock current time to be during weekend (Saturday)
-        mock_datetime.now.return_value = datetime(2025, 1, 18, 14, 0)  # Saturday 2PM
-        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
-
+        # The sensor reads validity from the lock model (not its own clock), so
+        # attribute generation must succeed regardless of the current time.
         # Weekend slot should be present and attribute generation must succeed.
         attrs = sensor_instance.extra_state_attributes
         slot_details = attrs["slot_details"]
