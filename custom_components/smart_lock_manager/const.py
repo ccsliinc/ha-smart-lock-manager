@@ -5,7 +5,7 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_lock_manager"
-VERSION = "2026.7.0"
+VERSION = "2026.7.1"
 ISSUE_URL = "https://github.com/ccsliinc/ha-smart-lock-manager"
 PLATFORMS = ["sensor"]
 

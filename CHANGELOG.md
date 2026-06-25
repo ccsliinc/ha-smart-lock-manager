@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.7.1] - Engine-status banner accuracy
+
+### Fixed
+- The engine-status banner no longer mislabels itself as **OBSERVE** when real
+  notifications or auto-lock are enabled. It now reads **LIVE** (with a distinct
+  accent) when any real action is on, and **OBSERVE (dry-run)** only when neither
+  is enabled.
+- Removed an orphaned `.zs-note` CSS rule left over from an earlier disclaimer removal.
+
 ## [2026.7.0] - Actor attribution, portable notifications & HACS readiness
 
 ### Added

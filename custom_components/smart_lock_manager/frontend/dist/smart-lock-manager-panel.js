@@ -1585,13 +1585,18 @@ class SmartLockManagerPanel extends HTMLElement {
     if (mode === 'dev') {
       label = `Engines: DEV (mock locks) — ${sends}, ${locks}`;
       cls = 'engine-banner engine-banner--dev';
+    } else if (this._realNotify || this._realAutolock) {
+      // observe detection layer, but real actions are armed -> it's actually LIVE
+      label = `Engines: LIVE — ${sends}, ${locks}`;
+      cls = 'engine-banner engine-banner--live';
     } else {
-      // observe
-      label = `Engines: OBSERVE — ${sends}, ${locks}`;
+      // observe with no real flags -> genuine passive dry-run
+      label = `Engines: OBSERVE (dry-run) — no sends, no auto-locks`;
       cls = 'engine-banner engine-banner--observe';
     }
-    // Warn styling if any real action is armed.
-    if (this._realNotify || this._realAutolock) cls += ' engine-banner--armed';
+    // Warn styling if any real action is armed under DEV (observe path is handled
+    // above by the dedicated --live treatment).
+    if (mode === 'dev' && (this._realNotify || this._realAutolock)) cls += ' engine-banner--armed';
 
     return `
       <div class="${cls}" role="status">
@@ -2068,6 +2073,13 @@ class SmartLockManagerPanel extends HTMLElement {
           color: #1565c0;
         }
         .engine-banner--observe ha-icon { color: #2196f3; }
+        /* Real actions armed (observe + real_notify/real_autolock) -> green "live" accent. */
+        .engine-banner--live {
+          background: rgba(46, 160, 67, 0.14);
+          border: 1px solid rgba(46, 160, 67, 0.6);
+          color: #1b7a33;
+        }
+        .engine-banner--live ha-icon { color: #2ea043; }
         .engine-banner--dev {
           background: rgba(120, 120, 130, 0.12);
           border: 1px solid rgba(120, 120, 130, 0.45);
