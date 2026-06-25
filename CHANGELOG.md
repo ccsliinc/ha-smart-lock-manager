@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.7.0] - Actor attribution, portable notifications & HACS readiness
+
+### Added
+- **Actor attribution in alerts**: alerts now show **Triggered by** (who/what caused the
+  change) — the real user name for keypad events (joined from the access log) and the
+  method for RF, manual, and auto events.
+- **Portable notifications**: alerts can route through any Home Assistant `notify.*`
+  service, so notifications work out of the box for HACS installs with no SMTP required.
+- **Options flow** for notification setup (notify service, direct-SMTP toggle, recipients).
+- **Unconfigured-notify warning**: the integration now raises a persistent notification
+  when notifications are enabled but unconfigured, instead of failing silently.
+- Added `info.md`.
+
+### Changed
+- **Generalized direct-SMTP path**: configurable host and generic `slm_smtp_*` keys, with
+  back-compat for existing `smtp2go_*` secrets.
+- Dropped the internal `[fleet/internal]` subject convention in favor of a neutral,
+  instance-named subject.
+- Removed hardcoded lock topology from the dev harness.
+- De-"dev"-labeled the observe-mode panel UI.
+- Dropped stale disclaimers.
+
+### Fixed
+- Rewrote `strings.json` / translations to match the real config flow (fixes hassfest).
+- Fixed the CI version check.
+
 ## [2026.6.1]
 
 ### Documentation

@@ -1,6 +1,6 @@
 # Smart Lock Manager Architecture
 
-> **Note (v2026.6.1):** The detailed ASCII diagram below predates the **zone refactor**
+> **Note (v2026.7.0):** The detailed ASCII diagram below predates the **zone refactor**
 > and the **opt-in engine layers**. It is kept for its accurate frontend → HTTP API →
 > service → model → coordinator → sensor → Z-Wave flow, but the following has changed:
 >
