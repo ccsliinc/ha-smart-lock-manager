@@ -326,6 +326,12 @@ class AlertEngine(
             # intents surfaced to the API/panel for parity checking.
             "notify_intents": [],
         }
+        # Best-effort actor attribution: scan the lock's recent access log for
+        # the lock/unlock/jam event that caused this alert and stamp
+        # record["actor"]. Defensive inside the helper — never raises.
+        from .services.access_log import _attribute_actor
+
+        _attribute_actor(record, self.hass, alert_type, is_recovery)
         self.alerts.append(record)
         if len(self.alerts) > MAX_ALERTS:
             self.alerts = self.alerts[-MAX_ALERTS:]

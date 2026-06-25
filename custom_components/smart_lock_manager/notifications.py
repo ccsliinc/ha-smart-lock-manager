@@ -181,6 +181,12 @@ class NotificationDispatcher:
           for the HTML card).
         - Outputs: intent dict, or None when the payload could not be rendered.
         """
+        actor = alert.get("actor")
+        # Plain-text parity: append a "Triggered by:" line to the PLAIN body only
+        # (the HTML card renders its own dedicated actor block from ``actor``, so
+        # adding it to body_lines too would double-render it in HTML).
+        if actor:
+            body = f"{body}\nTriggered by: {actor}"
         rendered = await self.email.render(
             severity,
             subject,
@@ -188,6 +194,7 @@ class NotificationDispatcher:
             email_cfg.recipients_override,
             kind="alert",
             body_lines=body_lines,
+            actor=actor,
         )
         if rendered is None:
             return None

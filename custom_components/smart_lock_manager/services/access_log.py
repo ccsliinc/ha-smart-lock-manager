@@ -12,7 +12,8 @@ is imported lazily inside the access-log handler to avoid a circular import.
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from datetime import datetime
+from typing import Any, Callable, Dict, Optional, Set
 
 from homeassistant.core import HomeAssistant
 
@@ -23,6 +24,29 @@ from ..models.lock import SmartLockManagerLock
 # Module-level logger so log entries appear under
 # ``custom_components.smart_lock_manager`` (not ``.services.access_log``).
 _LOGGER = logging.getLogger("custom_components.smart_lock_manager")
+
+# Max seconds between an alert's timestamp and an access-log entry's timestamp
+# for that entry to be credited as the alert's actor. A lock/unlock notification
+# and the alert it triggers land within a couple of seconds; 15s is a generous
+# window that still excludes unrelated earlier activity.
+ACTOR_MATCH_WINDOW_SECONDS = 15
+
+# Per-alert-type set of access-log ``action`` values that can have caused the
+# alert. The "firing" set is for a rising-edge alert; the "recovery" set is for
+# the matching recovery (the door relocked). Alert types absent here are NOT
+# actor-driven (low_battery / offline) and are skipped entirely.
+_FIRING_ACTIONS: Dict[str, Set[str]] = {
+    "sustained_unlock": {"unlocked"},
+    "outside_hours": {"unlocked"},
+    "jam": {"jammed"},
+    "auto_lock_failed": {"locked"},
+}
+_RECOVERY_ACTIONS: Dict[str, Set[str]] = {
+    "sustained_unlock": {"locked"},
+    "outside_hours": {"locked"},
+    "jam": {"locked"},
+    "auto_lock_failed": {"locked"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +86,103 @@ def map_access_control_event(event_code: int) -> Optional[Dict[str, str]]:
     """
     mapping = ACCESS_CONTROL_EVENT_MAP.get(event_code)
     return dict(mapping) if mapping else None
+
+
+def format_actor(entry: Dict[str, Any]) -> str:
+    """Render a human "triggered by" label from an access-log entry.
+
+    - Description: Maps an access-log entry's ``source`` (and ``user_name`` /
+      ``slot`` for keypad events) to a concise actor string for alert emails.
+      Never raises and never emits the literal string ``"None"`` — every branch
+      guards its ``.get`` and falls back to a sane method-only label.
+    - Inputs: entry (dict) — an access-log entry; any key may be missing. Keys
+      used: ``source``, ``user_name``, ``slot``, ``action``.
+    - Outputs: str actor label, e.g. ``"Theresa (keypad, slot 2)"``,
+      ``"app / Home Assistant (RF)"``, ``"auto-lock"``, ``"unknown"``.
+    - Example: ``format_actor({"source": "auto"})`` -> ``"auto-lock"``
+    """
+    source = entry.get("source")
+    user_name = entry.get("user_name")
+    slot = entry.get("slot")
+
+    if source == "keypad":
+        if user_name:
+            if slot is not None:
+                return f"{user_name} (keypad, slot {slot})"
+            return f"{user_name} (keypad)"
+        if slot is not None:
+            return f"keypad (slot {slot})"
+        return "keypad"
+    if source == "rf":
+        return "app / Home Assistant (RF)"
+    if source == "auto":
+        return "auto-lock"
+    if source == "manual":
+        return "manual (thumbturn)"
+
+    # Unknown / jam / None source: never render "None". Prefer a concrete
+    # source label, else the action label, else a final sentinel.
+    if source:
+        return str(source)
+    action = entry.get("action")
+    if action:
+        return str(action)
+    return "unknown"
+
+
+def _attribute_actor(
+    record: Dict[str, Any],
+    hass: HomeAssistant,
+    alert_type: str,
+    is_recovery: bool,
+) -> None:
+    """Best-effort: set ``record["actor"]`` from the lock's recent access log.
+
+    - Description: For actor-driven alert types, looks up the member lock and
+      scans its access log newest-first for an entry whose ``action`` matches the
+      alert (firing vs recovery) AND whose timestamp is within
+      ``ACTOR_MATCH_WINDOW_SECONDS`` of the alert timestamp. On a match, sets
+      ``record["actor"]`` to the formatted actor and returns. Attribution is
+      OPTIONAL: any failure (missing lock, unparseable timestamp, no in-window
+      entry, non-actor-driven alert type) leaves ``record`` untouched. Fully
+      defensive — wrapped in try/except so it can NEVER break alert recording.
+    - Inputs: record (dict, must carry ``member_entity_id`` + ``timestamp``),
+      hass (HomeAssistant), alert_type (str alert id), is_recovery (bool).
+    - Outputs: None (mutates ``record`` in place when a match is found).
+    """
+    try:
+        action_map = _RECOVERY_ACTIONS if is_recovery else _FIRING_ACTIONS
+        acceptable = action_map.get(alert_type)
+        if not acceptable:
+            return  # not actor-driven (e.g. low_battery / offline) or unknown
+
+        from .helpers import find_lock
+
+        entity_id = record.get("member_entity_id")
+        if not entity_id:
+            return
+        found = find_lock(hass, entity_id)
+        if not found:
+            return
+        lock = found[0]
+        access_log = getattr(lock, "access_log", None)
+        if not access_log:
+            return
+
+        alert_ts = datetime.fromisoformat(record["timestamp"])
+        for entry in reversed(access_log):
+            if entry.get("action") not in acceptable:
+                continue
+            raw_ts = entry.get("timestamp")
+            try:
+                entry_ts = datetime.fromisoformat(raw_ts)
+            except (TypeError, ValueError):
+                continue
+            if abs((alert_ts - entry_ts).total_seconds()) <= ACTOR_MATCH_WINDOW_SECONDS:
+                record["actor"] = format_actor(entry)
+                return
+    except Exception as exc:  # noqa: BLE001 - attribution must never break alerts
+        _LOGGER.debug("Actor attribution failed for %s: %s", alert_type, exc)
 
 
 def _resolve_lock_for_node(

@@ -155,6 +155,9 @@ class RenderedEmail:
             each becomes its own row); derived from ``body`` when not supplied.
         host_tag: the footer host label (e.g. ``ha-office``), or None when the
             ``.ha_host_tag`` file is absent so the footer omits the host.
+        actor: the "Triggered by" label (e.g. ``Theresa (keypad, slot 2)``), or
+            None when attribution found no in-window access-log entry — the HTML
+            card omits the line cleanly when falsy.
     """
 
     severity: str
@@ -165,6 +168,7 @@ class RenderedEmail:
     clean_subject: str = ""
     body_lines: List[str] = field(default_factory=list)
     host_tag: Optional[str] = None
+    actor: Optional[str] = None
 
 
 class EmailNotifier:
@@ -247,13 +251,15 @@ class EmailNotifier:
         recipients_override: List[str],
         kind: str = "alert",
         body_lines: Optional[List[str]] = None,
+        actor: Optional[str] = None,
     ) -> Optional[RenderedEmail]:
         """Render a full email payload from secrets + the lib_email format.
 
         - Inputs: severity (str), subject (str), body (str),
           recipients_override (list[str] from the zone), kind (str), body_lines
           (optional pre-split lines for the HTML card; derived from ``body`` by
-          splitting on newlines when None).
+          splitting on newlines when None), actor (optional "Triggered by" label
+          for the HTML card).
         - Outputs: RenderedEmail, or None when creds/recipients are unavailable.
         """
         creds = await self._creds()
@@ -277,6 +283,7 @@ class EmailNotifier:
             clean_subject=subject,
             body_lines=lines,
             host_tag=host_tag,
+            actor=actor,
         )
 
     def _build_mime(self, creds: Dict[str, Any], email: RenderedEmail) -> MIMEMultipart:
@@ -301,8 +308,9 @@ class EmailNotifier:
         msg["Message-ID"] = make_msgid(domain="ha.local")
         msg["X-HA-Severity"] = email.severity
         msg["X-HA-Kind"] = email.kind
-        # actor=None: the alert record carries no triggered-by info today; the
-        # renderer omits the line cleanly when actor is falsy.
+        # email.actor carries the "Triggered by" label resolved by access-log
+        # attribution (None when no in-window event matched); the renderer omits
+        # the line cleanly when actor is falsy.
         # Pass the CLEAN human subject (pre-fleet-wrap, pre-marker) so the card
         # heading reads "<marker> <subject>" — the renderer prepends the single
         # marker. email.subject (the wrapped header) would double-stamp the
@@ -312,7 +320,7 @@ class EmailNotifier:
             subject=email.clean_subject,
             body_lines=email.body_lines,
             host_tag=email.host_tag,
-            actor=None,
+            actor=email.actor,
             timestamp=None,
         )
         msg.attach(MIMEText(email.body, "plain", "utf-8"))
