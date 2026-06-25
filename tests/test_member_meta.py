@@ -31,21 +31,21 @@ from custom_components.smart_lock_manager.services.zone_settings_service import 
 )
 from custom_components.smart_lock_manager.zone_runtime import ZONE_REGISTRY_KEY
 
-LOCK_A = "lock.bathroom"
-LOCK_B = "lock.front_north"
+LOCK_A = "lock.demo_office"
+LOCK_B = "lock.demo_front"
 
 
 def test_member_meta_round_trips_through_to_dict() -> None:
     """A populated member_meta survives to_dict -> settings_from_dict intact."""
     settings = ZoneSettings()
     settings.member_meta[LOCK_A] = MemberMeta(
-        jam_sensor="binary_sensor.bathroom_lock_jammed",
-        battery_entity="sensor.bathroom_battery_level",
+        jam_sensor="binary_sensor.demo_office_lock_jammed",
+        battery_entity="sensor.demo_office_battery_level",
     )
     rebuilt = settings_from_dict(settings.to_dict())
     meta = rebuilt.member_meta[LOCK_A]
-    assert meta.jam_sensor == "binary_sensor.bathroom_lock_jammed"
-    assert meta.battery_entity == "sensor.bathroom_battery_level"
+    assert meta.jam_sensor == "binary_sensor.demo_office_lock_jammed"
+    assert meta.battery_entity == "sensor.demo_office_battery_level"
 
 
 def test_legacy_zone_without_member_meta_hydrates_empty() -> None:
@@ -91,8 +91,8 @@ async def test_update_zone_settings_service_persists_member_meta(
                 "settings": {
                     "member_meta": {
                         LOCK_A: {
-                            "jam_sensor": "binary_sensor.bathroom_lock_jammed",
-                            "battery_entity": "sensor.bathroom_battery_level",
+                            "jam_sensor": "binary_sensor.demo_office_lock_jammed",
+                            "battery_entity": "sensor.demo_office_battery_level",
                         }
                     }
                 },
@@ -117,18 +117,18 @@ async def test_update_zone_settings_service_persists_member_meta(
         )
 
     meta = hass.data[ZONE_REGISTRY_KEY]["z1"].settings.member_meta[LOCK_A]
-    assert meta.jam_sensor == "binary_sensor.bathroom_lock_jammed"
-    assert meta.battery_entity == "sensor.bathroom_battery_level"
+    assert meta.jam_sensor == "binary_sensor.demo_office_lock_jammed"
+    assert meta.battery_entity == "sensor.demo_office_battery_level"
 
 
 def test_member_meta_exposed_over_zone_api(hass: HomeAssistant) -> None:
     """The zone DATA API surfaces member_meta under settings (entity ids only)."""
     zone = Zone(zone_id="z1", name="Zone One", member_lock_entity_ids=[LOCK_A])
     zone.settings.member_meta[LOCK_A] = MemberMeta(
-        jam_sensor="binary_sensor.bathroom_lock_jammed",
-        battery_entity="sensor.bathroom_battery_level",
+        jam_sensor="binary_sensor.demo_office_lock_jammed",
+        battery_entity="sensor.demo_office_battery_level",
     )
     serialized = _serialize_zone(hass, zone, {})
     api_meta = serialized["settings"]["member_meta"][LOCK_A]
-    assert api_meta["jam_sensor"] == "binary_sensor.bathroom_lock_jammed"
-    assert api_meta["battery_entity"] == "sensor.bathroom_battery_level"
+    assert api_meta["jam_sensor"] == "binary_sensor.demo_office_lock_jammed"
+    assert api_meta["battery_entity"] == "sensor.demo_office_battery_level"

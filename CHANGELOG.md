@@ -115,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Parent cards aggregate child-lock events**: the panel `renderAccessLog()`
   merges a parent lock's own log with its child locks' logs into one
   time-sorted timeline and badges each row with the originating door
-  ("Front North" vs "Rear Entrance"). Standalone locks show no badge. Legacy
+  ("Demo Front" vs "Demo Back"). Standalone locks show no badge. Legacy
   entries lacking `lock_name` fall back gracefully to the card's lock name.
 
 ## [2025.1.2] - 2026-05-28 - Access Log with User Attribution

@@ -538,7 +538,7 @@ class TestMemberMetaResolution:
 
     def test_jam_member_meta_subscribed_state_path(self, hass: HomeAssistant) -> None:
         """The configured jam sensor is monitored AND drives the state path."""
-        custom_jam = "binary_sensor.front_middle_door_lock_access_control_lock_jammed"
+        custom_jam = "binary_sensor.demo_side_access_control_lock_jammed"
         _register_zone(hass, self._zone_with_meta(jam_sensor=custom_jam))
         engine = AlertEngine(hass)
         # The custom jam sensor is in the subscribed entity set.
@@ -762,99 +762,102 @@ class TestAlertSubjects:
         """A supplied prefix is used verbatim for the subject line."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
-            "member_entity_id": "lock.front_north",
+            "member_entity_id": "lock.demo_front",
             "message": "Unlocked >15s without re-lock",
             "is_recovery": False,
         }
         assert build_alert_subject(alert, "My Home -") == (
-            "My Home - lock.front_north unlocked >15s"
+            "My Home - lock.demo_front unlocked >15s"
         )
 
     def test_sustained_subject_default_prefix(self) -> None:
         """sustained_unlock -> '{prefix} {entity} unlocked >{n}s'."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
-            "member_entity_id": "lock.front_north",
-            "door_name": "Front North",
+            "member_entity_id": "lock.demo_front",
+            "door_name": "Demo Front",
             "message": "Unlocked >15s without re-lock",
             "is_recovery": False,
         }
         assert build_alert_subject(alert) == (
-            "Home Assistant - lock.front_north unlocked >15s"
+            "Home Assistant - lock.demo_front unlocked >15s"
         )
 
     def test_sustained_recovery_subject(self) -> None:
         """sustained_unlock recovery -> '{prefix} {entity} locked again'."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
-            "member_entity_id": "lock.front_middle_door_lock",
+            "member_entity_id": "lock.demo_side",
             "is_recovery": True,
             "message": "Re-locked after sustained-unlock alert",
         }
         assert (
-            build_alert_subject(alert)
-            == "Home Assistant - lock.front_middle_door_lock locked again"
+            build_alert_subject(alert) == "Home Assistant - lock.demo_side locked again"
         )
 
     def test_outside_hours_subject(self) -> None:
         """outside_hours -> '{prefix} door {entity} unlocked outside ...'."""
         alert = {
             "alert_type": ALERT_OUTSIDE_HOURS,
-            "member_entity_id": "lock.rear",
+            "member_entity_id": "lock.demo_back",
             "message": "Unlocked outside business hours",
             "is_recovery": False,
         }
         assert build_alert_subject(alert) == (
-            "Home Assistant - door lock.rear unlocked outside business hours"
+            "Home Assistant - door lock.demo_back unlocked outside business hours"
         )
 
     def test_outside_hours_recovery_subject(self) -> None:
         """outside_hours recovery -> '{prefix} {entity} locked again'."""
         alert = {
             "alert_type": ALERT_OUTSIDE_HOURS,
-            "member_entity_id": "lock.rear",
+            "member_entity_id": "lock.demo_back",
             "is_recovery": True,
         }
-        assert build_alert_subject(alert) == "Home Assistant - lock.rear locked again"
+        assert (
+            build_alert_subject(alert) == "Home Assistant - lock.demo_back locked again"
+        )
 
     def test_auto_lock_failed_subject_uses_name(self) -> None:
         """auto_lock_failed -> '{prefix} {name} FAILED to auto-lock at COB'."""
         alert = {
             "alert_type": "auto_lock_failed",
-            "member_entity_id": "lock.front_north",
-            "door_name": "Front North",
+            "member_entity_id": "lock.demo_front",
+            "door_name": "Demo Front",
             "message": "scheduled auto-lock FAILED after 3 attempt(s)",
         }
         # Uses the friendly NAME (not the entity id).
         assert build_alert_subject(alert) == (
-            "Home Assistant - Front North FAILED to auto-lock at COB"
+            "Home Assistant - Demo Front FAILED to auto-lock at COB"
         )
 
     def test_slm_only_subjects(self) -> None:
         """Native-only types (jam/low_battery/offline) use the house style."""
         jam = {
             "alert_type": ALERT_JAM,
-            "member_entity_id": "lock.bathroom",
+            "member_entity_id": "lock.demo_office",
             "is_recovery": False,
         }
-        assert build_alert_subject(jam) == "Home Assistant - lock.bathroom jammed"
+        assert build_alert_subject(jam) == "Home Assistant - lock.demo_office jammed"
 
         battery = {
             "alert_type": ALERT_LOW_BATTERY,
-            "member_entity_id": "lock.suite_105",
+            "member_entity_id": "lock.demo_unit_a",
             "message": "Battery low (8%)",
             "is_recovery": False,
         }
         assert build_alert_subject(battery) == (
-            "Home Assistant - lock.suite_105 battery low (8%)"
+            "Home Assistant - lock.demo_unit_a battery low (8%)"
         )
 
         offline = {
             "alert_type": ALERT_OFFLINE,
-            "member_entity_id": "lock.suite_106",
+            "member_entity_id": "lock.demo_unit_b",
             "is_recovery": False,
         }
-        assert build_alert_subject(offline) == "Home Assistant - lock.suite_106 offline"
+        assert (
+            build_alert_subject(offline) == "Home Assistant - lock.demo_unit_b offline"
+        )
 
     def test_unknown_type_falls_back_to_house_style(self) -> None:
         """An unknown alert_type still yields a non-empty '{prefix} ...'."""
@@ -1092,8 +1095,8 @@ class TestAlertBodies:
         """outside_hours alert body lists lock / state / timestamps."""
         alert = {
             "alert_type": ALERT_OUTSIDE_HOURS,
-            "member_entity_id": "lock.front_north",
-            "friendly_name": "Front North",
+            "member_entity_id": "lock.demo_front",
+            "friendly_name": "Demo Front",
             "timestamp": "2026-06-19T10:00:00",
             "last_changed": "2026-06-19T09:55:00",
             "message": "Unlocked outside business hours",
@@ -1101,7 +1104,7 @@ class TestAlertBodies:
             "is_recovery": False,
         }
         assert build_alert_body(alert) == (
-            "Lock: Front North (lock.front_north)\n"
+            "Lock: Demo Front (lock.demo_front)\n"
             "State: unlocked\n"
             "Timestamp: 2026-06-19T10:00:00\n"
             "Last changed: 2026-06-19T09:55:00"
@@ -1111,8 +1114,8 @@ class TestAlertBodies:
         """outside_hours recovery body closes the alert."""
         alert = {
             "alert_type": ALERT_OUTSIDE_HOURS,
-            "member_entity_id": "lock.front_north",
-            "friendly_name": "Front North",
+            "member_entity_id": "lock.demo_front",
+            "friendly_name": "Demo Front",
             "timestamp": "2026-06-19T10:00:00",
             "last_changed": "2026-06-19T09:55:00",
             "message": "Unlocked outside business hours",
@@ -1120,7 +1123,7 @@ class TestAlertBodies:
             "is_recovery": True,
         }
         assert build_alert_body(alert) == (
-            "Front North (lock.front_north) was previously alerted as unlocked.\n"
+            "Demo Front (lock.demo_front) was previously alerted as unlocked.\n"
             "Now showing state: locked.\n"
             "Last unlocked at: 2026-06-19T09:55:00\n"
             "Recovery timestamp: 2026-06-19T10:00:00\n"
@@ -1131,8 +1134,8 @@ class TestAlertBodies:
         """sustained_unlock alert body lists elapsed seconds + severity."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
-            "member_entity_id": "lock.front_middle_door_lock",
-            "friendly_name": "Front Middle",
+            "member_entity_id": "lock.demo_side",
+            "friendly_name": "Demo Side",
             "timestamp": "2026-06-19T10:00:00",
             "last_changed": "2026-06-19T09:59:00",
             "message": "Unlocked >30s without re-lock (dev-simulated)",
@@ -1140,7 +1143,7 @@ class TestAlertBodies:
             "is_recovery": False,
         }
         assert build_alert_body(alert) == (
-            "Lock: Front Middle (lock.front_middle_door_lock)\n"
+            "Lock: Demo Side (lock.demo_side)\n"
             "State: unlocked\n"
             "Elapsed: 30s without re-lock\n"
             "Severity: CRIT"
@@ -1150,8 +1153,8 @@ class TestAlertBodies:
         """sustained_unlock recovery body closes the alert."""
         alert = {
             "alert_type": ALERT_SUSTAINED,
-            "member_entity_id": "lock.front_middle_door_lock",
-            "friendly_name": "Front Middle",
+            "member_entity_id": "lock.demo_side",
+            "friendly_name": "Demo Side",
             "timestamp": "2026-06-19T10:00:00",
             "last_changed": "2026-06-19T09:59:00",
             "message": "Unlocked >30s without re-lock (dev-simulated)",
@@ -1159,7 +1162,7 @@ class TestAlertBodies:
             "is_recovery": True,
         }
         assert build_alert_body(alert) == (
-            "Front Middle (lock.front_middle_door_lock) is now locked again.\n"
+            "Demo Side (lock.demo_side) is now locked again.\n"
             "Previously alerted as sustained-unlocked.\n"
             "Last unlocked at: 2026-06-19T09:59:00\n"
             "Recovery timestamp: 2026-06-19T10:00:00\n"
@@ -1170,15 +1173,15 @@ class TestAlertBodies:
         """Jam alert body lists lock / jammed state / detail / timestamps."""
         alert = {
             "alert_type": ALERT_JAM,
-            "member_entity_id": "lock.bathroom",
-            "friendly_name": "Bathroom",
+            "member_entity_id": "lock.demo_office",
+            "friendly_name": "Demo Office",
             "timestamp": "2026-06-19T10:00:00",
             "last_changed": "2026-06-19T09:58:00",
             "message": "Lock reported jammed",
             "is_recovery": False,
         }
         assert build_alert_body(alert) == (
-            "Lock: Bathroom (lock.bathroom)\n"
+            "Lock: Demo Office (lock.demo_office)\n"
             "State: jammed\n"
             "Detail: Lock reported jammed\n"
             "Timestamp: 2026-06-19T10:00:00\n"
@@ -1189,14 +1192,14 @@ class TestAlertBodies:
         """Jam recovery body closes the alert."""
         alert = {
             "alert_type": ALERT_JAM,
-            "member_entity_id": "lock.bathroom",
-            "friendly_name": "Bathroom",
+            "member_entity_id": "lock.demo_office",
+            "friendly_name": "Demo Office",
             "timestamp": "2026-06-19T10:00:00",
             "message": "Jam cleared",
             "is_recovery": True,
         }
         assert build_alert_body(alert) == (
-            "Bathroom (lock.bathroom) was previously alerted as jammed.\n"
+            "Demo Office (lock.demo_office) was previously alerted as jammed.\n"
             "Now showing state: jam cleared.\n"
             "Recovery timestamp: 2026-06-19T10:00:00\n"
             "Alert closed."
@@ -1206,14 +1209,14 @@ class TestAlertBodies:
         """low_battery alert body carries the percent + detail."""
         alert = {
             "alert_type": ALERT_LOW_BATTERY,
-            "member_entity_id": "lock.suite_105",
-            "friendly_name": "Suite 105",
+            "member_entity_id": "lock.demo_unit_a",
+            "friendly_name": "Demo Unit A",
             "timestamp": "2026-06-19T10:00:00",
             "message": "Battery low (8%)",
             "is_recovery": False,
         }
         assert build_alert_body(alert) == (
-            "Lock: Suite 105 (lock.suite_105)\n"
+            "Lock: Demo Unit A (lock.demo_unit_a)\n"
             "State: battery low (8%)\n"
             "Detail: Battery low (8%)\n"
             "Timestamp: 2026-06-19T10:00:00"
@@ -1223,14 +1226,14 @@ class TestAlertBodies:
         """low_battery recovery body closes the alert with percent."""
         alert = {
             "alert_type": ALERT_LOW_BATTERY,
-            "member_entity_id": "lock.suite_105",
-            "friendly_name": "Suite 105",
+            "member_entity_id": "lock.demo_unit_a",
+            "friendly_name": "Demo Unit A",
             "timestamp": "2026-06-19T10:00:00",
             "message": "Battery recovered (30%)",
             "is_recovery": True,
         }
         assert build_alert_body(alert) == (
-            "Suite 105 (lock.suite_105) battery recovered (30%).\n"
+            "Demo Unit A (lock.demo_unit_a) battery recovered (30%).\n"
             "Detail: Battery recovered (30%)\n"
             "Recovery timestamp: 2026-06-19T10:00:00\n"
             "Alert closed."
@@ -1240,15 +1243,15 @@ class TestAlertBodies:
         """Offline alert body lists offline state / detail / timestamps."""
         alert = {
             "alert_type": ALERT_OFFLINE,
-            "member_entity_id": "lock.suite_106",
-            "friendly_name": "Suite 106",
+            "member_entity_id": "lock.demo_unit_b",
+            "friendly_name": "Demo Unit B",
             "timestamp": "2026-06-19T10:00:00",
             "last_changed": "2026-06-19T09:50:00",
             "message": "No response from node",
             "is_recovery": False,
         }
         assert build_alert_body(alert) == (
-            "Lock: Suite 106 (lock.suite_106)\n"
+            "Lock: Demo Unit B (lock.demo_unit_b)\n"
             "State: offline\n"
             "Detail: No response from node\n"
             "Timestamp: 2026-06-19T10:00:00\n"
@@ -1259,14 +1262,14 @@ class TestAlertBodies:
         """Offline recovery body closes the alert."""
         alert = {
             "alert_type": ALERT_OFFLINE,
-            "member_entity_id": "lock.suite_106",
-            "friendly_name": "Suite 106",
+            "member_entity_id": "lock.demo_unit_b",
+            "friendly_name": "Demo Unit B",
             "timestamp": "2026-06-19T10:00:00",
             "message": "Node responded",
             "is_recovery": True,
         }
         assert build_alert_body(alert) == (
-            "Suite 106 (lock.suite_106) is back online.\n"
+            "Demo Unit B (lock.demo_unit_b) is back online.\n"
             "Recovery timestamp: 2026-06-19T10:00:00\n"
             "Alert closed."
         )
@@ -1275,15 +1278,15 @@ class TestAlertBodies:
         """auto_lock_failed body carries the failure detail + physical check."""
         alert = {
             "alert_type": "auto_lock_failed",
-            "member_entity_id": "lock.rear",
-            "friendly_name": "Rear Entrance",
+            "member_entity_id": "lock.demo_back",
+            "friendly_name": "Demo Back",
             "timestamp": "2026-06-19T17:30:00",
             "last_changed": "2026-06-19T17:29:00",
             "message": "FAILED to auto-lock after 3 attempts",
             "severity": "CRIT",
         }
         assert build_alert_body(alert) == (
-            "Lock: Rear Entrance (lock.rear)\n"
+            "Lock: Demo Back (lock.demo_back)\n"
             "State: failed to auto-lock\n"
             "Detail: FAILED to auto-lock after 3 attempts\n"
             "Timestamp: 2026-06-19T17:30:00\n"

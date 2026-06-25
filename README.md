@@ -96,8 +96,8 @@ service: smart_lock_manager.create_zone
 data:
   name: "Front Entrances"
   member_lock_entity_ids:
-    - lock.front_north
-    - lock.front_south
+    - lock.front_door
+    - lock.back_door
 
 # 2. Add another unhomed lock later (applies the zone's codes to its hardware).
 service: smart_lock_manager.add_lock_to_zone
@@ -193,18 +193,18 @@ Each accepts `1` / `true` / `yes` / `on` (case-insensitive) as truthy.
 # Permanently silence one lock (all alert types) until you unmute it.
 service: smart_lock_manager.mute_lock_alert
 data:
-  entity_id: lock.front_north
+  entity_id: lock.front_door
 
 # Mute just one alert type on one lock.
 service: smart_lock_manager.mute_lock_alert
 data:
-  entity_id: lock.front_north
+  entity_id: lock.front_door
   alert_type: low_battery
 
 # Re-enable alerts for that lock.
 service: smart_lock_manager.unmute_lock_alert
 data:
-  entity_id: lock.front_north
+  entity_id: lock.front_door
 
 # Snooze ALL zones for 2 hours (alerts still recorded, just not notified; auto-expires).
 service: smart_lock_manager.pause_alerts

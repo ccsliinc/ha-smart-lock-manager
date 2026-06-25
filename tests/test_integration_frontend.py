@@ -132,7 +132,7 @@ class TestFrontendBackendIntegration:
         """Test the specific weekend slot issue that was reported."""
         # This recreates the exact scenario from the bug report
         lock = SmartLockManagerLock(
-            lock_name="Front Middle", lock_entity_id="lock.front_middle"
+            lock_name="Demo Side", lock_entity_id="lock.demo_side"
         )
 
         # Slot 1: Always active

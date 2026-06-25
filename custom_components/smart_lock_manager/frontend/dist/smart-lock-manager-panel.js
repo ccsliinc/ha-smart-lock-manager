@@ -1433,7 +1433,7 @@ class SmartLockManagerPanel extends HTMLElement {
           <ha-icon icon="${chevron}" class="zone-section-chevron${expanded ? ' expanded' : ''}" style="width:18px;height:18px;"></ha-icon>
         </div>
         <div class="dev-alerts-banner" style="${expanded ? '' : 'display:none;'}">
-          Dev / observe-only — no notifications sent
+          Observe-only — no notifications sent
         </div>
         <div class="access-log-body" style="${expanded ? '' : 'display:none;'}">
           ${alerts.length ? rows : '<div class="access-log-empty">No alerts recorded yet.</div>'}
@@ -3802,11 +3802,6 @@ class SmartLockManagerPanel extends HTMLElement {
             <button class="close-btn" onclick="SmartLockManagerPanel.closeZoneSettings()">×</button>
           </div>
           <div class="form-container zs-form">
-            <p class="zs-note">
-              <ha-icon icon="mdi:information-outline" style="width:16px;height:16px;vertical-align:-3px;"></ha-icon>
-              Alerts and notifications are <strong>observe-only</strong> in the current build — these
-              settings persist now and will drive delivery once wiring lands.
-            </p>
 
             <!-- Business Hours -->
             <div class="zs-section">

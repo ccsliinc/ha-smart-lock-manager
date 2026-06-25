@@ -39,17 +39,16 @@ _DEV_MOCK_ENV = "SLM_DEV_MOCK"
 # notification is shaped exactly like a real Kwikset Access Control event.
 _NOTIFICATION_COMMAND_CLASS = 113
 
-# Dummy entity_id -> Z-Wave node_id table for the 7 dev locks. Mirrors the
-# CURRENT office topology so the migration baseline can be reproduced. Keep in
-# sync with ``dev-config/configuration.yaml`` and ``scripts/seed_dev_zones.py``.
+# Dummy entity_id -> Z-Wave node_id table for the dev locks. Seven generic
+# demo locks for the dev-mock harness.
 ENTITY_TO_NODE_ID: Dict[str, int] = {
-    "lock.front_north": 28,
-    "lock.rear": 26,
-    "lock.front_middle_door_lock": 13,
-    "lock.bathroom": 19,
-    "lock.front_south_door_lock": 14,
-    "lock.suite_105": 22,
-    "lock.suite_106": 20,
+    "lock.demo_front": 10,
+    "lock.demo_back": 11,
+    "lock.demo_side": 12,
+    "lock.demo_office": 13,
+    "lock.demo_garage": 14,
+    "lock.demo_unit_a": 15,
+    "lock.demo_unit_b": 16,
 }
 
 
@@ -162,7 +161,7 @@ class MockBoltStatus:
         - Inputs: entity_id (str lock entity id), bolt_status (str like
           ``"unlocked"`` / ``"locked"``, or None to clear the override).
         - Outputs: None.
-        - Example: ``MOCK_BOLT.set_override("lock.rear", "unlocked")`` makes the
+        - Example: ``MOCK_BOLT.set_override("lock.demo_back", "unlocked")`` makes the
           next verify read fail so the engine retries.
         """
         with self._lock:
@@ -201,7 +200,7 @@ def mock_get_usercode(node: Any, slot: int) -> Dict[str, Any]:
       every existing caller in SLM works unchanged.
     - Inputs: node (object with a ``node_id`` attr), slot (int).
     - Outputs: dict mirroring the real CodeSlot read result.
-    - Example: ``mock_get_usercode(SimpleNamespace(node_id=28), 1)``.
+    - Example: ``mock_get_usercode(SimpleNamespace(node_id=10), 1)``.
     """
     node_id = getattr(node, "node_id", None)
     code = MOCK_DB.get_usercode(node_id, slot) if node_id is not None else None
@@ -218,10 +217,10 @@ def mock_node_for_entity(entity_id: str) -> Optional[SimpleNamespace]:
 
     - Description: Resolve a dummy lock entity_id to a fake node object
       carrying the seeded ``node_id``, using ``ENTITY_TO_NODE_ID``.
-    - Inputs: entity_id (str), e.g. ``"lock.front_north"``.
+    - Inputs: entity_id (str), e.g. ``"lock.demo_front"``.
     - Outputs: ``SimpleNamespace(node_id=...)`` or None if the entity is not a
       known dev lock.
-    - Example: ``mock_node_for_entity("lock.rear").node_id`` -> 26.
+    - Example: ``mock_node_for_entity("lock.demo_back").node_id`` -> 11.
     """
     node_id = ENTITY_TO_NODE_ID.get(entity_id)
     if node_id is None:
@@ -287,7 +286,7 @@ def fire_mock_notification(
         event_code: Access Control event code (e.g. 6 = keypad unlock).
         user_id: SLM code slot for keypad events (codes 5/6); else None.
     - Outputs: None (fires onto ``hass.bus``).
-    - Example: ``fire_mock_notification(hass, 28, 6, user_id=1)``.
+    - Example: ``fire_mock_notification(hass, 10, 6, user_id=1)``.
     """
     data: Dict[str, Any] = {
         "command_class": _NOTIFICATION_COMMAND_CLASS,
