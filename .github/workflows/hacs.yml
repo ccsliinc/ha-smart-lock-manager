@@ -52,10 +52,11 @@ jobs:
                 raise ValueError(f'HACS requires manifest field: {field}')
             print(f'✅ HACS field present: {field}')
 
-        # Version format check
+        # Version format check (calendar versioning: YYYY.M.P, year not pinned)
+        import re
         version = manifest['version']
-        if not version.startswith('2025.'):
-            raise ValueError(f'Expected CalVer format (2025.x.x), got: {version}')
+        if not re.fullmatch(r'\d{4}\.\d{1,2}\.\d+', str(version)):
+            raise ValueError(f'Expected CalVer format (YYYY.M.P), got: {version}')
         print(f'✅ Version format valid: {version}')
         "
 
