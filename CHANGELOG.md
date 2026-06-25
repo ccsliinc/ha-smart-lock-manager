@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.7.2] - Remove engine-status banner
+
+### Changed
+- Removed the persistent engine-status banner from the panel header. It added
+  clutter without actionable value; engine state remains available via the
+  integration's data. The Alerts section is unchanged.
+
 ## [2026.7.1] - Engine-status banner accuracy
 
 ### Fixed

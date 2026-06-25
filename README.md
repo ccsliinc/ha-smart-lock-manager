@@ -9,7 +9,7 @@ off a single summary sensor per lock instead of dozens of entities.
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/ccsliinc/ha-smart-lock-manager)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.8+-blue.svg)](https://www.home-assistant.io/)
-[![Version](https://img.shields.io/badge/Version-2026.7.1-green.svg)](#)
+[![Version](https://img.shields.io/badge/Version-2026.7.2-green.svg)](#)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/ccsliinc)
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue.svg?logo=paypal)](https://paypal.me/jsugamele)
 
@@ -58,9 +58,9 @@ off a single summary sensor per lock instead of dozens of entities.
 ### Manual
 
 ```bash
-wget https://github.com/ccsliinc/ha-smart-lock-manager/archive/refs/tags/v2026.7.1.zip
-unzip v2026.7.1.zip
-cp -r ha-smart-lock-manager-2026.7.1/custom_components/smart_lock_manager /config/custom_components/
+wget https://github.com/ccsliinc/ha-smart-lock-manager/archive/refs/tags/v2026.7.2.zip
+unzip v2026.7.2.zip
+cp -r ha-smart-lock-manager-2026.7.2/custom_components/smart_lock_manager /config/custom_components/
 ```
 
 Restart Home Assistant after copying the files.
