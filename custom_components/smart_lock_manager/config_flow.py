@@ -98,6 +98,7 @@ class SmartLockManagerOptionsFlow(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Manage the options."""
         entry = self.config_entry
+        opts = dict(entry.options or {})
         errors: Dict[str, str] = {}
 
         if user_input is not None:
@@ -122,8 +123,15 @@ class SmartLockManagerOptionsFlow(config_entries.OptionsFlow):
                 }
                 self.hass.config_entries.async_update_entry(entry, data=new_data)
 
-                # Nothing to store in entry.options — return empty options.
-                return self.async_create_entry(title="", data={})
+                # Persist portable notification settings to entry.options (the
+                # dispatcher reads these per-lock): a notify.* service, the
+                # direct-SMTP toggle, and the SMTP recipients override.
+                new_options = {
+                    "notify_service": user_input.get("notify_service", "").strip(),
+                    "smtp_enabled": bool(user_input.get("smtp_enabled", False)),
+                    "smtp_recipients": user_input.get("smtp_recipients", "").strip(),
+                }
+                return self.async_create_entry(title="", data=new_options)
 
         # Pre-fill current values from entry.data so editing is non-destructive.
         data_schema = vol.Schema(
@@ -142,6 +150,18 @@ class SmartLockManagerOptionsFlow(config_entries.OptionsFlow):
                     "slots",
                     default=entry.data.get("slots", 10),
                 ): vol.All(int, vol.Range(min=1, max=50)),
+                vol.Optional(
+                    "notify_service",
+                    default=opts.get("notify_service", ""),
+                ): str,
+                vol.Optional(
+                    "smtp_enabled",
+                    default=opts.get("smtp_enabled", False),
+                ): bool,
+                vol.Optional(
+                    "smtp_recipients",
+                    default=opts.get("smtp_recipients", ""),
+                ): str,
             }
         )
 

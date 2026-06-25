@@ -21,17 +21,23 @@ from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
 from typing import Any, Dict, List, Optional
 
-import yaml
 from homeassistant.core import HomeAssistant
+
+from .notifications_config import load_smtp_creds_sync
 
 _LOGGER = logging.getLogger(__name__)
 
 # --- lib_email parity constants (replicated EXACTLY) ------------------------
 SECRETS_FILENAME = "secrets.yaml"
 HOST_TAG_FILENAME = ".ha_host_tag"
-SMTP_HOST = "mail.smtp2go.com"
-SMTP_PORT = 587
 SMTP_TIMEOUT = 15  # seconds
+
+# Back-compat alias: the cred loader moved to :mod:`.notifications_config`
+# (generic-first slm_smtp_* with smtp2go_* fallback). Re-exported here under the
+# historical name so existing tests/mocks that patch
+# ``notifications_channels._load_secrets_sync`` keep working, and so
+# :meth:`EmailNotifier._creds` resolves a module-level name tests can patch.
+_load_secrets_sync = load_smtp_creds_sync
 
 # Severity -> visual marker (empty string means "no marker"). Mirrors
 # lib_email._MARKERS exactly so subjects are byte-compatible.
@@ -48,56 +54,28 @@ CHANNEL_EMAIL = "email"
 CHANNEL_MOBILE = "mobile"
 
 
-def _format_subject(severity: str, subject: str, kind: str) -> str:
-    """Wrap a subject as ``[fleet/internal/<kind>] <marker?> <subject>``.
+def _format_subject(
+    severity: str, subject: str, kind: str, prefix: Optional[str] = None
+) -> str:
+    """Format a neutral subject line, with an optional caller-supplied prefix.
 
-    - Description: Byte-for-byte port of ``lib_email._format_subject``. The
-      ``daily`` kind never gets a marker; every other kind gets the severity
-      marker when one is defined.
-    - Inputs: severity (str), subject (str), kind (str).
+    - Description: The default output is ``f"{marker} {subject}"`` — just the
+      severity marker (when one is defined) and the subject; the ``daily`` kind
+      never carries a marker. The legacy ``[fleet/internal/<kind>]`` wrapper is
+      GONE so a stranger's install reads cleanly. An optional ``prefix`` is
+      prepended when truthy (e.g. an office bracketed tag), yielding
+      ``f"{prefix} {marker} {subject}"`` (or ``f"{prefix} {subject}"`` when no
+      marker applies).
+    - Inputs: severity (str), subject (str), kind (str), prefix (Optional[str]
+      — a caller-supplied lead, e.g. a bracketed routing tag; None => none).
     - Outputs: str subject line.
+    - Example: ``_format_subject("WARN", "lock unlocked", "alert")`` ->
+      ``"🟡 lock unlocked"``.
     """
-    prefix = f"[fleet/internal/{kind}]"
     marker = "" if kind == "daily" else _MARKERS.get(severity.upper(), "")
-    if marker:
-        return f"{prefix} {marker} {subject}"
-    return f"{prefix} {subject}"
-
-
-def _load_secrets_sync(secrets_path: str) -> Optional[Dict[str, Any]]:
-    """Read SMTP2GO creds from ``secrets.yaml`` (BLOCKING file IO).
-
-    - Description: Mirrors ``lib_email._load_secrets`` — base creds plus the
-      per-kind extra-recipient lists (here only ``alert`` is needed). MUST be
-      run in the executor, never the event loop. Returns None if a required
-      base credential is missing.
-    - Inputs: secrets_path (str absolute path to secrets.yaml).
-    - Outputs: dict {user, pass, from, to, kind_to: {alert: [...]}} or None.
-    """
-    try:
-        with open(secrets_path, "r", encoding="utf-8") as handle:
-            secrets = yaml.safe_load(handle) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        _LOGGER.error("notifications: failed to read %s: %s", secrets_path, exc)
-        return None
-
-    creds: Dict[str, Any] = {
-        "user": secrets.get("smtp2go_user"),
-        "pass": secrets.get("smtp2go_pass"),
-        "from": secrets.get("smtp2go_from"),
-        "to": secrets.get("smtp2go_to"),
-    }
-    missing = [k for k, v in creds.items() if not v]
-    if missing:
-        _LOGGER.error("notifications: missing SMTP2GO secrets: %s", missing)
-        return None
-
-    kind_to: Dict[str, List[str]] = {}
-    for kind in ("alert", "daily", "info", "test"):
-        raw = secrets.get(f"smtp2go_{kind}_to") or ""
-        kind_to[kind] = [a.strip() for a in str(raw).split(",") if a.strip()]
-    creds["kind_to"] = kind_to
-    return creds
+    if prefix:
+        return f"{prefix} {marker} {subject}" if marker else f"{prefix} {subject}"
+    return f"{marker} {subject}" if marker else subject
 
 
 def _read_host_tag_sync(host_tag_path: str) -> Optional[str]:
@@ -337,7 +315,9 @@ class EmailNotifier:
         """
         msg = self._build_mime(creds, email)
         try:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as smtp:
+            host = creds.get("host") or "mail.smtp2go.com"
+            port = int(creds.get("port") or 587)
+            with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT) as smtp:
                 smtp.ehlo()
                 smtp.starttls()
                 smtp.ehlo()

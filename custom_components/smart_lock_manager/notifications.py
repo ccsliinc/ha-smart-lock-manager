@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional
 
 from homeassistant.core import HomeAssistant
 
+from .const import DOMAIN
 from .models.zone_settings import EmailNotify, MobileNotify, ZoneNotify
 from .notifications_bodies import (
     build_alert_body,
@@ -131,6 +132,39 @@ class NotificationDispatcher:
             return "HEALTHY-RECOVERY"
         return str(alert.get("severity") or "INFO").upper()
 
+    def _options_for(self, member_entity_id: str) -> Dict[str, Any]:
+        """Return the SLM config-entry options governing one member lock.
+
+        - Description: Looks up SLM config entries. If exactly one entry exists
+          it is used; otherwise the entry whose ``data["lock_entity_id"]``
+          matches ``member_entity_id`` is selected. Returns that entry's options
+          (notify_service / smtp_enabled / smtp_recipients) as a plain dict, or
+          ``{}`` when no entry matches or config_entries is unavailable (e.g. a
+          Mock in tests).
+        - Inputs: member_entity_id (str — the alert's lock entity id).
+        - Outputs: dict of entry options (possibly empty).
+        """
+        try:
+            entries = list(self.hass.config_entries.async_entries(DOMAIN))
+        except Exception:  # noqa: BLE001 - Mock hass / no entries -> no options
+            return {}
+        if not entries:
+            return {}
+        if len(entries) == 1:
+            entry = entries[0]
+        else:
+            entry = next(
+                (
+                    e
+                    for e in entries
+                    if e.data.get("lock_entity_id") == member_entity_id
+                ),
+                None,
+            )
+            if entry is None:
+                return {}
+        return dict(entry.options or {})
+
     async def dispatch(
         self, alert: Dict[str, Any], notify: ZoneNotify
     ) -> List[Dict[str, Any]]:
@@ -138,7 +172,11 @@ class NotificationDispatcher:
 
         - Description: For each enabled channel, renders the payload, logs it,
           records a structured intent, and (only when real-send is permitted)
-          dispatches it. In dry-run NOTHING is sent. The returned intents are
+          dispatches it. Reads the lock's config-entry options once to resolve a
+          portable ``notify_service`` and the ``smtp_enabled`` /
+          ``smtp_recipients`` SMTP overrides. In dry-run NOTHING is sent. When
+          notifications are "on" yet nothing is deliverable (real-send only),
+          fires a fail-loud ``persistent_notification``. The returned intents are
           attached to the alert record so the API/panel can show them.
         - Inputs: alert (dict alert record), notify (ZoneNotify zone config).
         - Outputs: list of intent dicts ``{channel, recipients|targets, subject,
@@ -151,19 +189,140 @@ class NotificationDispatcher:
         body = build_alert_body(alert)
         body_lines = build_alert_body_lines(alert)
 
-        if notify.email.enabled:
-            intent = await self._dispatch_email(
-                alert, notify.email, severity, subject, body, body_lines
+        member = str(alert.get("member_entity_id") or "")
+        options = self._options_for(member)
+        notify_service = (options.get("notify_service") or "").strip()
+        # SMTP path runs for the per-zone email flag OR the global smtp_enabled
+        # option (lets a HACS user opt into direct SMTP without a per-zone flag).
+        email_on = notify.email.enabled or bool(options.get("smtp_enabled"))
+        # Global recipients override (used only when the zone override is empty).
+        options_recipients = [
+            a.strip()
+            for a in str(options.get("smtp_recipients") or "").split(",")
+            if a.strip()
+        ]
+
+        email_intent: Optional[Dict[str, Any]] = None
+        if email_on:
+            email_intent = await self._dispatch_email(
+                alert,
+                notify.email,
+                severity,
+                subject,
+                body,
+                body_lines,
+                options_recipients,
             )
-            if intent is not None:
-                intents.append(intent)
+            if email_intent is not None:
+                intents.append(email_intent)
 
         if notify.mobile.enabled:
             intents.append(
                 await self._dispatch_mobile(alert, notify.mobile, subject, body)
             )
 
+        if notify_service and (email_on or notify.mobile.enabled):
+            intents.append(
+                await self._dispatch_notify_service(notify_service, subject, body)
+            )
+
+        self._maybe_fail_loud(
+            member=member,
+            email_on=email_on,
+            email_intent=email_intent,
+            notify_service=notify_service,
+            mobile_enabled=notify.mobile.enabled,
+        )
+
         return intents
+
+    def _maybe_fail_loud(
+        self,
+        member: str,
+        email_on: bool,
+        email_intent: Optional[Dict[str, Any]],
+        notify_service: str,
+        mobile_enabled: bool,
+    ) -> None:
+        """Fire a persistent_notification when alerts fire but nothing delivers.
+
+        - Description: D6 fail-loud. Only when real-send is permitted: if the
+          email path was the ONLY thing enabled, its render produced nothing
+          (creds missing => ``email_intent is None``), there is no
+          ``notify_service``, and mobile is not enabled, raise a stable
+          ``persistent_notification`` telling the user to configure a delivery
+          channel. Never nags in dry-run. Best-effort: schedules the service
+          call and swallows errors so a misconfig can't crash dispatch.
+        - Inputs: member (str lock id), email_on (bool), email_intent (dict or
+          None), notify_service (str), mobile_enabled (bool).
+        - Outputs: None (side effect: schedules a persistent_notification).
+        """
+        if not self._should_really_send():
+            return
+        unconfigured = (
+            email_on
+            and email_intent is None
+            and not notify_service
+            and not mobile_enabled
+        )
+        if not unconfigured:
+            return
+        _LOGGER.warning(
+            "notifications: alert fired for %s but no delivery channel is "
+            "configured (SMTP creds missing, no notify_service, mobile off)",
+            member,
+        )
+        try:
+            self.hass.async_create_task(
+                self.hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "notification_id": f"slm_notify_unconfigured_{member}",
+                        "title": ("Smart Lock Manager: notifications not configured"),
+                        "message": (
+                            "An alert fired but no delivery channel is "
+                            "configured. Set a notify_service in the integration "
+                            "options, or add SMTP credentials (slm_smtp_* or "
+                            "smtp2go_*) to secrets.yaml."
+                        ),
+                    },
+                    blocking=False,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - never crash on a nag failure
+            _LOGGER.warning("notifications: failed to raise unconfigured nag: %s", exc)
+
+    async def _dispatch_notify_service(
+        self, service: str, subject: str, body: str
+    ) -> Dict[str, Any]:
+        """Send the alert through a portable ``notify.<service>`` service.
+
+        - Description: The RECOMMENDED portable path (D2). Reuses
+          :meth:`..notifications_channels.MobileNotifier.send_real`, which calls
+          ``notify.<service>`` with a plain-text title/message. Gated by
+          :meth:`_should_really_send` like the other channels; dry-run logs only.
+        - Inputs: service (str notify.* service name), subject (str title),
+          body (str plain-text message).
+        - Outputs: intent dict ``{channel, service, subject, dry_run, sent}``.
+        """
+        sent = False
+        if self._should_really_send():
+            sent = await self.mobile.send_real(service, subject, body)
+        else:
+            _LOGGER.info(
+                "notifications DRY-RUN notify_service (no send): "
+                "service=%r title=%r",
+                service,
+                subject,
+            )
+        return {
+            "channel": "notify_service",
+            "service": service,
+            "subject": subject,
+            "dry_run": not self._should_really_send(),
+            "sent": sent,
+        }
 
     async def _dispatch_email(
         self,
@@ -173,12 +332,15 @@ class NotificationDispatcher:
         subject: str,
         body: str,
         body_lines: List[str],
+        options_recipients: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render + (dry-run) record / (real) send the email channel.
 
         - Inputs: alert (dict), email_cfg (EmailNotify), severity (str),
           subject (str), body (str), body_lines (list[str] un-joined body lines
-          for the HTML card).
+          for the HTML card), options_recipients (Optional[list[str]] — the
+          global ``smtp_recipients`` override, used ONLY when the zone's
+          ``recipients_override`` is empty).
         - Outputs: intent dict, or None when the payload could not be rendered.
         """
         actor = alert.get("actor")
@@ -187,11 +349,15 @@ class NotificationDispatcher:
         # adding it to body_lines too would double-render it in HTML).
         if actor:
             body = f"{body}\nTriggered by: {actor}"
+        # Zone override wins; fall back to the global smtp_recipients option.
+        recipients_override = email_cfg.recipients_override or (
+            options_recipients or []
+        )
         rendered = await self.email.render(
             severity,
             subject,
             body,
-            email_cfg.recipients_override,
+            recipients_override,
             kind="alert",
             body_lines=body_lines,
             actor=actor,

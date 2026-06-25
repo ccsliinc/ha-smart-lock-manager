@@ -27,7 +27,10 @@
         "data": {
           "lock_name": "Lock name",
           "lock_entity_id": "Lock entity",
-          "slots": "Number of code slots"
+          "slots": "Number of code slots",
+          "notify_service": "Notify service (notify.* to send alerts through)",
+          "smtp_enabled": "Enable direct SMTP email (advanced)",
+          "smtp_recipients": "SMTP recipients (comma-separated)"
         }
       }
     },

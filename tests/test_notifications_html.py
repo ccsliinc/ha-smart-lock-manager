@@ -73,7 +73,7 @@ def test_build_mime_multipart(hass) -> None:
     email = RenderedEmail(
         severity="WARN",
         kind="alert",
-        subject="[fleet/internal/alert] 🟡 test",
+        subject="🟡 test",
         body="line one\nline two",
         recipients=["a@x"],
         clean_subject="test",
@@ -103,8 +103,9 @@ def test_build_mime_multipart(hass) -> None:
 async def test_card_heading_single_marker_no_fleet_prefix(hass) -> None:
     """End-to-end render(): HTML card heading uses the clean subject.
 
-    The heading carries exactly one marker and no fleet prefix, while the email
-    Subject header stays fully wrapped.
+    The heading carries exactly one marker and no fleet prefix. The email
+    Subject header is now the neutral ``<marker> <subject>`` form (the legacy
+    ``[fleet/internal/...]`` wrapper was dropped for portable installs).
     """
     clean_subject = "Home Assistant - lock.demo_back battery low (87%)"
     notifier = EmailNotifier(hass)
@@ -128,12 +129,12 @@ async def test_card_heading_single_marker_no_fleet_prefix(hass) -> None:
     )
     assert rendered is not None
 
-    # Subject HEADER stays fully wrapped (prefix + single marker + clean subject).
-    assert rendered.subject == f"[fleet/internal/alert] 🟡 {clean_subject}"
+    # Subject HEADER is the neutral marker + clean subject (no fleet prefix).
+    assert rendered.subject == f"🟡 {clean_subject}"
     assert rendered.clean_subject == clean_subject
 
     msg = notifier._build_mime({"from": "from@x"}, rendered)
-    assert msg["Subject"] == f"[fleet/internal/alert] 🟡 {clean_subject}"
+    assert msg["Subject"] == f"🟡 {clean_subject}"
 
     parts = msg.get_payload()
     html = parts[1].get_payload(decode=True).decode("utf-8")
