@@ -2923,17 +2923,6 @@ class SmartLockManagerPanel extends HTMLElement {
           padding: 0 8px;
         }
 
-        .zs-note {
-          font-size: 12px;
-          color: var(--secondary-text-color);
-          background: rgba(33, 150, 243, 0.08);
-          border: 1px solid var(--divider-color);
-          border-radius: 6px;
-          padding: 8px 10px;
-          margin: 4px 0 16px;
-          line-height: 1.4;
-        }
-
         .zs-section {
           border: 1px solid var(--divider-color);
           border-radius: 8px;
