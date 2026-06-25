@@ -75,7 +75,7 @@ jobs:
           "README.md"
           "docs/API.md"
           "LICENSE"
-          "PULL_REQUEST_TEMPLATE.md"
+          ".github/PULL_REQUEST_TEMPLATE.md"
         )
 
         missing_files=()
@@ -109,11 +109,15 @@ jobs:
     - name: Check for hardcoded secrets
       run: |
         # Check for common secret patterns
+        # Keyword must be the actual assignment target: keyword, optional space,
+        # '=', optional space, then a quoted literal. This avoids false positives
+        # like `secrets_path` / `encoding="utf-8"` while still catching real
+        # hardcoded secrets such as `api_key = "abcd1234"`.
         patterns=(
-          "password.*=.*['\"].*['\"]"
-          "token.*=.*['\"].*['\"]"
-          "secret.*=.*['\"].*['\"]"
-          "api_key.*=.*['\"].*['\"]"
+          "(password|passwd)[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]"
+          "token[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]"
+          "secret[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]"
+          "(api_key|apikey)[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]"
         )
 
         found_secrets=false
