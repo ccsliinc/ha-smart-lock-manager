@@ -49,6 +49,14 @@ def hass_mock():
     # async_fire is synchronous in Home Assistant; keep it a plain Mock so
     # production code that calls it without awaiting does not leak a coroutine.
     hass.bus.async_fire = Mock()
+    # ``states`` is assigned in HomeAssistant.__init__, so it is NOT part of the
+    # class spec and Mock(spec=HomeAssistant) would raise AttributeError on it.
+    # Real HA always has a state machine, so model one here. Default: every
+    # entity looks present and available, which lets reachability guards such as
+    # ``zwave_io._ensure_entity_available`` pass. Tests that need a missing or
+    # unavailable entity override ``hass.states.get`` explicitly.
+    hass.states = Mock()
+    hass.states.get = Mock(return_value=Mock(state="locked"))
     return hass
 
 

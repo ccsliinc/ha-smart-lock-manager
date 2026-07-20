@@ -3,7 +3,9 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_registry import EntityRegistry
 
 from custom_components.smart_lock_manager.const import (
@@ -11,6 +13,10 @@ from custom_components.smart_lock_manager.const import (
     ATTR_ENTITY_ID,
     DOMAIN,
     PRIMARY_LOCK,
+)
+from custom_components.smart_lock_manager.services.zwave_io import (
+    _clear_usercode,
+    _set_usercode_with_status,
 )
 from custom_components.smart_lock_manager.services.zwave_services import ZWaveServices
 
@@ -540,3 +546,117 @@ class TestZWaveServices:
             assert set_call[0][0] == "zwave_js"
             assert set_call[0][1] == "set_lock_usercode"
             assert set_call[0][2]["usercode"] == "98761234"
+
+    @pytest.mark.asyncio
+    async def test_sync_marks_slot_unsynced_when_lock_unavailable(
+        self, setup_zwave_hass
+    ):
+        """End-to-end: an unavailable lock records sync_error, not a false success.
+
+        Regression cover for the false-success bug — previously the write was a
+        silent no-op and the slot was still marked synced/Enabled.
+        """
+        hass = setup_zwave_hass
+        hass.states.get = Mock(return_value=Mock(state=STATE_UNAVAILABLE))
+
+        lock = hass.data[DOMAIN]["test_entry_123"][PRIMARY_LOCK]
+        lock.set_code(1, "98761234", "Test User")
+
+        service_call = Mock(spec=ServiceCall)
+        service_call.data = {
+            ATTR_ENTITY_ID: "lock.test_lock",
+            ATTR_CODE_SLOT: 1,
+            "action": "enable",
+        }
+
+        await ZWaveServices.sync_slot_to_zwave(hass, service_call)
+
+        slot = lock.code_slots[1]
+        assert slot.is_synced is False
+        assert slot.sync_error is not None
+        assert "unavailable" in slot.sync_error
+
+
+class TestZWaveWriteReachabilityGuard:
+    """Writes must never be reported as successful against an unreachable lock.
+
+    Regression cover for the false-success bug: ``hass.services.async_call`` does
+    not raise when its target entity is missing or unavailable — HA logs a warning
+    and no-ops — so the caller previously logged "service call succeeded" and
+    marked the slot synced/Enabled for a code that never reached the lock.
+    Observed live on ``lock.bathroom`` (Office) after a controller reboot.
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_usercode_raises_when_entity_unavailable(self, hass_mock):
+        """An unavailable lock must raise instead of reporting success."""
+        hass = hass_mock
+        hass.states.get = Mock(return_value=Mock(state=STATE_UNAVAILABLE))
+
+        with pytest.raises(HomeAssistantError, match="unavailable"):
+            await _set_usercode_with_status(hass, "lock.bathroom", 1, "1234")
+
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_usercode_raises_when_entity_missing(self, hass_mock):
+        """A lock absent from the state machine must raise."""
+        hass = hass_mock
+        hass.states.get = Mock(return_value=None)
+
+        with pytest.raises(HomeAssistantError, match="not present"):
+            await _set_usercode_with_status(hass, "lock.ghost", 1, "1234")
+
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_usercode_raises_when_entity_unknown(self, hass_mock):
+        """A lock in the ``unknown`` state must raise."""
+        hass = hass_mock
+        hass.states.get = Mock(return_value=Mock(state=STATE_UNKNOWN))
+
+        with pytest.raises(HomeAssistantError):
+            await _set_usercode_with_status(hass, "lock.bathroom", 1, "1234")
+
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_usercode_proceeds_when_available(self, hass_mock):
+        """An available lock still performs the write unchanged."""
+        hass = hass_mock
+        hass.states.get = Mock(return_value=Mock(state="locked"))
+
+        await _set_usercode_with_status(hass, "lock.bathroom", 1, "1234")
+
+        hass.services.async_call.assert_called_once_with(
+            "zwave_js",
+            "set_lock_usercode",
+            {"entity_id": "lock.bathroom", "code_slot": 1, "usercode": "1234"},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_clear_usercode_raises_when_entity_unavailable(self, hass_mock):
+        """Clearing against an unavailable lock must raise, not silently no-op."""
+        hass = hass_mock
+        hass.states.get = Mock(return_value=Mock(state=STATE_UNAVAILABLE))
+
+        with pytest.raises(HomeAssistantError):
+            await _clear_usercode(hass, "lock.bathroom", 1)
+
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_clear_usercode_proceeds_when_available(self, hass_mock):
+        """An available lock still performs the clear unchanged."""
+        hass = hass_mock
+        hass.states.get = Mock(return_value=Mock(state="locked"))
+
+        await _clear_usercode(hass, "lock.bathroom", 1)
+
+        hass.services.async_call.assert_called_once_with(
+            "zwave_js",
+            "clear_lock_usercode",
+            {"entity_id": "lock.bathroom", "code_slot": 1},
+            blocking=True,
+        )

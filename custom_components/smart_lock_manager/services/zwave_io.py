@@ -12,11 +12,39 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from ..dev_mock import MOCK_DB, is_dev_mock, mock_node_for_entity
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ensure_entity_available(hass: HomeAssistant, entity_id: str) -> None:
+    """Raise unless ``entity_id`` can currently accept a Z-Wave write.
+
+    - Description: ``hass.services.async_call`` does NOT raise when its target
+      entity is missing or unavailable. Home Assistant logs a warning
+      ("Referenced entities ... are missing or not currently available") and the
+      call silently becomes a no-op. Without this guard the caller logged
+      "service call succeeded" and marked the slot synced/Enabled for a code
+      that never reached the lock. Raising here matches the dev-mock path, so
+      ``sync_slot_to_zwave``'s existing handler records ``sync_error`` and leaves
+      the slot unsynced instead of reporting a false success.
+    - Inputs: hass (HomeAssistant), entity_id (str) — the lock entity.
+    - Outputs: None. Raises ``HomeAssistantError`` when the write cannot land.
+    - Example: ``_ensure_entity_available(hass, "lock.bathroom")``
+    """
+    state = hass.states.get(entity_id)
+    if state is None:
+        raise HomeAssistantError(
+            f"Lock entity {entity_id} is not present; Z-Wave write skipped"
+        )
+    if state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        raise HomeAssistantError(
+            f"Lock entity {entity_id} is {state.state}; Z-Wave write skipped"
+        )
 
 
 async def _set_usercode_with_status(
@@ -53,6 +81,9 @@ async def _set_usercode_with_status(
             entity_id,
         )
         return
+    # An unavailable/missing entity makes the service call a silent no-op, so
+    # verify reachability BEFORE claiming the write succeeded.
+    _ensure_entity_available(hass, entity_id)
     await hass.services.async_call(
         "zwave_js",
         "set_lock_usercode",
@@ -82,7 +113,7 @@ async def _clear_usercode(hass: HomeAssistant, entity_id: str, code_slot: int) -
       failure injection); otherwise call the real ``zwave_js.clear_lock_usercode``
       service.
     - Inputs: hass (HomeAssistant), entity_id (str), code_slot (int).
-    - Outputs: None.
+    - Outputs: None. Raises ``HomeAssistantError`` if the lock is unreachable.
     """
     if is_dev_mock():
         mock_node = mock_node_for_entity(entity_id)
@@ -94,6 +125,9 @@ async def _clear_usercode(hass: HomeAssistant, entity_id: str, code_slot: int) -
             "DEV mock clear_lock_usercode for slot %s on %s", code_slot, entity_id
         )
         return
+    # Same silent-no-op hazard as the write path: a clear against an unavailable
+    # lock would otherwise be treated as a successful clear.
+    _ensure_entity_available(hass, entity_id)
     await hass.services.async_call(
         "zwave_js",
         "clear_lock_usercode",
