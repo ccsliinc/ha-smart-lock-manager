@@ -141,8 +141,27 @@ class ManagementServices:
                     if slot_count and slot_count != lock.slots:
                         if 1 <= slot_count <= 50:
                             old_count = lock.slots
-                            success = lock.resize_slots(slot_count)
-                            if success:
+                            # Shrinking deletes the dropped CodeSlot objects;
+                            # physically clear any code they hold FIRST so a
+                            # smaller slot count never orphans a live PIN.
+                            safe_to_resize = True
+                            if slot_count < old_count:
+                                from .slot_services import (
+                                    clear_dropped_slots_before_resize,
+                                )
+
+                                safe_to_resize = (
+                                    await clear_dropped_slots_before_resize(
+                                        hass, lock, entity_id, slot_count
+                                    )
+                                )
+                            if not safe_to_resize:
+                                _LOGGER.error(
+                                    "Aborting slot resize for %s: could not clear "
+                                    "all dropped codes from the physical lock",
+                                    lock.lock_name,
+                                )
+                            elif lock.resize_slots(slot_count):
                                 updated = True
                                 _LOGGER.debug(
                                     "Updated slot count for lock %s from %s to %s",
@@ -255,33 +274,46 @@ class ManagementServices:
             return
         lock, entry_id, _entry_data = result
         cleared_slots = []
+        failed_slots = []
 
-        # Clear all configured slots
+        from ..storage.lock_storage import save_lock_data
+        from .zwave_services import _clear_usercode
+
+        # Physically clear each configured slot from the deadbolt FIRST, then
+        # null the in-memory definition only on a confirmed clear. A failed
+        # clear keeps the PIN and marks the slot unsynced (via
+        # ``mark_slot_removal_failed``) so the coordinator's remove path retries
+        # it — never a green empty slot with a live code still on the lock. The
+        # dict keys are not mutated here (only fields are nulled), so iterating
+        # over ``.items()`` while awaiting is safe.
         for slot_num, slot in lock.code_slots.items():
-            if slot.pin_code:  # Only clear slots that have codes
-                old_user_name = slot.user_name
-                slot.pin_code = None
-                slot.user_name = None
-                slot.is_active = False
-                slot.is_synced = False  # Mark for Z-Wave removal
-                slot.use_count = 0
-                slot.created_at = None
-                slot.expires_at = None
-                slot.last_used = None
-                slot.start_date = None
-                slot.end_date = None
-                slot.allowed_hours = None
-                slot.allowed_days = None
-                slot.max_uses = -1
-                slot.notify_on_use = False
-                cleared_slots.append((slot_num, old_user_name))
+            if not slot.pin_code:  # Only clear slots that have codes
+                continue
+            old_user_name = slot.user_name
+            try:
+                await _clear_usercode(hass, entity_id, slot_num)
+            except Exception as e:
+                lock.mark_slot_removal_failed(
+                    slot_num, f"Physical clear failed during clear_all: {e}"
+                )
+                failed_slots.append(slot_num)
+                _LOGGER.error(
+                    "clear_all_slots: physical clear FAILED for slot %s on %s; "
+                    "PIN retained and slot left unsynced for retry: %s",
+                    slot_num,
+                    entity_id,
+                    e,
+                )
+                continue
+            # Confirmed physical clear -> finalize the in-memory wipe.
+            lock.clear_code(slot_num)
+            cleared_slots.append((slot_num, old_user_name))
+
+        if cleared_slots or failed_slots:
+            # Persist both the cleared slots and the retained-but-unsynced ones.
+            await save_lock_data(hass, lock, entry_id)
 
         if cleared_slots:
-            # Save the updated lock data
-            from .. import _save_lock_data
-
-            await _save_lock_data(hass, lock, entry_id)
-
             # Fire event to notify about the mass clear
             hass.bus.async_fire(
                 "smart_lock_manager_all_slots_cleared",
@@ -299,5 +331,15 @@ class ManagementServices:
                 lock.lock_name,
                 [f"Slot {num}: {name}" for num, name in cleared_slots],
             )
-        else:
+
+        if failed_slots:
+            _LOGGER.warning(
+                "clear_all_slots: %s slot(s) could not be cleared from lock %s "
+                "and were left unsynced for retry: %s",
+                len(failed_slots),
+                lock.lock_name,
+                failed_slots,
+            )
+
+        if not cleared_slots and not failed_slots:
             _LOGGER.debug("No configured slots to clear for lock %s", lock.lock_name)

@@ -163,9 +163,23 @@ class TestZWaveServices:
 
             assert event_data["entity_id"] == "lock.test_lock"
             assert event_data["total_found"] == 3
-            assert event_data["codes"][1]["code"] == "1234"
-            assert event_data["codes"][2]["code"] == "5678"
-            assert event_data["codes"][3]["code"] == "9999"
+
+            # SECURITY: the read event emits OCCUPANCY only, never the plaintext
+            # PIN. The payload is broadcast on the HA event bus where any
+            # authenticated user can subscribe, so leaking the code here would
+            # let a guest harvest every slot. Assert the occupancy shape and
+            # that no raw code appears anywhere in the payload.
+            codes = event_data["codes"]
+            for slot in (1, 2, 3):
+                assert codes[slot]["slot"] == slot
+                assert codes[slot]["in_use"] is True
+                assert codes[slot]["status"] == "occupied"
+                assert "code" not in codes[slot]
+                assert "usercode" not in codes[slot]
+
+            # No raw PIN value should be present anywhere in the emitted codes.
+            for leaked in ("1234", "5678", "9999"):
+                assert leaked not in str(codes)
 
     @pytest.mark.asyncio
     async def test_read_zwave_codes_no_zwave_js(

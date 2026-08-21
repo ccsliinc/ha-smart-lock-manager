@@ -14,10 +14,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python 3.13
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.14
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.13'
+        python-version: '3.14'
 
     - name: Cache pip dependencies
       uses: actions/cache@v3
@@ -72,15 +72,17 @@ jobs:
 
     - name: Run tests
       run: |
-        # Pin homeassistant to the version the green local suite runs against
-        # so pip does not backtrack to an old release with a different
-        # zwave_js helper layout (which breaks module-level patching).
-        # pycares is pinned because homeassistant 2025.8.0 leaves it unpinned and
-        # the latest pycares (5.x) dropped ares_query_a_result, which aiodns 3.5.0
-        # imports at startup -> AttributeError before any test runs.
-        # zwave-js-server-python is the zwave_js component's runtime requirement,
-        # needed so the lazy import of async_get_node_from_entity_id succeeds.
-        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0" "zwave-js-server-python==0.67.1"
+        # Run against the integration's OWN target HA (manifest version
+        # 2026.8.0), NOT a years-old release, so the suite exercises the same
+        # zwave_js helper layout the integration actually ships against. HA
+        # 2026.8.x requires Python >=3.14.2 (hence the 3.14 setup above).
+        # zwave-js-server-python is the zwave_js component's runtime requirement
+        # (pip install homeassistant does not pull integration requirements);
+        # it must be present for ZWAVE_JS_AVAILABLE to bind True so the zwave
+        # service tests can patch async_get_node_from_entity_id / get_usercode.
+        # It is pinned to 0.73.0 to match HA 2026.8.x's manifest; 0.67.1 is
+        # INCOMPATIBLE (ImportError: BatteryNotification).
+        pip install "homeassistant==2026.8.2" "pytest-homeassistant-custom-component==0.13.356" "zwave-js-server-python==0.73.0"
         pip install pytest pytest-asyncio pytest-cov
         pytest tests/ --asyncio-mode=auto
         echo "✅ Test suite passed"
@@ -109,10 +111,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python 3.13
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.14
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.13'
+        python-version: '3.14'
 
     - name: Cache pip dependencies
       uses: actions/cache@v3
@@ -126,16 +128,17 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # Pin homeassistant + pytest-homeassistant-custom-component to the
-        # versions the green local suite runs against. Without the pin, pip
-        # backtracks to an old homeassistant (2025.1.4) whose zwave_js helper
-        # layout differs, breaking tests that patch module-level symbols.
-        # pycares pinned: latest 5.x dropped ares_query_a_result, which
-        # aiodns 3.5.0 (pulled by homeassistant 2025.8.0) imports at startup.
+        # integration's OWN target (manifest version 2026.8.0). Pinning stops
+        # pip backtracking to an old homeassistant whose zwave_js helper layout
+        # differs and breaks module-level patching. HA 2026.8.x requires Python
+        # >=3.14.2 (hence the 3.14 setup above).
         # zwave-js-server-python is the zwave_js component's runtime requirement
         # (pip install homeassistant does not pull integration requirements);
         # without it the lazy import of async_get_node_from_entity_id fails and
-        # the zwave service tests cannot patch that symbol.
-        pip install "homeassistant==2025.8.0" "pytest-homeassistant-custom-component==0.13.269" "pycares==4.10.0" "zwave-js-server-python==0.67.1"
+        # the zwave service tests cannot patch that symbol. Pinned to 0.73.0 to
+        # match HA 2026.8.x; 0.67.1 is INCOMPATIBLE (ImportError:
+        # BatteryNotification).
+        pip install "homeassistant==2026.8.2" "pytest-homeassistant-custom-component==0.13.356" "zwave-js-server-python==0.73.0"
         pip install -e ".[dev]" pytest-cov pytest-asyncio
 
     - name: Run test suite

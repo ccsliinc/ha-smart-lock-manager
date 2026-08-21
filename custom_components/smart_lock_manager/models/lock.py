@@ -147,7 +147,17 @@ class SmartLockManagerLock(LockSerializationMixin):
         return True
 
     def clear_code(self, slot_number: int) -> bool:
-        """Clear a PIN code from a slot. Returns True if successful."""
+        """Finalize a CONFIRMED physical clear: null the slot's code + metadata.
+
+        This nulls ``pin_code`` and marks the slot synced-empty, which is only
+        correct AFTER the deadbolt has confirmed the code is gone. Callers that
+        touch hardware (the ``clear_code`` / ``clear_all_slots`` services) MUST
+        physically clear the lock first and only invoke this on success. On a
+        failed physical clear use :meth:`mark_slot_removal_failed` instead so the
+        code is retained and retried rather than presented as an empty slot.
+
+        Returns True if successful.
+        """
         if slot_number not in self.code_slots:
             return False
 
@@ -170,6 +180,27 @@ class SmartLockManagerLock(LockSerializationMixin):
         slot.use_count = 0
         slot.last_used = None
 
+        return True
+
+    def mark_slot_removal_failed(self, slot_number: int, error: str) -> bool:
+        """Record that a physical CLEAR failed: retain the PIN, flag unsynced.
+
+        A failed clear must NEVER present as an empty, green slot. This keeps
+        ``pin_code`` intact (so the desired-absent state still drives the
+        coordinator's remove path to retry the physical clear), marks the slot
+        disabled + unsynced, resets ``sync_attempts`` so the retry starts fresh,
+        and records ``sync_error`` for the UI.
+
+        - Inputs: slot_number (int), error (str) reason the clear failed.
+        - Outputs: True if the slot exists and was flagged, else False.
+        """
+        slot = self.code_slots.get(slot_number)
+        if slot is None:
+            return False
+        slot.is_active = False
+        slot.is_synced = False
+        slot.sync_error = error
+        slot.sync_attempts = 0
         return True
 
     def get_active_codes_count(self) -> int:
@@ -274,9 +305,18 @@ class SmartLockManagerLock(LockSerializationMixin):
 
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
 
-            # Smart Lock Manager wants this slot active
-            if slot.is_active and slot.pin_code and slot.is_valid_now():
-                # Check if code matches what's in the lock
+            # DESIRED physical presence of a code on the deadbolt =
+            #   is_active AND pin_code AND is_valid_now()
+            # A time/usage-restricted code whose window is currently CLOSED is
+            # desired-ABSENT even though its definition (pin_code) is retained,
+            # so it is removed from the hardware now and re-added when the
+            # window reopens.
+            desired_present = bool(
+                slot.is_active and slot.pin_code and slot.is_valid_now()
+            )
+
+            if desired_present:
+                # ADD when the lock has no code, or a code that does not match.
                 if not zwave_code or zwave_code != slot.pin_code:
                     if slot.sync_attempts < MAX_SYNC_ATTEMPTS:
                         add_slots.append(slot_number)
@@ -287,17 +327,15 @@ class SmartLockManagerLock(LockSerializationMixin):
                         )
                 # Code matches — it's synced, don't re-write regardless of in_use
 
-            # Only remove codes that SLM intentionally disabled
-            # (is_active=False AND pin_code is set means SLM explicitly
-            # disabled this slot)
-            elif not slot.is_active and slot.pin_code:
+            elif slot.pin_code:
+                # We HOLD a PIN for this slot but it is desired-ABSENT
+                # (disabled OR outside its time/usage window). Remove it from
+                # the hardware while KEEPING the definition, so a re-add happens
+                # automatically once the window reopens. Only act when the lock
+                # still carries a code — a slot SLM never managed (no pin_code)
+                # is left untouched.
                 if zwave_code:
                     remove_slots.append(slot_number)
-
-            # Do NOT remove codes where SLM has no pin_code
-            # (SLM never managed this slot)
-            # Do NOT remove codes based on is_valid_now()
-            # (time-based disabling handled separately)
 
         return {"add": add_slots, "remove": remove_slots, "retry": retry_slots}
 

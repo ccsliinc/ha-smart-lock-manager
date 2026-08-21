@@ -37,6 +37,11 @@ def mock_hass():
     hass.bus.async_fire = AsyncMock()
     hass.services = Mock()
     hass.services.async_call = AsyncMock()
+    # Resize now physically clears codes from slots a shrink would delete, so
+    # the reachability guard (`_ensure_entity_available`) must see a present,
+    # available entity. Tests that need an unreachable lock override this.
+    hass.states = Mock()
+    hass.states.get = Mock(return_value=Mock(state="locked"))
     return hass
 
 

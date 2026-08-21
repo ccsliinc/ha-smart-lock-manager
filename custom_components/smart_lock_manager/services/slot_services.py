@@ -10,9 +10,60 @@ from ..const import (
     ATTR_SLOT_COUNT,
     COORDINATOR,
 )
+from ..models.lock import SmartLockManagerLock
 from .helpers import find_lock
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def clear_dropped_slots_before_resize(
+    hass: HomeAssistant,
+    lock: SmartLockManagerLock,
+    entity_id: str,
+    new_slot_count: int,
+) -> bool:
+    """Physically clear codes in slots a shrink would DELETE, before deletion.
+
+    A shrink drops the ``CodeSlot`` objects for slots
+    ``>= start_from + new_slot_count``. Any dropped slot still holding a
+    ``pin_code`` would otherwise leave its PIN live on the deadbolt with no
+    record of it. This clears each such slot from the hardware (mock-aware via
+    ``_clear_usercode``) BEFORE the model deletes it, awaiting confirmation.
+
+    - Inputs: hass (HomeAssistant), lock (the lock being resized), entity_id
+      (str lock entity id), new_slot_count (int target slot count).
+    - Outputs: True when it is safe to delete the dropped slots (nothing to
+      clear, or every physical clear confirmed); False if ANY clear failed —
+      in which case the caller MUST NOT shrink past the un-cleared slot, to
+      avoid orphaning a live code.
+    """
+    if new_slot_count >= lock.slots:
+        return True  # not shrinking; nothing to clear
+
+    from .zwave_services import _clear_usercode
+
+    threshold = lock.start_from + new_slot_count
+    all_ok = True
+    for slot_num in list(lock.code_slots):
+        if slot_num < threshold:
+            continue
+        slot = lock.code_slots[slot_num]
+        if not slot.pin_code:
+            continue
+        try:
+            await _clear_usercode(hass, entity_id, slot_num)
+        except Exception as e:
+            all_ok = False
+            slot.is_synced = False
+            slot.sync_error = f"Failed to clear before resize: {e}"
+            _LOGGER.error(
+                "resize: physical clear FAILED for dropped slot %s on %s; "
+                "aborting shrink to avoid orphaning the code: %s",
+                slot_num,
+                entity_id,
+                e,
+            )
+    return all_ok
 
 
 class SlotServices:
@@ -171,6 +222,25 @@ class SlotServices:
             return
 
         old_count = lock.slots
+
+        # Shrinking deletes the dropped CodeSlot objects; physically clear any
+        # code they hold FIRST so a smaller slot count never orphans a live PIN.
+        if slot_count < old_count:
+            safe = await clear_dropped_slots_before_resize(
+                hass, lock, entity_id, slot_count
+            )
+            if not safe:
+                _LOGGER.error(
+                    "Aborting resize of %s: could not clear all dropped codes "
+                    "from the physical lock",
+                    lock.lock_name,
+                )
+                # Persist the sync_error flags set on the un-cleared slots.
+                store = entry_data.get("store")
+                if store:
+                    await store.async_save(lock.to_dict())
+                return
+
         success = lock.resize_slots(slot_count)
 
         if success:

@@ -46,19 +46,21 @@ def _reject_for_prefix_collision(
     tags the target slot's ``sync_error`` plus ``validation_rejections``.
     Used by the auto-sync coordinator path so silent Kwikset drops are caught
     BEFORE the Z-Wave write is dispatched. The slot's ``sync_error`` is
-    populated and ``validation_rejections`` is incremented. PIN values are
-    never logged — only the prefix is.
+    populated and ``validation_rejections`` is incremented.
+
+    SECURITY: for a 4-digit lock the "prefix" IS the whole PIN, so NO slice of
+    ``pin`` is put into the error message or the log — the collision is
+    identified by the two slot numbers alone.
     """
     conflict = lock.find_prefix_conflict(pin, slot_number)
     if conflict is None:
         return False
     prefix_len = lock.code_collision_prefix_length
-    prefix = pin[:prefix_len]
     message = (
-        f"Cannot set slot {slot_number}: PIN starts with same {prefix_len} digits "
-        f"({prefix}) as slot {conflict.slot_number} "
-        f"({conflict.user_name or 'unnamed'}). Kwikset locks silently reject "
-        f"such writes — pick a PIN with a different first {prefix_len} digits."
+        f"Cannot set slot {slot_number}: its first {prefix_len} digits match "
+        f"slot {conflict.slot_number} ({conflict.user_name or 'unnamed'}). "
+        f"Kwikset locks silently reject such writes — choose a PIN whose first "
+        f"{prefix_len} digits differ."
     )
     slot = lock.code_slots.get(slot_number)
     if slot is not None:
@@ -66,11 +68,11 @@ def _reject_for_prefix_collision(
         slot.validation_rejections += 1
         slot.is_synced = False
     _LOGGER.error(
-        "Prefix-collision rejection on %s: slot %s vs slot %s (prefix=%s)",
+        "Prefix-collision rejection on %s: slot %s vs slot %s (prefix_len=%s)",
         lock.lock_name,
         slot_number,
         conflict.slot_number,
-        prefix,
+        prefix_len,
     )
     return True
 

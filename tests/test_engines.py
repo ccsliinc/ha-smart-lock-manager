@@ -80,10 +80,18 @@ def _register_zone(hass: HomeAssistant, zone: Zone) -> None:
 
 
 @pytest.fixture
-def alert_engine(hass: HomeAssistant) -> AlertEngine:
-    """Build an AlertEngine over one fully-enabled zone (storage stubbed)."""
+def alert_engine(hass: HomeAssistant):
+    """Build an AlertEngine over one fully-enabled zone (storage stubbed).
+
+    Teardown always calls ``async_stop`` so a test that starts the engine
+    cannot leak its 900s ``track_time_interval`` sweep timer into HA's
+    lingering-timer teardown check. ``async_stop`` is safe to call whether or
+    not the engine was ever started.
+    """
     _register_zone(hass, _build_zone())
-    return AlertEngine(hass)
+    engine = AlertEngine(hass)
+    yield engine
+    engine.async_stop()
 
 
 class TestAlertEngineLifecycle:

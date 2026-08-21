@@ -25,7 +25,10 @@ def _check_prefix_collision(
     Kwikset Z-Wave deadbolts silently drop user-code writes that share their
     first N digits (default 4) with an existing code. Reject early with a
     clear, user-facing error and tag the slot's ``sync_error`` for the UI.
-    PIN values are NEVER included in the error message — only the prefix.
+
+    SECURITY: for a 4-digit lock the "prefix" IS the whole PIN, so NO slice of
+    ``user_code`` is ever put into the error message or the log — the collision
+    is identified by the two slot numbers alone.
     """
     if not user_code:
         return
@@ -34,12 +37,11 @@ def _check_prefix_collision(
         return
 
     prefix_len = lock.code_collision_prefix_length
-    prefix = user_code[:prefix_len]
     message = (
-        f"Cannot set slot {code_slot}: PIN starts with same {prefix_len} digits "
-        f"({prefix}) as slot {conflict.slot_number} "
-        f"({conflict.user_name or 'unnamed'}). Kwikset locks silently reject "
-        f"such writes — pick a PIN with a different first {prefix_len} digits."
+        f"Cannot set slot {code_slot}: its first {prefix_len} digits match "
+        f"slot {conflict.slot_number} ({conflict.user_name or 'unnamed'}). "
+        f"Kwikset locks silently reject such writes — choose a PIN whose first "
+        f"{prefix_len} digits differ."
     )
 
     target_slot = lock.code_slots.get(code_slot)
@@ -49,11 +51,11 @@ def _check_prefix_collision(
         target_slot.is_synced = False
 
     _LOGGER.error(
-        "Prefix-collision rejection on %s: slot %s vs slot %s (prefix=%s)",
+        "Prefix-collision rejection on %s: slot %s vs slot %s (prefix_len=%s)",
         lock.lock_name,
         code_slot,
         conflict.slot_number,
-        prefix,
+        prefix_len,
     )
     raise HomeAssistantError(message)
 
@@ -299,45 +301,51 @@ class LockServices:
             _LOGGER.error("No lock found for entity_id: %s", entity_id)
             return
         lock, entry_id, _entry_data = result
-        # Clear from Smart Lock Manager storage
-        success = lock.clear_code(code_slot)
-        if success:
-            _LOGGER.info(
-                "Successfully cleared code for slot %s in Smart Lock " "Manager %s",
-                code_slot,
-                lock.lock_name,
-            )
 
-            # Also clear from physical Z-Wave lock (mock-aware: under
-            # SLM_DEV_MOCK this clears the in-memory MockValueDB).
-            try:
-                from .zwave_services import _clear_usercode
-
-                await _clear_usercode(hass, entity_id, code_slot)
-                _LOGGER.info(
-                    "Successfully cleared code from Z-Wave lock %s slot %s",
-                    entity_id,
-                    code_slot,
-                )
-            except Exception as e:
-                _LOGGER.warning(
-                    "Failed to clear Z-Wave lock code for slot %s: %s",
-                    code_slot,
-                    e,
-                )
-
-            # Save changes to storage
-            from ..storage.lock_storage import save_lock_data
-
-            await save_lock_data(hass, lock, entry_id)
-
-            # Zone model: propagate the clear to the owning zone so it
-            # reaches every member lock on the next coordinator cycle.
-            await _propagate_slot_to_zone(hass, lock, code_slot)
-
-        else:
+        slot = lock.code_slots.get(code_slot)
+        if slot is None:
             _LOGGER.error(
-                "Failed to clear code for slot %s in lock %s",
+                "Cannot clear slot %s in lock %s: no such slot",
                 code_slot,
                 lock.lock_name,
             )
+            return
+
+        from ..storage.lock_storage import save_lock_data
+
+        # Physical clear FIRST. Never null the in-memory code until the deadbolt
+        # confirms it is gone: a silent no-op / supervision failure must leave
+        # the slot marked unsynced WITH the PIN retained, so the coordinator's
+        # remove path retries it — not a green empty slot with a live code still
+        # accepted by the lock. Mock-aware: under SLM_DEV_MOCK this clears the
+        # in-memory MockValueDB (and honors injected failures).
+        try:
+            from .zwave_services import _clear_usercode
+
+            await _clear_usercode(hass, entity_id, code_slot)
+        except Exception as e:
+            lock.mark_slot_removal_failed(code_slot, f"Physical clear failed: {e}")
+            await save_lock_data(hass, lock, entry_id)
+            _LOGGER.error(
+                "Physical clear FAILED for slot %s on %s; PIN retained and slot "
+                "left unsynced for the coordinator to retry: %s",
+                code_slot,
+                entity_id,
+                e,
+            )
+            return
+
+        # Physical clear confirmed — finalize the in-memory wipe.
+        lock.clear_code(code_slot)
+        _LOGGER.info(
+            "Cleared slot %s from Smart Lock Manager and Z-Wave lock %s",
+            code_slot,
+            lock.lock_name,
+        )
+
+        # Save changes to storage
+        await save_lock_data(hass, lock, entry_id)
+
+        # Zone model: propagate the clear to the owning zone so it
+        # reaches every member lock on the next coordinator cycle.
+        await _propagate_slot_to_zone(hass, lock, code_slot)

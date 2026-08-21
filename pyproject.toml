@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-lock-manager"
-version = "2025.1.5"
+version = "2026.8.0"
 description = "Advanced Z-Wave lock management for Home Assistant with time-based access control"
 readme = "README.md"
 license = {text = "MIT"}
@@ -17,13 +17,12 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Home Automation",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
-    "homeassistant>=2024.8.0",
+    "homeassistant>=2026.8.0",
 ]
 
 [project.urls]
@@ -36,6 +35,11 @@ Repository = "https://github.com/ccsliinc/ha-smart-lock-manager"
 dev = [
     "pytest>=7.0.0",
     "pytest-homeassistant-custom-component>=0.13.0",
+    # zwave_js runtime requirement; needed for ZWAVE_JS_AVAILABLE to bind True
+    # so the zwave service tests can patch module-level helper symbols. Pin
+    # matches HA 2026.8.x; 0.67.1 is INCOMPATIBLE (ImportError:
+    # BatteryNotification).
+    "zwave-js-server-python==0.73.0",
     "pre-commit>=3.0.0",
     "black>=23.0.0",
     "isort>=5.12.0",
@@ -49,7 +53,7 @@ dev = [
 
 [tool.black]
 line-length = 88
-target-version = ["py311"]
+target-version = ["py314"]
 include = '\.pyi?$'
 exclude = '''
 /(
@@ -72,7 +76,7 @@ line_length = 88
 known_first_party = ["custom_components"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

@@ -1,6 +1,12 @@
-homeassistant>=2024.8.0
+homeassistant>=2026.8.0
 pytest>=7.0.0
 pytest-homeassistant-custom-component>=0.13.0
+# Runtime requirement of the zwave_js component. HA does not pull integration
+# requirements on `pip install homeassistant`, so the tests that patch
+# zwave_services.async_get_node_from_entity_id / get_usercode need it present
+# for ZWAVE_JS_AVAILABLE to bind True. Must match HA 2026.8.x's manifest pin;
+# 0.67.1 is INCOMPATIBLE (ImportError: BatteryNotification).
+zwave-js-server-python==0.73.0
 pre-commit>=3.0.0
 black>=23.0.0
 isort>=5.12.0

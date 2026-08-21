@@ -287,6 +287,21 @@ def _build_access_log_handler(hass: HomeAssistant) -> Callable:
                     else f"slot {slot}"
                 )
 
+        # max_uses enforcement: count ONLY a real keypad UNLOCK against the
+        # resolved managed slot (never RF/manual/auto, never a keypad LOCK),
+        # then re-evaluate validity so a code that has exhausted its uses
+        # auto-disables. By the desired-absent invariant, a slot disabled here
+        # is then removed from the deadbolt on the next coordinator cycle.
+        if (
+            mapping["action"] == "unlocked"
+            and mapping["source"] == "keypad"
+            and slot is not None
+        ):
+            managed_slot = lock.code_slots.get(slot)
+            if managed_slot is not None and managed_slot.pin_code:
+                managed_slot.increment_usage()
+                lock.check_and_update_slot_validity()
+
         entry = lock.add_access_log_entry(
             action=mapping["action"],
             source=mapping["source"],
