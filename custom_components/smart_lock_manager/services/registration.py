@@ -12,6 +12,7 @@ import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 
 from ..const import (
     ATTR_CODE_SLOT,
@@ -119,19 +120,26 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def generate_package_wrapper(service_call: ServiceCall) -> None:
         return await SystemServices.generate_package(hass, service_call)
 
-    # Register services using modular classes
-    hass.services.async_register(
-        DOMAIN, SERVICE_SET_CODE, set_code_wrapper, schema=SET_CODE_SCHEMA
+    # Register services using modular classes.
+    # SECURITY: every service that can set/clear codes or read code data is
+    # registered as an ADMIN service so a non-admin (guest) user cannot invoke
+    # it. Purely read-only status/system services that expose no code data
+    # remain plain services. See the classification in the security notes.
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_SET_CODE, set_code_wrapper, schema=SET_CODE_SCHEMA
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_CLEAR_CODE, clear_code_wrapper, schema=CLEAR_CODE_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_CLEAR_CODE, clear_code_wrapper, schema=CLEAR_CODE_SCHEMA
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_REFRESH_CODES,
         refresh_codes_wrapper,
         schema=REFRESH_CODES_SCHEMA,
     )
+    # generate_package is a deprecated no-op (fires a deprecation event, no
+    # code data) and stays a plain service.
     hass.services.async_register(
         DOMAIN,
         SERVICE_GENERATE_PACKAGE,
@@ -219,7 +227,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
     # Register advanced services using modular classes
     _LOGGER.debug("Registering advanced services...")
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_SET_CODE_ADVANCED,
         set_code_advanced_wrapper,
@@ -227,13 +236,15 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _LOGGER.debug("Registered set_code_advanced service")
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_ENABLE_SLOT,
         enable_slot_wrapper,
         schema=ENABLE_DISABLE_SLOT_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_DISABLE_SLOT,
         disable_slot_wrapper,
@@ -241,16 +252,22 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _LOGGER.debug("Registered enable/disable_slot services")
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_RESET_SLOT_USAGE,
         reset_slot_usage_wrapper,
         schema=RESET_SLOT_USAGE_SCHEMA,
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_RESIZE_SLOTS, resize_slots_wrapper, schema=RESIZE_SLOTS_SCHEMA
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_RESIZE_SLOTS,
+        resize_slots_wrapper,
+        schema=RESIZE_SLOTS_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_RESET_SYNC,
         reset_sync_wrapper,
@@ -258,13 +275,15 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _LOGGER.debug("Registered slot management services")
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_READ_ZWAVE_CODES,
         read_zwave_codes_wrapper,
         schema=READ_ZWAVE_CODES_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         "sync_slot_to_zwave",
         sync_slot_to_zwave_wrapper,
@@ -280,19 +299,24 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _LOGGER.debug("Registered Z-Wave services")
 
+    # get_usage_stats exposes usage counts / names only (no code values), so it
+    # remains a plain service.
     hass.services.async_register(
         DOMAIN,
         SERVICE_GET_USAGE_STATS,
         get_usage_stats_wrapper,
         schema=GET_USAGE_STATS_SCHEMA,
     )
-    hass.services.async_register(
+    # update_lock_settings can change slot_count (resize), which can drop codes.
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_UPDATE_LOCK_SETTINGS,
         update_lock_settings_wrapper,
         schema=UPDATE_LOCK_SETTINGS_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_CLEAR_ALL_SLOTS,
         clear_all_slots_wrapper,
@@ -300,41 +324,59 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _LOGGER.debug("Registered management services")
 
-    # Zone-management services (replace retired parent/child services).
-    hass.services.async_register(
-        DOMAIN, SERVICE_CREATE_ZONE, create_zone_wrapper, schema=CREATE_ZONE_SCHEMA
+    # Zone-management services (replace retired parent/child services). Every
+    # zone op below can move codes across member locks, so all are admin-gated.
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_CREATE_ZONE,
+        create_zone_wrapper,
+        schema=CREATE_ZONE_SCHEMA,
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_DELETE_ZONE, delete_zone_wrapper, schema=DELETE_ZONE_SCHEMA
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_DELETE_ZONE,
+        delete_zone_wrapper,
+        schema=DELETE_ZONE_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_ADD_LOCK_TO_ZONE,
         add_lock_to_zone_wrapper,
         schema=ZONE_MEMBER_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_REMOVE_LOCK_FROM_ZONE,
         remove_lock_from_zone_wrapper,
         schema=ZONE_MEMBER_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_APPLY_ZONE_CODES,
         apply_zone_codes_wrapper,
         schema=APPLY_ZONE_CODES_SCHEMA,
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_UPDATE_ZONE, update_zone_wrapper, schema=UPDATE_ZONE_SCHEMA
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        SERVICE_UPDATE_ZONE,
+        update_zone_wrapper,
+        schema=UPDATE_ZONE_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_CLEAR_ZONE_CODES,
         clear_zone_codes_wrapper,
         schema=CLEAR_ZONE_CODES_SCHEMA,
     )
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_UPDATE_ZONE_SETTINGS,
         update_zone_settings_wrapper,

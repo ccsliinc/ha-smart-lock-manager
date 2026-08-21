@@ -427,8 +427,13 @@ async def _read_codes_inner(hass: HomeAssistant, entity_id: str) -> None:
             code_value = code_info.get("usercode") if code_info else None
 
             if in_use and code_value:
+                # SECURITY: record ONLY occupancy, never the code value. This
+                # payload is broadcast on the HA event bus where any
+                # authenticated user can subscribe; emitting the plaintext PIN
+                # here would let a guest harvest every code.
                 codes_found[slot_num] = {
-                    "code": str(code_value),
+                    "slot": slot_num,
+                    "in_use": True,
                     "status": "occupied",
                 }
                 _LOGGER.debug("Found code in slot %s", slot_num)

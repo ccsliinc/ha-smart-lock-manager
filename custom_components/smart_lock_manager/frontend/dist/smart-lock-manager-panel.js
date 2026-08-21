@@ -198,12 +198,13 @@ class SmartLockManagerPanel extends HTMLElement {
   handleZWaveCodesRead(eventData) {
     const { entity_id, codes } = eventData;
 
-    // Cache the Z-Wave codes for sync validation
+    // SECURITY: this event now carries occupancy only (per slot: {slot,
+    // in_use, status}) and never the raw PIN value. Presence of a code is
+    // derivable from the occupancy map; the code value is intentionally
+    // unavailable to the frontend.
     this._zwaveCodeCache[entity_id] = codes;
 
-    // Z-Wave codes cached
-
-    // Trigger a re-render to update slot colors
+    // Trigger a re-render to reflect Z-Wave occupancy.
     this.requestUpdate();
   }
 
@@ -312,9 +313,18 @@ class SmartLockManagerPanel extends HTMLElement {
 
     if (slotDetails) {
       if (userNameField) userNameField.value = slotDetails.user_name || '';
-      if (pinCodeField) pinCodeField.value = slotDetails.pin_code || '';
+      // SECURITY: the raw PIN is never sent to the browser anymore (the
+      // backend only exposes has_pin_code). Leave the field blank and, when a
+      // code already exists, tell the user that leaving it blank keeps the
+      // current PIN. Typing a value replaces it.
+      if (pinCodeField) {
+        pinCodeField.value = '';
+        pinCodeField.placeholder = slotDetails.has_pin_code
+          ? 'PIN set — leave blank to keep it, or type a new one'
+          : 'Enter PIN code (4-8 digits)';
+      }
       if (maxUsesField) maxUsesField.value = slotDetails.max_uses || -1;
-      if (isActiveField) isActiveField.checked = slotDetails.pin_code ? true : true; // Default to enabled for new slots
+      if (isActiveField) isActiveField.checked = true; // Default to enabled
       if (notifyField) notifyField.checked = slotDetails.notify_on_use || false;
 
       // Handle multiselect for allowed hours
@@ -617,6 +627,25 @@ class SmartLockManagerPanel extends HTMLElement {
       return;
     }
 
+    // SECURITY: the raw PIN is no longer sent to the browser, so this form
+    // cannot pre-fill an existing code. `hadPin` (from the has_pin_code
+    // boolean) tells us whether a code already exists so a blank field is
+    // treated as "keep the existing code", never as "clear the slot".
+    const priorSlot = this._locks
+      ?.find(l => l.attributes.lock_entity_id === entityIdForSpinner)
+      ?.attributes?.slot_details?.[`slot_${slotNumber}`];
+    const hadPin = !!priorSlot?.has_pin_code;
+
+    // Guard against accidental code loss: if the slot already has a code and
+    // the user left the PIN blank while keeping the slot enabled, we cannot
+    // re-write the code (we do not have its value) and must not wipe it.
+    // Require the PIN to be re-entered to modify an active slot's settings.
+    if (isActive && !pinCode && hadPin) {
+      alert('This slot already has a PIN. Re-enter the PIN to save changes, '
+        + 'or uncheck "Enable" to disable the slot without deleting its code.');
+      return;
+    }
+
     // IMMEDIATE VISUAL FEEDBACK - Update slot name immediately
     if (userName) {
       this.updateSlotDisplayImmediate(this._editingSlot, userName, isActive);
@@ -627,8 +656,9 @@ class SmartLockManagerPanel extends HTMLElement {
     this.showCardSpinner(entityIdForSpinner, 'Saving...');
 
     try {
-      if (!isActive && pinCode) {
-        // User unchecked the enable box but has PIN code - disable the slot (don't delete)
+      if (!isActive && (pinCode || hadPin)) {
+        // Enable box unchecked but a code exists (either entered now or already
+        // stored) - disable the slot WITHOUT deleting the stored code.
         await this.callService('disable_slot', {
           entity_id: entityIdForSpinner,
           code_slot: slotNumber
@@ -637,7 +667,8 @@ class SmartLockManagerPanel extends HTMLElement {
       }
 
       if (!pinCode) {
-        // No PIN code - clear the slot completely
+        // No PIN entered and none stored (hadPin is false here - the active +
+        // hadPin case was rejected above) - clear the slot completely.
         await this.callService('clear_code', {
           entity_id: entityIdForSpinner,
           code_slot: slotNumber
@@ -687,20 +718,17 @@ class SmartLockManagerPanel extends HTMLElement {
       serviceData.end_date = accessToField.value;
     }
 
-    // Determine whether the PIN actually changed. If the user only edited the
-    // username/metadata (PIN unchanged from what is already stored), we must
-    // NOT re-write the code to the physical Z-Wave lock — that needless
-    // set_lock_usercode can surface a transient Kwikset error. We only chain
-    // sync_slot_to_zwave when the PIN genuinely changed.
-    const currentLock = this._locks?.find(l => l.attributes.lock_entity_id === entityIdForSpinner);
-    const existingPin = currentLock?.attributes?.slot_details?.[`slot_${slotNumber}`]?.pin_code || '';
-    const pinUnchanged = existingPin && pinCode && existingPin === pinCode;
-
+    // SECURITY: the raw PIN is never sent to the browser, so we can no longer
+    // compare the entered PIN against a stored value to detect a no-op edit.
+    // Reaching this point means a PIN was actually typed into the form (the
+    // blank-field cases are handled and returned above), so we always push it
+    // to the physical lock. A metadata-only edit keeps the existing code by
+    // leaving the PIN blank, which is short-circuited earlier and never lands
+    // here.
     await this.callService('set_code_advanced', serviceData);
 
-    // Automatically sync the code to the physical Z-Wave lock ONLY when the
-    // PIN changed. Metadata-only edits skip the physical re-write entirely.
-    if (!pinUnchanged && serviceData.usercode && serviceData.usercode.length >= 4) {
+    // Sync the freshly entered code to the physical Z-Wave lock.
+    if (serviceData.usercode && serviceData.usercode.length >= 4) {
       await this.callService('sync_slot_to_zwave', {
         entity_id: serviceData.entity_id,
         code_slot: serviceData.code_slot, // Already converted to int above

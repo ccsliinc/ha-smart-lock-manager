@@ -147,7 +147,12 @@ class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
                 # Basic slot info
                 "slot_number": slot_num,
                 "user_name": slot.user_name,
-                "pin_code": slot.pin_code,  # Required for frontend color logic
+                # SECURITY: never emit the raw PIN as a state attribute. It
+                # would leak to every authenticated user via /api/states, the
+                # websocket API, Developer Tools, the recorder DB and backups.
+                # The frontend only needs to know whether a PIN is configured,
+                # so expose a boolean instead of the code value.
+                "has_pin_code": bool(slot.pin_code),
                 "is_active": slot.is_active,
                 "is_synced": slot.is_synced,
                 "is_valid_now": is_valid_now,

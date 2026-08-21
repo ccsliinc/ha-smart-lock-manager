@@ -36,12 +36,14 @@ async def async_register_panel(hass: HomeAssistant) -> None:
                     "name": "smart-lock-manager-panel",
                     "embed_iframe": False,
                     "trust": False,
-                    "js_url": f"/api/smart_lock_manager/frontend/"
-                    f"smart-lock-manager-panel.js?v=2026.7.2&t="
+                    "js_url": f"/smart_lock_manager_static/"
+                    f"smart-lock-manager-panel.js?v=2026.8.0&t="
                     f"{int(__import__('time').time())}",
                 }
             },
-            require_admin=False,
+            # SECURITY: this panel sets and clears physical door codes, so it
+            # must not appear in the sidebar for non-admin users.
+            require_admin=True,
         )
 
         _LOGGER.info("Smart Lock Manager panel registered successfully")

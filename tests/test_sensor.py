@@ -161,6 +161,33 @@ class TestSmartLockManagerSensor:
         assert slot_1["use_count"] == 5
         assert slot_1["max_uses"] == 10
 
+    def test_sensor_never_exposes_raw_pin(self, sensor_instance):
+        """SECURITY regression: the raw PIN is never a state attribute.
+
+        Frenck finding #1: emitting ``pin_code`` leaked every code to any
+        authenticated user via /api/states, the websocket, Developer Tools, the
+        recorder DB and backups. The sensor must expose only the boolean
+        ``has_pin_code`` per slot. The fixture carries PINs 1234/5678 in slots
+        1 and 2; slot 5 is empty.
+        """
+        attrs = sensor_instance.extra_state_attributes
+        slot_details = attrs["slot_details"]
+
+        for slot_key, slot in slot_details.items():
+            assert "pin_code" not in slot, f"{slot_key} leaked raw pin_code"
+            assert "has_pin_code" in slot, f"{slot_key} missing has_pin_code"
+            assert isinstance(slot["has_pin_code"], bool)
+
+        # Configured slots report True; empty slots report False.
+        assert slot_details["slot_1"]["has_pin_code"] is True
+        assert slot_details["slot_2"]["has_pin_code"] is True
+        assert slot_details["slot_5"]["has_pin_code"] is False
+
+        # The raw code values must not survive anywhere in the slot payload.
+        for slot in slot_details.values():
+            assert "1234" not in [str(v) for v in slot.values()]
+            assert "5678" not in [str(v) for v in slot.values()]
+
     def test_sensor_active_codes_count(self, sensor_instance):
         """Test active codes count calculation."""
         attrs = sensor_instance.extra_state_attributes
