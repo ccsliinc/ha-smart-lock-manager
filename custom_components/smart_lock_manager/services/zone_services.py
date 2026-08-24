@@ -222,9 +222,19 @@ class ZoneServices:
                 f"Lock {entity_id} is not a member of zone '{zone.name}'."
             )
 
-        wiped = await _wipe_zone_codes_from_lock(hass, zone, entity_id)
+        # Order matters: drop the membership and persist it BEFORE touching
+        # hardware. ``_wipe_zone_codes_from_lock`` awaits per-slot clears, and a
+        # coordinator cycle interleaving on one of those awaits calls
+        # ``mirror_owning_zone_to_member`` in its Step 0 — which, while this lock
+        # is still a member, re-copies the zone's canonical (still-populated)
+        # codes back onto it and re-pushes them, racing the wipe. Removing the
+        # member first makes ``get_zone_for_lock`` return None for it, so the
+        # mirror is a no-op and cannot re-home the codes mid-wipe. The wipe
+        # still uses the zone's own canonical slot set to decide what to clear,
+        # so unhoming first does not change WHAT gets wiped.
         zone.remove_member(entity_id)
         await save_zone(hass, zone)
+        wiped = await _wipe_zone_codes_from_lock(hass, zone, entity_id)
 
         _LOGGER.info(
             "Removed lock %s from zone '%s'; wiped %d code(s)",

@@ -384,42 +384,56 @@ async def async_register_services(hass: HomeAssistant) -> None:
     )
     _LOGGER.debug("Registered zone-management services")
 
-    hass.services.async_register(
+    # SECURITY: these six are alert/monitoring CONTROL services — every one
+    # MUTATES process state (silences intrusion alerting, changes the sweep
+    # cadence, or flips global settings such as ``debug_logging``). None is a
+    # read-only status read, so a non-admin (guest) could otherwise blind the
+    # alerting subsystem. Admin-gate all six via the same helper the code
+    # services use. (``get_usage_stats`` and the deprecated ``generate_package``
+    # remain plain: the former is a read-only usage count with no code data, the
+    # latter a no-op deprecation event.)
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_UPDATE_GLOBAL_SETTINGS,
         update_global_settings_wrapper,
         schema=UPDATE_GLOBAL_SETTINGS_SCHEMA,
     )
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_SET_SWEEP_INTERVALS,
         set_sweep_intervals_wrapper,
         schema=SET_SWEEP_INTERVALS_SCHEMA,
     )
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_PAUSE_ALERTS,
         pause_alerts_wrapper,
         schema=PAUSE_ALERTS_SCHEMA,
     )
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_RESUME_ALERTS,
         resume_alerts_wrapper,
         schema=RESUME_ALERTS_SCHEMA,
     )
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_MUTE_LOCK_ALERT,
         mute_lock_alert_wrapper,
         schema=MUTE_LOCK_ALERT_SCHEMA,
     )
 
-    hass.services.async_register(
+    async_register_admin_service(
+        hass,
         DOMAIN,
         SERVICE_UNMUTE_LOCK_ALERT,
         unmute_lock_alert_wrapper,

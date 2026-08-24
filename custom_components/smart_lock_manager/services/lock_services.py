@@ -6,6 +6,7 @@ from typing import Optional
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     ATTR_CODE_SLOT,
@@ -61,6 +62,31 @@ def _check_prefix_collision(
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _parse_ingested_datetime(
+    field_name: str, raw: Optional[object]
+) -> Optional[datetime]:
+    """Parse a frontend date string into an aware UTC datetime, or None.
+
+    Accepts a naive datetime-local (``YYYY-MM-DDTHH:MM``) or an offset-carrying
+    ISO string. A naive value is assumed to be in Home Assistant's configured
+    time zone and converted to UTC; an aware value is converted to UTC. An
+    unparseable value logs a warning and yields None (unchanged from the prior
+    behavior), never a raise.
+
+    - Inputs: field_name (str, for logging), raw (the incoming value or None).
+    - Outputs: aware UTC datetime, or None.
+    """
+    if not raw:
+        return None
+    parsed = dt_util.parse_datetime(str(raw))
+    if parsed is None:
+        _LOGGER.warning("Invalid %s format: %s", field_name, raw)
+        return None
+    aware = dt_util.as_utc(parsed)
+    _LOGGER.debug("Parsed %s: %s", field_name, aware)
+    return aware
 
 
 async def _propagate_slot_to_zone(
@@ -178,28 +204,15 @@ class LockServices:
         start_date_raw = service_call.data.get("start_date")
         end_date_raw = service_call.data.get("end_date")
 
-        # Parse datetime strings from frontend (ISO format)
-        start_date = None
-        if start_date_raw:
-            try:
-                # Handle datetime-local format from frontend (YYYY-MM-DDTHH:MM)
-                start_date = datetime.fromisoformat(str(start_date_raw))
-                _LOGGER.debug("Parsed start_date: %s", start_date)
-            except (ValueError, TypeError) as e:
-                _LOGGER.warning(
-                    "Invalid start_date format: %s, error: %s", start_date_raw, e
-                )
-
-        end_date = None
-        if end_date_raw:
-            try:
-                # Handle datetime-local format from frontend (YYYY-MM-DDTHH:MM)
-                end_date = datetime.fromisoformat(str(end_date_raw))
-                _LOGGER.debug("Parsed end_date: %s", end_date)
-            except (ValueError, TypeError) as e:
-                _LOGGER.warning(
-                    "Invalid end_date format: %s, error: %s", end_date_raw, e
-                )
+        # Parse datetime strings from frontend and NORMALIZE to aware UTC. The
+        # frontend may send a naive datetime-local (YYYY-MM-DDTHH:MM) OR an
+        # offset-carrying ISO string; either way we store an aware UTC value so
+        # every later comparison against ``dt_util``/UTC ``now`` is aware-vs-aware
+        # (a naive-vs-aware compare raised TypeError inside the coordinator and
+        # aborted the whole sync cycle). A naive input is assumed to be in HA's
+        # configured time zone (``dt_util.as_utc`` semantics).
+        start_date = _parse_ingested_datetime("start_date", start_date_raw)
+        end_date = _parse_ingested_datetime("end_date", end_date_raw)
         allowed_hours = service_call.data.get("allowed_hours")
         allowed_days = service_call.data.get("allowed_days")
         max_uses = service_call.data.get("max_uses", -1)
@@ -250,6 +263,16 @@ class LockServices:
             from ..storage.lock_storage import save_lock_data
 
             await save_lock_data(hass, lock, entry_id)
+
+            # Zone model: a metadata-only edit on a zoned member must STILL be
+            # propagated to the owning zone. The coordinator's per-cycle mirror
+            # copies the ZONE's canonical slot back onto every member, so
+            # without this the next mirror (within ~30s) would overwrite these
+            # freshly-edited fields with the stale zone definition and silently
+            # revert the change. Propagating updates the zone's canonical slot
+            # (unchanged PIN, new schedule/limit/notify) so the mirror is a
+            # no-op instead of a revert. No-op when the lock is unhomed.
+            await _propagate_slot_to_zone(hass, lock, code_slot)
             return
 
         # Pre-flight: reject PIN-prefix collisions before any write

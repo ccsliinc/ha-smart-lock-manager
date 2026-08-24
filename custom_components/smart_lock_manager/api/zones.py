@@ -19,11 +19,13 @@ the PIN-safety pre-commit guard stays satisfied.
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 from typing import Any, Dict, List, cast
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import Unauthorized
 
 from ..alert_engine import ALERT_ENGINE_KEY
 from ..auto_lock import AUTO_LOCK_ENGINE_KEY
@@ -179,14 +181,32 @@ class SmartLockManagerZonesView(HomeAssistantView):
         self.hass = hass
 
     async def get(self, request: web.Request) -> web.Response:  # noqa
-        """Return the serialized zone model as JSON.
+        """Return the serialized zone model as JSON (ADMIN only).
 
-        - Inputs: request (aiohttp request; auth enforced by the base view).
-        - Outputs: 200 JSON payload, or 500 with an error message on failure.
+        The payload exposes the full fleet topology, member names, schedules
+        and notification recipients, so — consistent with the admin-gated
+        panel and code services — a non-admin caller is rejected. ``requires_auth``
+        only proves the caller is authenticated, not that they are an admin.
+
+        - Inputs: request (aiohttp request; ``request["hass_user"]`` is the
+          authenticated user injected by the HTTP auth middleware).
+        - Outputs: 200 JSON payload for an admin; raises ``Unauthorized`` (401)
+          for a non-admin; 500 with a GENERIC message on an internal failure.
         """
+        hass_user = request.get("hass_user")
+        if hass_user is None or not getattr(hass_user, "is_admin", False):
+            # Raise rather than 200-with-error so the response is a true 401 and
+            # no topology is serialized for a non-admin.
+            raise Unauthorized()
+
         try:
             payload = build_zones_payload(self.hass)
             return self.json(payload)
         except Exception as err:  # pragma: no cover - defensive top-level guard
+            # Log the detail server-side; never echo the exception text (which
+            # can carry internal paths/state) back to the client.
             _LOGGER.error("Error building zones payload: %s", err)
-            return self.json({"error": str(err)}, status_code=500)
+            return self.json(
+                {"error": "Internal error building zones payload"},
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )

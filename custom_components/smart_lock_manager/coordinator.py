@@ -8,9 +8,11 @@ needs (``_save_lock_data``) is imported LAZILY inside the methods that use it to
 avoid a circular import (``__init__`` imports this module).
 """
 
+import hashlib
+import json
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict
+from datetime import timedelta
+from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
@@ -19,6 +21,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import ATTR_CODE_SLOT, DOMAIN, PRIMARY_LOCK
 from .coordinator_helpers import read_zwave_codes
+from .models.slot import _as_aware_utc, _utcnow
 from .zone_runtime import mirror_owning_zone_to_member
 
 # Module-level logger so log entries appear under
@@ -39,6 +42,14 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
         # Key: "{entity_id}_slot_{slot_num}"
         # Value: {"last_retry": datetime, "periodic_attempts": int}
         self._periodic_retry_tracker: dict[str, dict] = {}
+
+        # Dirty-check for the per-cycle storage write: the sha256 of the last
+        # persisted ``lock.to_dict()``. The 30s cycle used to unconditionally
+        # rewrite the .storage file per lock even when nothing changed (needless
+        # flash wear); we now skip the write when the serialized lock is
+        # byte-identical to what was last saved, while any real change still
+        # persists on the very next cycle.
+        self._last_saved_hash: Optional[str] = None
 
         super().__init__(
             hass,
@@ -160,11 +171,10 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
 
                         # Exponential backoff: 60s, 120s, 240s, 480s, max 600s
                         backoff_seconds = min(60 * (2**slot.sync_attempts), 600)
+                        last_attempt = _as_aware_utc(slot.last_sync_attempt)
                         if (
-                            slot.last_sync_attempt
-                            and (
-                                datetime.now() - slot.last_sync_attempt
-                            ).total_seconds()
+                            last_attempt
+                            and (_utcnow() - last_attempt).total_seconds()
                             < backoff_seconds
                         ):
                             _LOGGER.debug(
@@ -176,7 +186,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                             continue
 
                         slot.sync_attempts += 1
-                        slot.last_sync_attempt = datetime.now()
+                        slot.last_sync_attempt = _utcnow()
 
                         try:
                             await self.hass.services.async_call(
@@ -274,7 +284,7 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 # to avoid flooding the Z-Wave mesh.
                 retry_slots = sync_actions.get("retry", [])
                 if retry_slots:
-                    now = datetime.now()
+                    now = _utcnow()
                     best_candidate = None
                     best_last_retry = None
 
@@ -399,11 +409,25 @@ class SmartLockManagerDataUpdateCoordinator(DataUpdateCoordinator):
                 # its owning zone via the Step 0 mirror above, so there is no
                 # main-lock-to-child fan-out to perform here.
 
-            # Persist updated sync status to storage
+            # Persist updated sync status to storage — but only when something
+            # actually changed. Hash the serialized lock and compare to the last
+            # saved snapshot; skip the write when identical so an idle lock is
+            # not rewritten to flash every 30 seconds. A real change alters the
+            # dict and thus the hash, so it still persists on this very cycle.
             if lock:
-                from . import _save_lock_data
+                snapshot = json.dumps(lock.to_dict(), sort_keys=True, default=str)
+                digest = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+                if digest != self._last_saved_hash:
+                    from . import _save_lock_data
 
-                await _save_lock_data(self.hass, lock, self.entry.entry_id)
+                    await _save_lock_data(self.hass, lock, self.entry.entry_id)
+                    self._last_saved_hash = digest
+                else:
+                    _LOGGER.debug(
+                        "Coordinator: %s unchanged this cycle; skipping storage"
+                        " write",
+                        lock.lock_name,
+                    )
 
             return {
                 "user_codes": {},

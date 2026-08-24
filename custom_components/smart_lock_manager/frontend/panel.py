@@ -5,7 +5,12 @@ import logging
 from homeassistant.components import frontend
 from homeassistant.core import HomeAssistant
 
+from ..const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
+
+# Panel url path (also the key under ``hass.data[frontend.DATA_PANELS]``).
+PANEL_URL_PATH = "smart-lock-manager"
 
 PANEL_TITLE = "Smart Lock Manager"
 PANEL_ICON = "mdi:lock-smart"
@@ -15,10 +20,14 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     """Register the Smart Lock Manager panel."""
     _LOGGER.debug("Registering Smart Lock Manager panel")
 
-    # Check if panel is already registered (for multiple lock instances)
+    # Check if panel is already registered (for multiple lock instances).
+    # ``hass.data`` is a plain dict, so the panel registry is a KEY in it, not
+    # an attribute — ``hasattr(hass.data, "frontend_panels")`` was ALWAYS False
+    # and this dedup guard never fired (registration relied on the ValueError
+    # "Overwriting panel" fallback below instead).
     if (
-        hasattr(hass.data, "frontend_panels")
-        and "smart-lock-manager" in hass.data.frontend_panels
+        frontend.DATA_PANELS in hass.data
+        and PANEL_URL_PATH in hass.data[frontend.DATA_PANELS]
     ):
         _LOGGER.debug("Smart Lock Manager panel already registered, skipping")
         return
@@ -59,10 +68,29 @@ async def async_register_panel(hass: HomeAssistant) -> None:
 
 
 async def async_unregister_panel(hass: HomeAssistant) -> None:
-    """Unregister the Smart Lock Manager panel."""
+    """Remove the Smart Lock Manager panel when the LAST lock entry unloads.
+
+    The panel is process-wide (registered once, shared by every lock config
+    entry), so it must only be removed when the final entry is unloading — the
+    same last-instance guard the access-log listener teardown uses. This runs
+    from ``async_unload_entry`` BEFORE the unloading entry is popped from
+    ``hass.data[DOMAIN]``, so "this is the last entry" means at most one dict
+    entry remains. Previously this was a pure no-op that only logged, leaving
+    the panel (and its sidebar item) behind after the integration was removed.
+
+    - Inputs: hass (HomeAssistant).
+    - Outputs: None.
+    """
     _LOGGER.debug("Unregistering Smart Lock Manager panel")
 
-    # Remove the panel (this is done automatically by HA during unload)
-    # but we can add cleanup logic here if needed
+    remaining = [v for v in hass.data.get(DOMAIN, {}).values() if isinstance(v, dict)]
+    if len(remaining) > 1:
+        # Other lock entries still use the shared panel; leave it registered.
+        return
 
-    _LOGGER.info("Smart Lock Manager panel unregistered")
+    if (
+        frontend.DATA_PANELS in hass.data
+        and PANEL_URL_PATH in hass.data[frontend.DATA_PANELS]
+    ):
+        frontend.async_remove_panel(hass, PANEL_URL_PATH)
+        _LOGGER.info("Smart Lock Manager panel unregistered")

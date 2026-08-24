@@ -233,12 +233,19 @@ class TestZWaveServices:
 
             mock_get_node.return_value = mock_zwave_node
 
-            # Mock current Z-Wave code as different from desired code so the
-            # clear-then-set path runs (reader returns the ``usercode`` key).
-            mock_get_usercode.return_value = {
-                "usercode": "55667788",
-                "in_use": True,
-            }
+            # The reader is called twice: first the PRE-check (must differ so the
+            # clear-then-set path runs), then the post-write READ-BACK
+            # verification (must reflect the freshly-written code so the slot is
+            # marked synced). A stateful side_effect models that transition.
+            reads = {"n": 0}
+
+            def _usercode(node, slot):
+                reads["n"] += 1
+                # 1st read: an old/different code; later: the code we just wrote.
+                value = "55667788" if reads["n"] == 1 else "98761234"
+                return {"usercode": value, "in_use": True}
+
+            mock_get_usercode.side_effect = _usercode
 
             # Execute sync
             await ZWaveServices.sync_slot_to_zwave(hass, service_call)

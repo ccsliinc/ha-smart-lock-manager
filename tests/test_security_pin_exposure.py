@@ -94,25 +94,74 @@ async def test_code_services_require_admin(
 async def test_non_code_service_is_not_admin_gated(
     hass: HomeAssistant, hass_read_only_user
 ) -> None:
-    """Fix 3 (complement): a read-only status service is NOT admin-gated.
+    """Fix 3 (complement): a genuinely read-only service is NOT admin-gated.
 
-    ``pause_alerts`` exposes no code data, so a non-admin user must be able to
-    invoke it without hitting Unauthorized. It may still fail for unrelated
-    reasons, but never with Unauthorized.
+    ``get_usage_stats`` returns usage counts/names only (no code data and no
+    control over alerting), so it deliberately stays a plain service a non-admin
+    can invoke. (As of 2026.8.2 the six alert/monitoring CONTROL services —
+    including ``pause_alerts`` — ARE admin-gated because they mutate state; see
+    ``test_alert_control_services_require_admin``.) It may still fail for
+    unrelated reasons here, but never with Unauthorized.
     """
     await registration.async_register_services(hass)
-    assert hass.services.has_service(DOMAIN, "pause_alerts")
+    assert hass.services.has_service(DOMAIN, "get_usage_stats")
 
     try:
         await hass.services.async_call(
             DOMAIN,
-            "pause_alerts",
-            {},
+            "get_usage_stats",
+            {"entity_id": "lock.test_lock"},
             blocking=True,
             context=Context(user_id=hass_read_only_user.id),
         )
     except Unauthorized:  # pragma: no cover - this is the failure we assert against
-        pytest.fail("pause_alerts must not be admin-gated")
+        pytest.fail("get_usage_stats must not be admin-gated")
     except Exception:
         # Any other error (missing lock/state) is irrelevant to the gating test.
         pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "service",
+    [
+        "pause_alerts",
+        "resume_alerts",
+        "mute_lock_alert",
+        "unmute_lock_alert",
+        "set_sweep_intervals",
+        "update_global_settings",
+    ],
+)
+async def test_alert_control_services_require_admin(
+    hass: HomeAssistant, hass_read_only_user, service: str
+) -> None:
+    """P1 #1: the six alert/monitoring-control services reject a non-admin.
+
+    Each mutates process state (silences intrusion alerting, changes the sweep
+    cadence, or flips global settings like ``debug_logging``), so a non-admin
+    (guest) invoking any of them must hit Unauthorized BEFORE the handler runs.
+    """
+    await registration.async_register_services(hass)
+    assert hass.services.has_service(DOMAIN, service)
+
+    # Schema validation runs BEFORE the admin check, so each call must carry
+    # schema-valid data or it would fail with vol.Invalid instead of proving the
+    # admin gate. (These payloads never take effect — the gate rejects first.)
+    call_data = {
+        "pause_alerts": {"hours": 1},
+        "resume_alerts": {},
+        "mute_lock_alert": {"entity_id": "lock.test_lock"},
+        "unmute_lock_alert": {"entity_id": "lock.test_lock"},
+        "set_sweep_intervals": {"health_sweep_minutes": 5},
+        "update_global_settings": {},
+    }[service]
+
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            DOMAIN,
+            service,
+            call_data,
+            blocking=True,
+            context=Context(user_id=hass_read_only_user.id),
+        )

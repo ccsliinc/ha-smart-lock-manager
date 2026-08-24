@@ -1,8 +1,42 @@
 """Code-slot model and slot-status definitions for Smart Lock Manager."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, tzinfo
 from typing import Dict, List, Optional
+
+from homeassistant.util import dt as dt_util
+
+
+def _utcnow() -> datetime:
+    """Return an aware UTC ``now``.
+
+    Uses ``datetime.now(timezone.utc)`` rather than ``dt_util.utcnow()``:
+    ``dt_util.utcnow`` is a ``functools.partial`` bound at import time, so
+    ``freezegun`` cannot patch it and any time-window logic built on it would be
+    untestable (and silently unaffected by ``freeze_time``). This form is
+    functionally identical to ``dt_util.utcnow()`` in production while remaining
+    freezable in tests.
+
+    - Outputs: timezone-aware ``datetime`` in UTC.
+    """
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Coerce a (possibly naive) datetime to an aware UTC datetime.
+
+    A naive datetime is assumed to be in Home Assistant's configured time zone
+    (``dt_util.as_utc`` semantics) and converted to UTC; an aware datetime is
+    converted to UTC. ``None`` passes through. This is what makes an
+    offset-carrying (aware) ingested ``end_date`` safe to compare against
+    ``_utcnow()`` without raising ``TypeError``.
+
+    - Inputs: value (datetime or None).
+    - Outputs: aware UTC datetime, or None.
+    """
+    if value is None:
+        return None
+    return dt_util.as_utc(value)
 
 
 class SlotStatus:
@@ -149,23 +183,39 @@ class CodeSlot:
     last_used: Optional[datetime] = None
     expires_at: Optional[datetime] = None  # Kept for backwards compatibility
 
-    def is_valid_now(self) -> bool:
-        """Check if this slot should be active based on current time and rules."""
-        now = datetime.now()
+    def is_valid_now(self, tz: Optional[tzinfo] = None) -> bool:
+        """Check if this slot should be active based on current time and rules.
 
-        # Check date range
-        if self.start_date and now < self.start_date:
+        All datetime comparisons run in aware UTC so an offset-carrying
+        (aware) ``start_date``/``end_date`` can never raise ``TypeError``
+        against a naive ``now``. ``allowed_hours``/``allowed_days`` are
+        evaluated in ``tz`` when supplied (the owning lock/zone's configured
+        time zone) and otherwise fall back to Home Assistant's configured
+        local time zone.
+
+        - Inputs: tz (optional tzinfo for hour/day-of-week evaluation).
+        - Outputs: True if the code should currently be live on the lock.
+        """
+        now = _utcnow()
+
+        # Check date range (aware UTC on both sides).
+        start = _as_aware_utc(self.start_date)
+        end = _as_aware_utc(self.end_date)
+        if start and now < start:
             return False
-        if self.end_date and now > self.end_date:
+        if end and now > end:
             return False
 
-        # Check allowed hours (0-23)
-        if self.allowed_hours and now.hour not in self.allowed_hours:
-            return False
-
-        # Check allowed days (0=Monday, 6=Sunday)
-        if self.allowed_days and now.weekday() not in self.allowed_days:
-            return False
+        # Hour/day-of-week windows are wall-clock concepts, so evaluate them in
+        # the lock/zone's time zone (fallback: HA's configured local zone).
+        if self.allowed_hours or self.allowed_days:
+            local = now.astimezone(tz) if tz is not None else dt_util.as_local(now)
+            # Check allowed hours (0-23)
+            if self.allowed_hours and local.hour not in self.allowed_hours:
+                return False
+            # Check allowed days (0=Monday, 6=Sunday)
+            if self.allowed_days and local.weekday() not in self.allowed_days:
+                return False
 
         # Check usage limits
         if self.max_uses > 0 and self.use_count >= self.max_uses:
@@ -204,8 +254,10 @@ class CodeSlot:
 
     def should_disable(self) -> bool:
         """Check if slot should be automatically disabled due to rules."""
-        # Check if expired
-        if self.end_date and datetime.now() > self.end_date:
+        # Check if expired (aware UTC on both sides so an offset-carrying
+        # end_date cannot raise TypeError).
+        end = _as_aware_utc(self.end_date)
+        if end and _utcnow() > end:
             return True
 
         # Check if max uses reached

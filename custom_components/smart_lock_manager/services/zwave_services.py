@@ -82,6 +82,47 @@ _LOGGER = logging.getLogger(__name__)
 # Timeout for the entire read_zwave_codes operation (seconds)
 _READ_CODES_TIMEOUT = 30
 
+
+def _verify_slot_write(
+    node: Any, slot_number: int, expected_pin: Any, intended_present: bool
+) -> bool:
+    """Read the slot back from the lock and confirm it matches the intent.
+
+    THREE-OUTCOME rule: a write we cannot CONFIRM on the lock is NOT synced.
+    After dispatching a Z-Wave write/clear we re-read the slot from the
+    (mock-aware) cached ValueDB and compare it to the intended end state:
+
+    - ``intended_present`` True  -> the read-back PIN must equal ``expected_pin``.
+    - ``intended_present`` False -> the slot must read back empty.
+
+    Returns False (could-not-verify -> NOT synced) whenever the node is
+    unavailable, the read raises, or the read-back disagrees. Under
+    ``SLM_DEV_MOCK`` the MockValueDB reflects the write immediately so this is
+    deterministic; against a real lock the cached ValueDB may briefly lag a
+    fresh write, in which case the slot is intentionally left unsynced and the
+    coordinator's next 30s read reconciles it via ``update_sync_status`` — never
+    an optimistic green.
+
+    - Inputs: node (node-like or None), slot_number (int),
+      expected_pin (the PIN we wrote, ignored when ``intended_present`` False),
+      intended_present (bool — whether a code should now be on the lock).
+    - Outputs: True only when the hardware read-back matches the intent.
+    """
+    if node is None:
+        return False
+    try:
+        info = _read_usercode(node, slot_number)
+    except Exception as exc:  # noqa: BLE001 - any read failure = cannot verify
+        _LOGGER.debug(
+            "Read-back verification could not read slot %s: %s", slot_number, exc
+        )
+        return False
+    current = info.get("usercode") if info else None
+    if intended_present:
+        return bool(current) and str(current) == str(expected_pin)
+    return not current
+
+
 # Z-Wave JS integration support
 try:
     # async_get_node_from_entity_id is a @callback (sync), NOT a coroutine
@@ -356,9 +397,36 @@ class ZWaveServices:
                     if node:
                         await _refresh_slot_cache(node, slot_number, entity_id)
 
-            # Update sync status
-            slot.is_synced = True
-            slot.sync_error = None
+            # Read-back verification (completes the P0 desired-presence
+            # invariant on the ADD/SET path). Previously this set is_synced=True
+            # UNCONDITIONALLY the moment the write dispatched — a write that
+            # never landed still read as synced. Now we re-read the slot from
+            # the lock and only claim synced when the hardware agrees with the
+            # intent; otherwise the slot stays unsynced with a could-not-verify
+            # error so the coordinator retries.
+            if action == "disable":
+                intended_present = False
+            elif action == "enable":
+                intended_present = True
+            else:  # auto
+                intended_present = bool(slot.is_active and slot.pin_code)
+
+            if _verify_slot_write(node, slot_number, slot.pin_code, intended_present):
+                slot.is_synced = True
+                slot.sync_error = None
+                slot.sync_attempts = 0
+            else:
+                slot.is_synced = False
+                slot.sync_error = (
+                    "Write dispatched but could not be verified on the lock "
+                    "(read-back did not match); will retry"
+                )
+                _LOGGER.warning(
+                    "Read-back verification FAILED for slot %s on %s; leaving "
+                    "unsynced for the coordinator to retry",
+                    slot_number,
+                    entity_id,
+                )
 
         except Exception as e:
             _LOGGER.error(

@@ -14,8 +14,11 @@ from .slot import (  # noqa: F401  (re-exported for backwards-compat import path
     USER_ID_STATUS_ENABLED,
     CodeSlot,
     SlotStatus,
+    _as_aware_utc,
+    _utcnow,
     find_prefix_conflict,
 )
+from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -239,10 +242,26 @@ class SmartLockManagerLock(LockSerializationMixin):
         """Get all active code slots."""
         return {num: slot for num, slot in self.code_slots.items() if slot.is_active}
 
+    def _settings_tzinfo(self) -> Optional[Any]:
+        """Return the lock's configured tzinfo for wall-clock rule evaluation.
+
+        Resolves ``settings.timezone`` (e.g. ``"America/New_York"``) to a
+        ``tzinfo`` so ``allowed_hours``/``allowed_days`` are judged in the
+        lock's own zone. Returns None when unset or unresolvable, in which case
+        the slot falls back to Home Assistant's configured local zone.
+
+        - Outputs: tzinfo or None.
+        """
+        tzname = getattr(self.settings, "timezone", None)
+        if not tzname:
+            return None
+        return dt_util.get_time_zone(tzname)
+
     def get_valid_slots_now(self) -> Dict[int, CodeSlot]:
         """Get all slots that are currently valid based on time/usage rules."""
+        tz = self._settings_tzinfo()
         return {
-            num: slot for num, slot in self.code_slots.items() if slot.is_valid_now()
+            num: slot for num, slot in self.code_slots.items() if slot.is_valid_now(tz)
         }
 
     def check_and_update_slot_validity(self) -> List[int]:
@@ -251,6 +270,7 @@ class SmartLockManagerLock(LockSerializationMixin):
         Returns list of slot numbers that had validity changes.
         """
         changed_slots = []
+        tz = self._settings_tzinfo()
 
         for slot_number, slot in self.code_slots.items():
             if not slot.is_active:
@@ -258,25 +278,22 @@ class SmartLockManagerLock(LockSerializationMixin):
 
             # Check if slot should be disabled due to expiration or max uses
             should_disable = slot.should_disable()
-            was_valid = slot.is_valid_now()
+            was_valid = slot.is_valid_now(tz)
 
             if should_disable and slot.is_active:
                 # Auto-disable expired/overused slots
                 slot.is_active = False
                 changed_slots.append(slot_number)
+                end = _as_aware_utc(slot.end_date)
                 _LOGGER.warning(
                     "Auto-disabled slot %s in %s: %s",
                     slot_number,
                     self.lock_name,
-                    (
-                        "expired"
-                        if (slot.end_date and datetime.now() > slot.end_date)
-                        else "max uses reached"
-                    ),
+                    ("expired" if (end and _utcnow() > end) else "max uses reached"),
                 )
 
             # Check for validity state changes (for real-time sync)
-            elif was_valid != slot.is_valid_now():
+            elif was_valid != slot.is_valid_now(tz):
                 changed_slots.append(slot_number)
 
         return changed_slots
@@ -295,12 +312,14 @@ class SmartLockManagerLock(LockSerializationMixin):
         # Get current Z-Wave codes if provided
         zwave_codes = zwave_codes or {}
 
-        now = datetime.now()
+        now = _utcnow()
+        tz = self._settings_tzinfo()
         for slot_number, slot in self.code_slots.items():
-            # Grace period: skip slots that were recently written (within 60s)
-            if slot.last_sync_attempt and (now - slot.last_sync_attempt) < timedelta(
-                seconds=60
-            ):
+            # Grace period: skip slots that were recently written (within 60s).
+            # ``last_sync_attempt`` may be naive (older storage) or aware; coerce
+            # so the subtraction never raises across an aware ``now``.
+            last_attempt = _as_aware_utc(slot.last_sync_attempt)
+            if last_attempt and (now - last_attempt) < timedelta(seconds=60):
                 continue
 
             zwave_code = zwave_codes.get(slot_number, {}).get("code")
@@ -312,7 +331,7 @@ class SmartLockManagerLock(LockSerializationMixin):
             # so it is removed from the hardware now and re-added when the
             # window reopens.
             desired_present = bool(
-                slot.is_active and slot.pin_code and slot.is_valid_now()
+                slot.is_active and slot.pin_code and slot.is_valid_now(tz)
             )
 
             if desired_present:
@@ -509,7 +528,8 @@ class SmartLockManagerLock(LockSerializationMixin):
                 [
                     s
                     for s in self.code_slots.values()
-                    if s.end_date and datetime.now() > s.end_date
+                    if _as_aware_utc(s.end_date) is not None
+                    and _utcnow() > _as_aware_utc(s.end_date)
                 ]
             ),
         }

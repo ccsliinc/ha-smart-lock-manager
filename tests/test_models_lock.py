@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+from freezegun import freeze_time
+
 from custom_components.smart_lock_manager.models.lock import (
     CodeSlot,
     SmartLockManagerLock,
@@ -39,38 +41,38 @@ class TestCodeSlot:
         sample_code_slot.pin_code = None
         assert not sample_code_slot.is_valid_now()
 
-    @patch("custom_components.smart_lock_manager.models.slot.datetime")
-    def test_is_valid_now_time_restrictions(self, mock_datetime, weekend_code_slot):
-        """Test time-based validity checking."""
-        # Mock current time as Monday (weekday=0)
-        mock_datetime.now.return_value = datetime(2024, 1, 1, 10, 0)  # Monday
+    def test_is_valid_now_time_restrictions(self, weekend_code_slot):
+        """Test time-based validity checking.
 
-        # Weekend-only slot should not be valid on Monday
-        assert not weekend_code_slot.is_valid_now()
+        Uses ``freeze_time`` (which controls the aware ``datetime.now(UTC)`` the
+        model now reads) instead of patching the module's ``datetime`` symbol.
+        With HA's default UTC time zone in tests, the frozen instant's weekday
+        drives ``allowed_days``.
+        """
+        # Monday 2024-01-01 (weekday=0): weekend-only slot is NOT valid.
+        with freeze_time("2024-01-01 10:00:00"):
+            assert not weekend_code_slot.is_valid_now()
 
-        # Mock current time as Saturday (weekday=5)
-        mock_datetime.now.return_value = datetime(2024, 1, 6, 10, 0)  # Saturday
+        # Saturday 2024-01-06 (weekday=5): weekend-only slot IS valid.
+        with freeze_time("2024-01-06 10:00:00"):
+            assert weekend_code_slot.is_valid_now()
 
-        # Weekend-only slot should be valid on Saturday
-        assert weekend_code_slot.is_valid_now()
-
-    @patch("custom_components.smart_lock_manager.models.slot.datetime")
-    def test_is_valid_now_hour_restrictions(self, mock_datetime, sample_code_slot):
-        """Test hour-based validity checking."""
+    def test_is_valid_now_hour_restrictions(self, sample_code_slot):
+        """Test hour-based validity checking (frozen aware UTC now)."""
         # Set hour restrictions (9-17, business hours)
         sample_code_slot.allowed_hours = list(range(9, 18))  # 9-17
 
-        # Mock time as 8 AM (hour=8, before allowed hours)
-        mock_datetime.now.return_value = datetime(2024, 1, 1, 8, 0)
-        assert not sample_code_slot.is_valid_now()
+        # 08:00 UTC (before allowed hours) -> not valid.
+        with freeze_time("2024-01-01 08:00:00"):
+            assert not sample_code_slot.is_valid_now()
 
-        # Mock time as 10 AM (hour=10, within allowed hours)
-        mock_datetime.now.return_value = datetime(2024, 1, 1, 10, 0)
-        assert sample_code_slot.is_valid_now()
+        # 10:00 UTC (within allowed hours) -> valid.
+        with freeze_time("2024-01-01 10:00:00"):
+            assert sample_code_slot.is_valid_now()
 
-        # Mock time as 6 PM (hour=18, after allowed hours)
-        mock_datetime.now.return_value = datetime(2024, 1, 1, 18, 0)
-        assert not sample_code_slot.is_valid_now()
+        # 18:00 UTC (after allowed hours) -> not valid.
+        with freeze_time("2024-01-01 18:00:00"):
+            assert not sample_code_slot.is_valid_now()
 
     def test_usage_limits(self, usage_limited_slot):
         """Test usage limit functionality."""
@@ -201,12 +203,8 @@ class TestSmartLockManagerLock:
 
     def test_get_valid_slots_now(self, lock_with_slots):
         """Test getting currently valid slots."""
-        with patch(
-            "custom_components.smart_lock_manager.models.slot.datetime"
-        ) as mock_dt:
-            # Mock current time as Saturday morning (weekend slot should be valid)
-            mock_dt.now.return_value = datetime(2024, 1, 6, 10, 0)  # Saturday
-
+        # Saturday morning 2024-01-06 (weekday=5): the weekend slot is valid.
+        with freeze_time("2024-01-06 10:00:00"):
             valid_slots = lock_with_slots.get_valid_slots_now()
 
             # Should have slot 1 (always valid) and slot 2 (valid on weekends)
