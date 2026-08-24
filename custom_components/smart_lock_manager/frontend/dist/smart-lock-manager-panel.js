@@ -1670,15 +1670,15 @@
           hasUpdates = true;
         }
         if (hasUpdates) {
+          const entityIdForSpinner = this._currentLockEntityId;
           try {
-            const entityIdForSpinner2 = this._currentLockEntityId;
             this.hideSaveSpinner();
             this.closeSettingsModal();
-            this.showCardSpinner(entityIdForSpinner2, "Updating...");
+            this.showCardSpinner(entityIdForSpinner, "Updating...");
             const result = await this.callService("update_lock_settings", updateData);
             setTimeout(async () => {
               await this.loadLockData(true);
-              this.hideCardSpinner(entityIdForSpinner2);
+              this.hideCardSpinner(entityIdForSpinner);
             }, 500);
           } catch (error) {
             this.hideCardSpinner(entityIdForSpinner);
@@ -1758,12 +1758,12 @@ Check console for details.`);
         const pinCode = formData.get("pin_code");
         const userName = formData.get("user_name");
         const slotNumber = parseInt(this._editingSlot);
-        const entityIdForSpinner2 = this._currentLockEntityId;
+        const entityIdForSpinner = this._currentLockEntityId;
         if (isNaN(slotNumber) || slotNumber < 1) {
           alert("Error: Invalid slot number. Please try again.");
           return;
         }
-        const priorSlot = this._locks?.find((l) => l.attributes.lock_entity_id === entityIdForSpinner2)?.attributes?.slot_details?.[`slot_${slotNumber}`];
+        const priorSlot = this._locks?.find((l) => l.attributes.lock_entity_id === entityIdForSpinner)?.attributes?.slot_details?.[`slot_${slotNumber}`];
         const hadPin = !!priorSlot?.has_pin_code;
         if (isActive && !pinCode && hadPin) {
           alert('This slot already has a PIN. Re-enter the PIN to save changes, or uncheck "Enable" to disable the slot without deleting its code.');
@@ -1773,18 +1773,18 @@ Check console for details.`);
           this.updateSlotDisplayImmediate(this._editingSlot, userName, isActive);
         }
         this.closeModal();
-        this.showCardSpinner(entityIdForSpinner2, "Saving...");
+        this.showCardSpinner(entityIdForSpinner, "Saving...");
         try {
           if (!isActive && (pinCode || hadPin)) {
             await this.callService("disable_slot", {
-              entity_id: entityIdForSpinner2,
+              entity_id: entityIdForSpinner,
               code_slot: slotNumber
             });
             return;
           }
           if (!pinCode) {
             await this.callService("clear_code", {
-              entity_id: entityIdForSpinner2,
+              entity_id: entityIdForSpinner,
               code_slot: slotNumber
             });
             return;
@@ -1792,7 +1792,7 @@ Check console for details.`);
           const maxUsesRaw = formData.get("max_uses");
           const maxUses = maxUsesRaw ? parseInt(maxUsesRaw) : -1;
           const serviceData = {
-            entity_id: entityIdForSpinner2,
+            entity_id: entityIdForSpinner,
             code_slot: slotNumber,
             usercode: pinCode,
             code_slot_name: formData.get("user_name"),

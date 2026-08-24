@@ -123,20 +123,15 @@ def _verify_slot_write(
     return not current
 
 
-# Z-Wave JS integration support
-try:
-    # async_get_node_from_entity_id is a @callback (sync), NOT a coroutine
-    from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
-
-    # get_usercode is sync (reads from cached ValueDB) - safe and fast
-    # get_usercode_from_node is async (queries the device) - populates cache
-    from zwave_js_server.util.lock import (
-        get_usercode,
-    )
-
-    ZWAVE_JS_AVAILABLE = True
-except (ModuleNotFoundError, ImportError):
-    ZWAVE_JS_AVAILABLE = False
+# Z-Wave JS integration support. The guarded import lives in ``zwave_compat``
+# (the single place the optional dependency is imported) and is re-exported here
+# so ``_resolve_node`` / ``_read_usercode`` keep reading these as module globals
+# and existing tests can patch them on this module.
+from ..zwave_compat import (  # noqa: F401
+    ZWAVE_JS_AVAILABLE,
+    async_get_node_from_entity_id,
+    get_usercode,
+)
 
 
 def _resolve_node(hass: HomeAssistant, entity_id: str) -> Any:
@@ -198,10 +193,12 @@ class ZWaveServices:
                 entity_id,
             )
         except Exception as e:
-            _LOGGER.error("Error reading Z-Wave codes from %s: %s", entity_id, e)
-            import traceback
-
-            _LOGGER.error("Full traceback: %s", traceback.format_exc())
+            _LOGGER.error(
+                "Error reading Z-Wave codes from %s: %s",
+                entity_id,
+                e,
+                exc_info=True,
+            )
 
     @staticmethod
     async def sync_slot_to_zwave(

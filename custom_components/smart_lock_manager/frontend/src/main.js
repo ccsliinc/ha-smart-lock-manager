@@ -447,10 +447,12 @@ class SmartLockManagerPanel extends HTMLElement {
 
     // Call the update service if there are changes
     if (hasUpdates) {
+      // Save the entity ID before closing modal (closeSettingsModal clears it).
+      // Declared OUTSIDE the try so the catch block can still hide the card
+      // spinner when the service rejects; a const inside the try was out of
+      // scope in catch and threw a ReferenceError, leaving the spinner stuck.
+      const entityIdForSpinner = this._currentLockEntityId;
       try {
-
-        // Save the entity ID before closing modal (as closeSettingsModal clears it)
-        const entityIdForSpinner = this._currentLockEntityId;
 
         // Close modal FIRST before the service call
         this.hideSaveSpinner();

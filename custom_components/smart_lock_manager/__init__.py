@@ -309,7 +309,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # each sleeping 60s before calling the service, bootstrap would time out.
     # The coordinator's 30-second update cycle reads codes automatically.
 
-    # Set up platforms (now empty - no sensors!)
+    # Set up the sensor platform (one status sensor per lock; see PLATFORMS).
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register HTTP views for frontend

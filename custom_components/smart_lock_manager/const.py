@@ -2,12 +2,21 @@
 
 import logging
 
+from homeassistant.const import Platform
+
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "smart_lock_manager"
 VERSION = "2026.7.2"
 ISSUE_URL = "https://github.com/ccsliinc/ha-smart-lock-manager"
-PLATFORMS = ["sensor"]
+# The integration ships a single sensor platform (one status sensor per lock).
+PLATFORMS = [Platform.SENSOR]
+
+# Number of usercode slots the coordinator quick-scans from the lock's cached
+# ValueDB on each 30s cycle (a performance cap so a large lock does not stall
+# the update loop). Kept as a named constant so the read helper and any future
+# scanner agree on the ceiling.
+QUICK_SCAN_SLOT_COUNT = 10
 
 # hass.data attributes
 COORDINATOR = "coordinator"
@@ -26,7 +35,6 @@ ATTR_ALLOWED_HOURS = "allowed_hours"
 ATTR_CODE_SLOT = "code_slot"
 ATTR_END_DATE = "end_date"
 ATTR_MAX_USES = "max_uses"
-ATTR_NODE_ID = "node_id"
 ATTR_NOTIFY_ON_USE = "notify_on_use"
 ATTR_SLOT_COUNT = "slot_count"
 ATTR_START_DATE = "start_date"
@@ -50,7 +58,6 @@ SERVICE_CLEAR_ALL_SLOTS = "clear_all_slots"
 SERVICE_CLEAR_CODE = "clear_code"
 SERVICE_DISABLE_SLOT = "disable_slot"
 SERVICE_ENABLE_SLOT = "enable_slot"
-SERVICE_GENERATE_PACKAGE = "generate_package"
 SERVICE_GET_USAGE_STATS = "get_usage_stats"
 SERVICE_READ_ZWAVE_CODES = "read_zwave_codes"
 SERVICE_REFRESH_CODES = "refresh_codes"

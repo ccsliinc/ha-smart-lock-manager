@@ -59,9 +59,14 @@ async def async_register_http_views(hass: HomeAssistant) -> None:
         )
 
     # Register the authenticated zone DATA API the redesigned panel consumes.
-    hass.http.register_view(SmartLockManagerZonesView(hass))
-
-    _LOGGER.info("Smart Lock Manager HTTP views registered")
+    # Like the static path above, this runs on EVERY config-entry setup, and HA
+    # logs "View ... is already registered" when the same view is registered
+    # twice. Guard on the same runtime namespace so the view registers exactly
+    # once per HA run.
+    if not runtime.get("zones_view_registered"):
+        hass.http.register_view(SmartLockManagerZonesView(hass))
+        runtime["zones_view_registered"] = True
+        _LOGGER.info("Smart Lock Manager HTTP views registered")
 
 
 async def async_unregister_http_views(hass: HomeAssistant) -> None:

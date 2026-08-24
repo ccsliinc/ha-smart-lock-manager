@@ -38,5 +38,11 @@
       "name_required": "Lock name is required.",
       "entity_required": "Please select a lock entity."
     }
+  },
+  "issues": {
+    "zwave_js_unavailable": {
+      "title": "Z-Wave JS integration is unavailable",
+      "description": "Smart Lock Manager could not import the Z-Wave JS integration, so it cannot read or write lock codes. Install/enable the Z-Wave JS integration (or restart Home Assistant if it was just added). This message clears automatically once Z-Wave JS is available again."
+    }
   }
 }

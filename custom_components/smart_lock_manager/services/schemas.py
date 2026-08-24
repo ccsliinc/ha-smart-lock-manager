@@ -20,7 +20,6 @@ from ..const import (
     ATTR_DEBUG_LOGGING,
     ATTR_END_DATE,
     ATTR_MAX_USES,
-    ATTR_NODE_ID,
     ATTR_NOTIFY_ON_USE,
     ATTR_SLOT_COUNT,
     ATTR_START_DATE,
@@ -47,8 +46,6 @@ SET_CODE_SCHEMA = vol.Schema(
 )
 
 REFRESH_CODES_SCHEMA = vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id})
-
-GENERATE_PACKAGE_SCHEMA = vol.Schema({vol.Required(ATTR_NODE_ID): cv.string})
 
 # Advanced service schemas
 SET_CODE_ADVANCED_SCHEMA = vol.Schema(

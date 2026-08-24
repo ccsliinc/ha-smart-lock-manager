@@ -10,7 +10,6 @@ from ..const import (
     ATTR_AUTO_DISABLE_EXPIRED,
     ATTR_COORDINATOR_INTERVAL,
     ATTR_DEBUG_LOGGING,
-    ATTR_NODE_ID,
     ATTR_SYNC_ON_LOCK_EVENTS,
     DOMAIN,
 )
@@ -227,28 +226,4 @@ class SystemServices:
         hass.bus.async_fire(
             "smart_lock_manager_muted_updated",
             {"entity_id": entity_id, "alert_type": alert_type, "muted": False},
-        )
-
-    @staticmethod
-    async def generate_package(hass: HomeAssistant, service_call: ServiceCall) -> None:
-        """Generate legacy package files (deprecated service)."""
-        node_id = service_call.data[ATTR_NODE_ID]
-
-        _LOGGER.warning(
-            "generate_package service is deprecated and no longer supported. "
-            "Smart Lock Manager now uses object-oriented architecture instead "
-            "of YAML packages. Node ID: %s",
-            node_id,
-        )
-
-        # Fire event for backward compatibility
-        hass.bus.async_fire(
-            "smart_lock_manager_package_generation_deprecated",
-            {
-                "node_id": node_id,
-                "message": (
-                    "Package generation is deprecated. Use the Smart Lock "
-                    "Manager panel instead."
-                ),
-            },
         )

@@ -64,17 +64,6 @@ refresh_codes:
         entity:
           domain: lock
 
-generate_package:
-  name: Generate Package
-  description: Generate a Home Assistant package YAML for a lock node.
-  fields:
-    node_id:
-      name: Node ID
-      description: The Z-Wave node ID of the lock.
-      required: true
-      selector:
-        text:
-
 set_code_advanced:
   name: Set Code Advanced
   description: Set a user code with advanced scheduling and usage restrictions.

@@ -26,7 +26,6 @@ from ..const import (
     SERVICE_DELETE_ZONE,
     SERVICE_DISABLE_SLOT,
     SERVICE_ENABLE_SLOT,
-    SERVICE_GENERATE_PACKAGE,
     SERVICE_GET_USAGE_STATS,
     SERVICE_MUTE_LOCK_ALERT,
     SERVICE_PAUSE_ALERTS,
@@ -65,7 +64,6 @@ from .schemas import (
     CREATE_ZONE_SCHEMA,
     DELETE_ZONE_SCHEMA,
     ENABLE_DISABLE_SLOT_SCHEMA,
-    GENERATE_PACKAGE_SCHEMA,
     GET_USAGE_STATS_SCHEMA,
     MUTE_LOCK_ALERT_SCHEMA,
     PAUSE_ALERTS_SCHEMA,
@@ -106,6 +104,18 @@ async def async_register_services(hass: HomeAssistant) -> None:
     - Outputs: None.
     """
 
+    # Register exactly ONCE per HA run. Home Assistant calls this on EVERY
+    # config-entry setup (one per lock), but domain services + the global
+    # access-log listener are process-wide, not per-entry. Re-running it for a
+    # second lock re-registered every domain service and re-subscribed the
+    # listener. Guard on a runtime flag stored outside the per-entry registry
+    # (the same pattern api.http uses for its static path). The flag is cleared
+    # in async_unregister_services when the LAST entry unloads, so a full
+    # teardown + re-setup registers cleanly again.
+    runtime = hass.data.setdefault(f"{DOMAIN}_runtime", {})
+    if runtime.get("services_registered"):
+        return
+
     # --- Core services -----------------------------------------------------
     # Create service wrappers to pass hass parameter to static methods
     async def set_code_wrapper(service_call: ServiceCall) -> None:
@@ -116,9 +126,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def refresh_codes_wrapper(service_call: ServiceCall) -> None:
         return await ZWaveServices.refresh_codes(hass, service_call)
-
-    async def generate_package_wrapper(service_call: ServiceCall) -> None:
-        return await SystemServices.generate_package(hass, service_call)
 
     # Register services using modular classes.
     # SECURITY: every service that can set/clear codes or read code data is
@@ -137,14 +144,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
         SERVICE_REFRESH_CODES,
         refresh_codes_wrapper,
         schema=REFRESH_CODES_SCHEMA,
-    )
-    # generate_package is a deprecated no-op (fires a deprecation event, no
-    # code data) and stays a plain service.
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GENERATE_PACKAGE,
-        generate_package_wrapper,
-        schema=GENERATE_PACKAGE_SCHEMA,
     )
 
     # --- Advanced services -------------------------------------------------
@@ -389,9 +388,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
     # cadence, or flips global settings such as ``debug_logging``). None is a
     # read-only status read, so a non-admin (guest) could otherwise blind the
     # alerting subsystem. Admin-gate all six via the same helper the code
-    # services use. (``get_usage_stats`` and the deprecated ``generate_package``
-    # remain plain: the former is a read-only usage count with no code data, the
-    # latter a no-op deprecation event.)
+    # services use. (``get_usage_stats`` remains plain: it is a read-only usage
+    # count with no code data.)
     async_register_admin_service(
         hass,
         DOMAIN,
@@ -465,6 +463,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     register_dev_services(hass)
 
+    # Mark the process-wide registration complete so a second config-entry setup
+    # short-circuits at the top of this function.
+    runtime["services_registered"] = True
+
 
 async def async_unregister_services(hass: HomeAssistant) -> None:
     """Tear down the access-log listener and remove every service.
@@ -487,13 +489,14 @@ async def async_unregister_services(hass: HomeAssistant) -> None:
         if unsub:
             unsub()
             _LOGGER.info("Access log: removed zwave_js_notification listener")
+        # Clear the once-per-run guard so a later re-setup re-registers cleanly.
+        runtime.pop("services_registered", None)
 
     # Remove services only if this is the last instance
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_SET_CODE)
         hass.services.async_remove(DOMAIN, SERVICE_CLEAR_CODE)
         hass.services.async_remove(DOMAIN, SERVICE_REFRESH_CODES)
-        hass.services.async_remove(DOMAIN, SERVICE_GENERATE_PACKAGE)
 
         # Remove advanced services
         hass.services.async_remove(DOMAIN, SERVICE_SET_CODE_ADVANCED)
