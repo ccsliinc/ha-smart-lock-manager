@@ -1,0 +1,15 @@
+{
+  "name": "smart-lock-manager-panel",
+  "version": "2026.8.3",
+  "private": true,
+  "description": "Home Assistant custom panel for Smart Lock Manager (vanilla custom element).",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --outfile=dist/smart-lock-manager-panel.js --format=iife --charset=utf8 --log-level=info",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0",
+    "eslint": "^8.57.0"
+  }
+}

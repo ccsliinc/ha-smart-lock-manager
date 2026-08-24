@@ -84,6 +84,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 package-lock.json
+!custom_components/*/frontend/package-lock.json
 yarn.lock
 .parcel-cache/
 .cache/
