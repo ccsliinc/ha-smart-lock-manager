@@ -7,15 +7,121 @@ behavior-identical helper.
 
 import logging
 from datetime import datetime, time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
+from .dev_mock import is_dev_mock
 from .models.lock import ACCESS_LOG_MAX_ENTRIES, CodeSlot, SmartLockManagerLock
 
 # Module-level logger pinned to the same name used elsewhere in the package so
 # emitted log records are byte-identical to the prior inline implementation.
 _LOGGER = logging.getLogger("custom_components.smart_lock_manager")
+
+# The upstream integration this one's lock entities normally come from. Used
+# ONLY to distinguish "still booting" from "gone": if zwave_js has a config
+# entry but has not finished loading, its lock entities cannot exist yet.
+ZWAVE_JS_DOMAIN = "zwave_js"
+
+
+@callback
+def async_lock_not_ready_reason(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> Optional[str]:
+    """Return why this entry's lock is not ready YET, or None if it is ready.
+
+    Description:
+        Startup-ordering gate for ``async_setup_entry``. On a Home Assistant
+        restart this integration can be set up BEFORE the integration that owns
+        the backing lock entity (normally ``zwave_js``) has created its
+        entities. Setting up anyway leaves the entry half-configured and
+        surfaces to the user as a confusing downstream error (public issues #2
+        and #4: "Failed to load services.yaml"). Returning a reason here lets
+        the caller raise ``ConfigEntryNotReady`` so HA retries with its built-in
+        exponential backoff instead.
+
+        THREE-OUTCOME rule, and the reason this gates on EXISTENCE rather than
+        on the lock being online:
+
+        - ready: the entity has a state in the state machine, WHATEVER that
+          state is. ``unavailable`` / ``unknown`` mean the lock is registered
+          and its owning integration is up, but the physical device is not
+          answering right now. That is a runtime condition the coordinator
+          already handles, and it may never resolve (dead batteries, out of
+          range, decommissioned). Gating on it would retry forever and leave a
+          user with an offline lock no panel and no way to manage codes.
+        - not ready: the entity has NO state, AND there is positive evidence it
+          is still coming - either it is already in the entity registry (so its
+          platform is mid-setup), or ``zwave_js`` is configured but not yet
+          loaded. Both are startup-ordering conditions that DO resolve.
+        - ready (deliberately, degraded): the entity has no state, is not in the
+          registry, and nothing is pending. That is a renamed or deleted entity,
+          not a race. Retrying forever would never fix it, so setup proceeds and
+          the user keeps a working panel and a reachable options flow to point
+          the entry at the right entity.
+
+        Division of labour with the ``zwave_js``-unavailable REPAIR ISSUE
+        (``coordinator_helpers.ISSUE_ZWAVE_JS_UNAVAILABLE``): the repair issue
+        fires when the ``zwave_js`` package is not IMPORTABLE at all - a
+        permanent, user-actionable "install the integration" condition. This
+        gate fires only when ``zwave_js`` is installed and configured and simply
+        has not finished loading. The two conditions are mutually exclusive by
+        construction, so they cannot both nag about the same fault.
+
+        The dev-mock path is exempt: its locks are template entities that do not
+        come from ``zwave_js`` and may not exist at setup time at all.
+
+    Inputs:
+        hass (HomeAssistant): the running Home Assistant instance.
+        entry (ConfigEntry): this integration's config entry.
+
+    Outputs:
+        Optional[str]: a human-readable reason naming the entity when the entry
+        must be retried later, or ``None`` when setup may proceed.
+    """
+    if is_dev_mock():
+        return None
+
+    lock_entity_id = entry.data.get("lock_entity_id", "")
+    if not lock_entity_id:
+        # Nothing to wait on. A misconfigured entry is not a startup race, and
+        # ConfigEntryNotReady would never clear it.
+        return None
+
+    if hass.states.get(lock_entity_id) is not None:
+        return None
+
+    # No state. Is there positive evidence the entity is still on its way?
+    try:
+        registry_entry = async_get_entity_registry(hass).async_get(lock_entity_id)
+    except (KeyError, AttributeError):  # pragma: no cover - registry always set
+        registry_entry = None
+
+    if registry_entry is not None:
+        return (
+            f"Lock entity {lock_entity_id} is registered but has no state yet; "
+            "the integration that provides it is still starting"
+        )
+
+    zwave_configured = bool(hass.config_entries.async_entries(ZWAVE_JS_DOMAIN))
+    zwave_loaded = ZWAVE_JS_DOMAIN in hass.config.components
+    if zwave_configured and not zwave_loaded:
+        return (
+            f"Lock entity {lock_entity_id} is not available yet; the "
+            f"{ZWAVE_JS_DOMAIN} integration has not finished setting up"
+        )
+
+    # Entity unknown and nothing pending: treat as a configuration problem, not
+    # a race. Proceed so the panel and the options flow stay reachable.
+    _LOGGER.warning(
+        "Lock entity %s is unknown to Home Assistant and nothing is pending; "
+        "setting up anyway so the panel stays available - check the entity id "
+        "in the integration options",
+        lock_entity_id,
+    )
+    return None
 
 
 def build_lock_from_stored_data(

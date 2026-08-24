@@ -24,17 +24,14 @@ from typing import Any, Dict, Optional
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from ._cached_store import CachedStore
+
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 
 # Dedicated key for the snooze blob.
 SNOOZE_STORAGE_KEY = "smart_lock_manager_snooze"
-
-# In-memory cache so the engine can read snooze state synchronously inside its
-# notify path (``_notify``) without awaiting storage. Primed on load/save.
-# Shape: ``{"global_until": float|None, "zones": {zone_id: float}}``.
-_CACHE: Dict[str, Any] = {}
 
 
 def _store(hass: HomeAssistant) -> Store:
@@ -77,16 +74,22 @@ def _shape(data: Any) -> Dict[str, Any]:
     return {"global_until": global_until, "zones": zones}
 
 
-def _ensure_cache() -> None:
-    """Ensure the cache has its baseline keys before a sync mutation.
+# The Store + its in-memory mirror. The engine reads snooze state synchronously
+# inside its notify path (``_notify``) and cannot await storage, so the cache is
+# primed on every load/save. Cache shape:
+# ``{"global_until": float|None, "zones": {zone_id: float}}``.
+_STORE = CachedStore(
+    store_factory=_store,
+    shape=_shape,
+    baseline=lambda: {"global_until": None, "zones": {}},
+    logger=_LOGGER,
+    load_error_message="Failed to load snooze state: %s",
+    save_error_message="Failed to save snooze state: %s",
+)
 
-    - Inputs: none.
-    - Outputs: None (mutates :data:`_CACHE` in place).
-    """
-    if "global_until" not in _CACHE:
-        _CACHE["global_until"] = None
-    if "zones" not in _CACHE or not isinstance(_CACHE.get("zones"), dict):
-        _CACHE["zones"] = {}
+# Module-level view of the cache. This is the SAME dict object the store holds,
+# not a copy, so a ``_CACHE.clear()`` test seam still resets it.
+_CACHE: Dict[str, Any] = _STORE.cache
 
 
 async def load_snooze(hass: HomeAssistant) -> Dict[str, Any]:
@@ -95,15 +98,7 @@ async def load_snooze(hass: HomeAssistant) -> Dict[str, Any]:
     - Inputs: hass (HomeAssistant).
     - Outputs: dict ``{"global_until": float|None, "zones": {str: float}}``.
     """
-    try:
-        data = await _store(hass).async_load()
-    except Exception as exc:  # pragma: no cover - storage I/O guard
-        _LOGGER.error("Failed to load snooze state: %s", exc)
-        return _shape(None)
-    shaped = _shape(data)
-    _CACHE.clear()
-    _CACHE.update(shaped)
-    return shaped
+    return await _STORE.load(hass)
 
 
 async def save_snooze(hass: HomeAssistant, blob: Dict[str, Any]) -> None:
@@ -115,22 +110,18 @@ async def save_snooze(hass: HomeAssistant, blob: Dict[str, Any]) -> None:
     - Inputs: hass (HomeAssistant), blob (dict, partial or full).
     - Outputs: None.
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     cache_zones = dict(_CACHE.get("zones") or {})
     blob_zones = dict((blob or {}).get("zones") or {})
     if blob and "global_until" in blob:
         global_until = blob.get("global_until")
     else:
         global_until = _CACHE.get("global_until")
-    shaped = _shape(
+    shaped = _STORE.shape(
         {"global_until": global_until, "zones": {**cache_zones, **blob_zones}}
     )
-    _CACHE.clear()
-    _CACHE.update(shaped)
-    try:
-        await _store(hass).async_save(shaped)
-    except Exception as exc:  # pragma: no cover - storage I/O guard
-        _LOGGER.error("Failed to save snooze state: %s", exc)
+    _STORE.prime(shaped)
+    await _STORE.persist(hass, shaped)
 
 
 def get_cached_snooze() -> Dict[str, Any]:
@@ -184,7 +175,7 @@ def set_global_snooze(until_epoch: float) -> None:
     - Inputs: until_epoch (float UNIX epoch deadline).
     - Outputs: None (mutates :data:`_CACHE`; persist via :func:`save_snooze`).
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     _CACHE["global_until"] = float(until_epoch)
 
 
@@ -194,7 +185,7 @@ def set_zone_snooze(zone_id: str, until_epoch: float) -> None:
     - Inputs: zone_id (str), until_epoch (float UNIX epoch deadline).
     - Outputs: None (mutates :data:`_CACHE`; persist via :func:`save_snooze`).
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     _CACHE.setdefault("zones", {})[zone_id] = float(until_epoch)
 
 
@@ -204,7 +195,7 @@ def clear_global_snooze() -> None:
     - Inputs: none.
     - Outputs: None (mutates :data:`_CACHE`; persist via :func:`save_snooze`).
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     _CACHE["global_until"] = None
 
 
@@ -214,7 +205,7 @@ def clear_zone_snooze(zone_id: str) -> None:
     - Inputs: zone_id (str).
     - Outputs: None (mutates :data:`_CACHE`; persist via :func:`save_snooze`).
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     _CACHE.get("zones", {}).pop(zone_id, None)
 
 

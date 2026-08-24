@@ -2,7 +2,6 @@ import { panelStyles } from './styles.js';
 import { ZS_DAYS, CUSTOM_CARD_META } from './constants.js';
 import { escHtml, fmtTime, formatAccessLogTime as formatAccessLogTime_, untilMorningHours } from './utils/format.js';
 import {
-  slotDisplayInfo,
   accessLogPresentation,
   devAlertPresentation,
   zoneSlotDisplay
@@ -25,7 +24,6 @@ class SmartLockManagerPanel extends HTMLElement {
     this._editingSlot = null;
     this._currentLockEntityId = null;
     this._settingsModalOpen = false;
-    this._zwaveCodeCache = {}; // Cache for Z-Wave codes by entity_id
     this._zones = [];           // Zone model from /api/smart_lock_manager/zones
     this._unhomedLocks = [];    // Locks in no zone (the "+" picker pool)
     this._observeOnly = false;  // True when an engine is constructed (gates Alerts UI)
@@ -205,16 +203,11 @@ class SmartLockManagerPanel extends HTMLElement {
     }
   }
 
-  handleZWaveCodesRead(eventData) {
-    const { entity_id, codes } = eventData;
-
-    // SECURITY: this event now carries occupancy only (per slot: {slot,
-    // in_use, status}) and never the raw PIN value. Presence of a code is
-    // derivable from the occupancy map; the code value is intentionally
-    // unavailable to the frontend.
-    this._zwaveCodeCache[entity_id] = codes;
-
-    // Trigger a re-render to reflect Z-Wave occupancy.
+  handleZWaveCodesRead() {
+    // SECURITY: this event carries occupancy only (per slot: {slot, in_use,
+    // status}) and never the raw PIN value. The payload is not retained --
+    // occupancy is re-read from the backend on render -- so this handler only
+    // triggers a re-render.
     this.requestUpdate();
   }
 
@@ -228,8 +221,6 @@ class SmartLockManagerPanel extends HTMLElement {
 
   // Removed getSlotStatusColor and getSlotStatusText methods
   // All logic now handled by backend - frontend just displays
-
-  getSlotDisplayInfo(lock, slot) { return slotDisplayInfo(lock, slot); }
 
   // Build the icon + meta for a single access-log action/source.
   getAccessLogPresentation(entry) { return accessLogPresentation(entry); }

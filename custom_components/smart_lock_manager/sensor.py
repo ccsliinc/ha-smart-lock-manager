@@ -57,7 +57,27 @@ async def async_setup_entry(
 
 
 class SmartLockManagerSensor(CoordinatorEntity, SensorEntity):
-    """Summary sensor that exposes lock object data as attributes."""
+    """Summary sensor that exposes lock object data as attributes.
+
+    RECORDER BUDGET: this entity is refreshed on the coordinator's 30-second
+    cadence and carries two attributes that are large and change often --
+    ``slot_details`` (a ~20-field dict per slot, for up to 50 slots) and
+    ``access_log`` (the most-recent 25 entries). The recorder writes the WHOLE
+    attribute blob on every state change, so left recorded they dominate the
+    database and every backup taken from it, for data that has no useful
+    history: ``slot_details`` is a live view that is fully reconstructible from
+    the integration's own storage, and ``access_log`` is already persisted in
+    that storage as the authoritative copy.
+
+    ``_unrecorded_attributes`` excludes them from the recorder ONLY. They stay
+    in the state machine, so the panel (which reads ``attributes.slot_details``
+    and ``attributes.access_log``), templates, and automations are unaffected --
+    the only thing lost is the ability to query their PAST values via history /
+    statistics, which nothing here does. Every count, id and status attribute
+    an automation would plausibly trigger on stays recorded.
+    """
+
+    _unrecorded_attributes = frozenset({"slot_details", "access_log"})
 
     def __init__(
         self,
@@ -293,7 +313,15 @@ class SmartLockManagerZoneSensor(CoordinatorEntity, SensorEntity):
     The zone owns the canonical code set; this sensor is the automation/UI
     surface for it. It resolves the live ``Zone`` from the in-memory registry
     on every read so renames and membership changes are reflected immediately.
+
+    RECORDER BUDGET: ``slot_summary`` is the per-slot blob for this zone and is
+    excluded from the recorder for the same reason as the lock sensor's
+    ``slot_details`` -- it is a live projection of the zone's code definitions,
+    rewritten in full on every 30-second state change, with no value as history.
+    It remains available to the panel, templates and automations.
     """
+
+    _unrecorded_attributes = frozenset({"slot_summary"})
 
     def __init__(
         self,

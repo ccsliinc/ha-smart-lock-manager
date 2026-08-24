@@ -6,6 +6,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
 
@@ -35,7 +36,7 @@ from .const import (
 )
 from .coordinator import SmartLockManagerDataUpdateCoordinator
 from .dev_mock import is_dev_mock
-from .entry_setup import build_lock_from_stored_data
+from .entry_setup import async_lock_not_ready_reason, build_lock_from_stored_data
 from .frontend.panel import async_register_panel, async_unregister_panel
 from .gating import engines_active, prime_flags_cache
 from .models.lock import SmartLockManagerLock
@@ -87,6 +88,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         VERSION,
         ISSUE_URL,
     )
+
+    # STARTUP-ORDERING GATE. Before touching hass.data, registering services or
+    # loading storage, check whether the entity this entry is built around
+    # actually exists yet. On an HA restart this integration can be set up
+    # before zwave_js has created its lock entities; proceeding produced a
+    # half-configured entry and a misleading downstream "Failed to load
+    # services.yaml" error (public issues #2 and #4). ConfigEntryNotReady is
+    # HA's standard "retry me shortly" signal and carries its own exponential
+    # backoff. See async_lock_not_ready_reason for exactly what counts as
+    # not-ready (entity EXISTENCE, never whether the lock is online) and how it
+    # divides from the zwave_js-unavailable repair issue.
+    not_ready_reason = async_lock_not_ready_reason(hass, entry)
+    if not_ready_reason:
+        raise ConfigEntryNotReady(not_ready_reason)
 
     hass.data.setdefault(DOMAIN, {})
 

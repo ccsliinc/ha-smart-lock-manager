@@ -24,6 +24,8 @@ from typing import Any, Dict, cast
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from ._cached_store import CachedStore, merge_prime
+
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
@@ -48,10 +50,6 @@ DEFAULT_NAG_INTERVAL_MINUTES = 60
 # Sane bounds for either cadence (minutes). 1..1440 (one minute .. one day).
 MIN_SWEEP_MINUTES = 1
 MAX_SWEEP_MINUTES = 1440
-
-# In-memory cache so the engine can read intervals synchronously inside a
-# callback (``_subscribe``) without awaiting storage. Primed on load/save.
-_CACHE: Dict[str, int] = {}
 
 
 def _store(hass: HomeAssistant) -> Store:
@@ -89,6 +87,26 @@ def _shape(data: Any) -> Dict[str, int]:
     return result
 
 
+# The Store + its in-memory mirror. The engine reads the cadences synchronously
+# inside a callback (``_subscribe``) and cannot await storage, so the cache is
+# primed on every load/save -- including a FAILED load, which primes the shaped
+# defaults rather than leaving the cache empty.
+_STORE = CachedStore(
+    store_factory=_store,
+    shape=_shape,
+    baseline=lambda: {},
+    logger=_LOGGER,
+    load_error_message="Failed to load global settings: %s",
+    save_error_message="Failed to save global settings: %s",
+    prime=merge_prime,
+    prime_on_load_error=True,
+)
+
+# Module-level view of the cache. This is the SAME dict object the store holds,
+# not a copy, so a ``_CACHE.clear()`` test seam still resets it.
+_CACHE: Dict[str, int] = _STORE.cache
+
+
 async def load_global_settings(hass: HomeAssistant) -> Dict[str, int]:
     """Load the persisted global settings blob (always fully shaped).
 
@@ -97,14 +115,7 @@ async def load_global_settings(hass: HomeAssistant) -> Dict[str, int]:
     - Inputs: hass (HomeAssistant).
     - Outputs: dict with both cadence keys (ints).
     """
-    try:
-        data = await _store(hass).async_load()
-    except Exception as exc:  # pragma: no cover - storage I/O guard
-        _LOGGER.error("Failed to load global settings: %s", exc)
-        data = None
-    shaped = _shape(data)
-    _CACHE.update(shaped)
-    return shaped
+    return cast(Dict[str, int], await _STORE.load(hass))
 
 
 async def save_global_settings(hass: HomeAssistant, blob: Dict[str, int]) -> None:
@@ -113,12 +124,9 @@ async def save_global_settings(hass: HomeAssistant, blob: Dict[str, int]) -> Non
     - Inputs: hass (HomeAssistant), blob (dict, partial or full; shaped here).
     - Outputs: None.
     """
-    shaped = _shape({**_CACHE, **blob})
-    _CACHE.update(shaped)
-    try:
-        await _store(hass).async_save(shaped)
-    except Exception as exc:  # pragma: no cover - storage I/O guard
-        _LOGGER.error("Failed to save global settings: %s", exc)
+    shaped = _STORE.shape({**_CACHE, **blob})
+    _STORE.prime(shaped)
+    await _STORE.persist(hass, shaped)
 
 
 def get_cached_global_settings() -> Dict[str, int]:

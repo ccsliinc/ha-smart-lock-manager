@@ -42,10 +42,11 @@ human-readable messages only — never PIN codes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Set, Tuple
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
@@ -64,6 +65,7 @@ from .auto_lock_verify import (  # noqa: F401 - re-exported for backward compat
 )
 from .const import DOMAIN
 from .dev_mock import MOCK_BOLT, is_dev_mock
+from .engine_tasks import cancel_tracked_tasks, track_task
 from .gating import current_engine_mode
 from .models.zone import Zone
 from .zone_runtime import get_zone_for_lock, get_zone_registry
@@ -123,6 +125,10 @@ class AutoLockEngine(AutoLockVerifyMixin):
         # Active subscriptions / timers, released on async_stop().
         self._unsubs: List[Callable[[], None]] = []
         self._idle_timers: Dict[str, Callable[[], None]] = {}
+        # Strong references to in-flight COB / idle-expiry tasks. Without this a
+        # task launched from a sync callback can be garbage-collected mid-flight,
+        # and a stop cannot cancel work still running. See engine_tasks.
+        self._tasks: Set["asyncio.Task[Any]"] = set()
         self._started = False
 
     # -- lifecycle ----------------------------------------------------------
@@ -157,12 +163,15 @@ class AutoLockEngine(AutoLockVerifyMixin):
 
     @callback
     def async_stop(self) -> None:
-        """Release all time triggers, listeners and pending idle timers.
+        """Release triggers, listeners, idle timers and in-flight lock tasks.
 
+        - Description: Tears down subscriptions, then CANCELS any COB run or
+          idle-expiry still executing so an unload cannot race a lock attempt.
         - Inputs: none.
         - Outputs: None.
         """
         self._teardown_subscriptions()
+        cancel_tracked_tasks(self._tasks, "AutoLockEngine")
         self._started = False
         _LOGGER.info("AutoLockEngine stopped")
 
@@ -246,7 +255,12 @@ class AutoLockEngine(AutoLockVerifyMixin):
 
             @callback
             def _fire(_now: datetime, _zone_id: str = zone_id) -> None:
-                self.hass.async_create_task(self._run_cob(_zone_id))
+                track_task(
+                    self.hass,
+                    self._tasks,
+                    self._run_cob(_zone_id),
+                    f"slm_autolock_cob_{_zone_id}",
+                )
 
             self._unsubs.append(
                 async_track_time_change(
@@ -391,7 +405,12 @@ class AutoLockEngine(AutoLockVerifyMixin):
         @callback
         def _expire(_now: datetime) -> None:
             self._idle_timers.pop(entity_id, None)
-            self.hass.async_create_task(self._on_idle_expired(zone_id, entity_id))
+            track_task(
+                self.hass,
+                self._tasks,
+                self._on_idle_expired(zone_id, entity_id),
+                f"slm_autolock_idle_{entity_id}",
+            )
 
         self._idle_timers[entity_id] = async_call_later(self.hass, delay, _expire)
         _LOGGER.info("AutoLockEngine: idle timer armed for %s (%ds)", entity_id, delay)

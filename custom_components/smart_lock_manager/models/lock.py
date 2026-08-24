@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
+from homeassistant.util import dt as dt_util
+
 from ..const import MAX_SYNC_ATTEMPTS
 from .lock_serialization import LockSerializationMixin
 from .slot import (  # noqa: F401  (re-exported for backwards-compat import paths)
@@ -18,7 +20,6 @@ from .slot import (  # noqa: F401  (re-exported for backwards-compat import path
     _utcnow,
     find_prefix_conflict,
 )
-from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -516,6 +517,19 @@ class SmartLockManagerLock(LockSerializationMixin):
             self.code_slots.values(), key=lambda s: s.use_count, default=None
         )
 
+        # Count expired slots with the coerced end_date bound ONCE per slot.
+        # The prior comprehension called ``_as_aware_utc(s.end_date)`` twice
+        # (guard, then compare), which both duplicated the work and left the
+        # compared value un-narrowed (the guard proved nothing about the second
+        # call's result). Binding it makes the guard and the comparison refer to
+        # the same value. Behavior is identical.
+        now = _utcnow()
+        expired_slots = 0
+        for s in self.code_slots.values():
+            end_date = _as_aware_utc(s.end_date)
+            if end_date is not None and now > end_date:
+                expired_slots += 1
+
         return {
             "total_uses": total_uses,
             "active_users": active_users,
@@ -524,14 +538,7 @@ class SmartLockManagerLock(LockSerializationMixin):
             "slots_with_limits": len(
                 [s for s in self.code_slots.values() if s.max_uses > 0]
             ),
-            "expired_slots": len(
-                [
-                    s
-                    for s in self.code_slots.values()
-                    if _as_aware_utc(s.end_date) is not None
-                    and _utcnow() > _as_aware_utc(s.end_date)
-                ]
-            ),
+            "expired_slots": expired_slots,
         }
 
 

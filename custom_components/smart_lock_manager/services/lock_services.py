@@ -84,7 +84,10 @@ def _parse_ingested_datetime(
     if parsed is None:
         _LOGGER.warning("Invalid %s format: %s", field_name, raw)
         return None
-    aware = dt_util.as_utc(parsed)
+    # Annotated local: ``dt_util.as_utc`` is untyped to mypy under
+    # --ignore-missing-imports and would otherwise make this an implicit Any
+    # return, defeating the declared return type. No runtime effect.
+    aware: datetime = dt_util.as_utc(parsed)
     _LOGGER.debug("Parsed %s: %s", field_name, aware)
     return aware
 

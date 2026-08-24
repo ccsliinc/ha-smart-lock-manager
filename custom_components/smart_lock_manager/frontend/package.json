@@ -1,6 +1,6 @@
 {
   "name": "smart-lock-manager-panel",
-  "version": "2026.8.4",
+  "version": "2026.8.5",
   "private": true,
   "description": "Home Assistant custom panel for Smart Lock Manager (vanilla custom element).",
   "type": "module",

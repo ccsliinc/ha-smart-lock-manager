@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Set
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from ._cached_store import CachedStore
+
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
@@ -35,11 +37,6 @@ MUTED_STORAGE_KEY = "smart_lock_manager_muted"
 
 # Sentinel meaning "mute every alert type for this member".
 MUTE_ALL = "all"
-
-# In-memory cache so the engine can read mute state synchronously inside its
-# notify path (``_notify``) without awaiting storage. Primed on load/save.
-# Shape: ``{"muted": {member_entity_id: set([alert_type | "all", ...])}}``.
-_CACHE: Dict[str, Any] = {}
 
 
 def _store(hass: HomeAssistant) -> Store:
@@ -81,26 +78,38 @@ def _shape(data: Any) -> Dict[str, Any]:
     return {"muted": muted}
 
 
-def _ensure_cache() -> None:
-    """Ensure the cache has its baseline ``muted`` key before a sync mutation.
-
-    - Inputs: none.
-    - Outputs: None (mutates :data:`_CACHE` in place).
-    """
-    if "muted" not in _CACHE or not isinstance(_CACHE.get("muted"), dict):
-        _CACHE["muted"] = {}
-
-
-def _prime_from_shaped(shaped: Dict[str, Any]) -> None:
+def _prime_as_sets(cache: Dict[str, Any], shaped: Dict[str, Any]) -> None:
     """Replace the cache from a shaped (list-valued) muted dict, storing sets.
 
-    - Inputs: shaped (dict ``{"muted": {entity_id: [type, ...]}}``).
-    - Outputs: None (mutates :data:`_CACHE`; per-member values become sets).
+    - Description: The persisted form is sorted lists; the cache holds sets so
+      :func:`is_muted` is a cheap membership test.
+    - Inputs: cache (the live cache dict), shaped (dict
+      ``{"muted": {entity_id: [type, ...]}}``).
+    - Outputs: None (mutates ``cache``; per-member values become sets).
     """
-    _CACHE.clear()
-    _CACHE["muted"] = {
+    cache.clear()
+    cache["muted"] = {
         entity_id: set(types) for entity_id, types in shaped.get("muted", {}).items()
     }
+
+
+# The Store + its in-memory mirror. The engine reads mute state synchronously
+# inside its notify path (``_notify``) and cannot await storage, so the cache is
+# primed on every load/save. Cache shape:
+# ``{"muted": {member_entity_id: set([alert_type | "all", ...])}}``.
+_STORE = CachedStore(
+    store_factory=_store,
+    shape=_shape,
+    baseline=lambda: {"muted": {}},
+    logger=_LOGGER,
+    load_error_message="Failed to load muted state: %s",
+    save_error_message="Failed to save muted state: %s",
+    prime=_prime_as_sets,
+)
+
+# Module-level view of the cache. This is the SAME dict object the store holds,
+# not a copy, so the existing ``_CACHE.clear()`` test seam still resets it.
+_CACHE: Dict[str, Any] = _STORE.cache
 
 
 async def load_muted(hass: HomeAssistant) -> Dict[str, Any]:
@@ -109,14 +118,7 @@ async def load_muted(hass: HomeAssistant) -> Dict[str, Any]:
     - Inputs: hass (HomeAssistant).
     - Outputs: dict ``{"muted": {entity_id: [alert_type, ...]}}`` (sorted lists).
     """
-    try:
-        data = await _store(hass).async_load()
-    except Exception as exc:  # pragma: no cover - storage I/O guard
-        _LOGGER.error("Failed to load muted state: %s", exc)
-        return _shape(None)
-    shaped = _shape(data)
-    _prime_from_shaped(shaped)
-    return shaped
+    return await _STORE.load(hass)
 
 
 async def save_muted(hass: HomeAssistant, blob: Dict[str, Any]) -> None:
@@ -129,7 +131,7 @@ async def save_muted(hass: HomeAssistant, blob: Dict[str, Any]) -> None:
     - Inputs: hass (HomeAssistant), blob (dict, partial or full).
     - Outputs: None.
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     cache_muted = {
         entity_id: set(types)
         for entity_id, types in (_CACHE.get("muted") or {}).items()
@@ -138,12 +140,9 @@ async def save_muted(hass: HomeAssistant, blob: Dict[str, Any]) -> None:
     for entity_id, types in blob_muted.items():
         if isinstance(types, (list, set, tuple)):
             cache_muted[entity_id] = {t for t in types if isinstance(t, str) and t}
-    shaped = _shape({"muted": {k: sorted(v) for k, v in cache_muted.items()}})
-    _prime_from_shaped(shaped)
-    try:
-        await _store(hass).async_save(shaped)
-    except Exception as exc:  # pragma: no cover - storage I/O guard
-        _LOGGER.error("Failed to save muted state: %s", exc)
+    shaped = _STORE.shape({"muted": {k: sorted(v) for k, v in cache_muted.items()}})
+    _STORE.prime(shaped)
+    await _STORE.persist(hass, shaped)
 
 
 def get_cached_muted() -> Dict[str, Any]:
@@ -182,7 +181,7 @@ def set_mute(member_entity_id: str, alert_type: str) -> None:
     - Inputs: member_entity_id (str), alert_type (str id, or ``"all"``).
     - Outputs: None (mutates :data:`_CACHE`; persist via :func:`save_muted`).
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     _CACHE["muted"].setdefault(member_entity_id, set()).add(alert_type)
 
 
@@ -195,7 +194,7 @@ def clear_mute(member_entity_id: str, alert_type: str) -> None:
     - Inputs: member_entity_id (str), alert_type (str id, or ``"all"``).
     - Outputs: None (mutates :data:`_CACHE`; persist via :func:`save_muted`).
     """
-    _ensure_cache()
+    _STORE.ensure_cache()
     muted = _CACHE["muted"]
     if alert_type == MUTE_ALL:
         muted.pop(member_entity_id, None)

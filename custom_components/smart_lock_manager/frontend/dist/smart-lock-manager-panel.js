@@ -1279,16 +1279,6 @@
   }
 
   // src/utils/presentation.js
-  function slotDisplayInfo(lock, slot) {
-    const details = lock?.attributes?.slot_details?.[`slot_${slot}`];
-    return {
-      title: details?.display_title || `Slot ${slot}:`,
-      status: details?.status?.label || details?.slot_status || "Click to configure",
-      color: details?.status?.color || details?.status_color || "#9e9e9e",
-      statusName: details?.status?.name || "UNKNOWN",
-      description: details?.status?.description || details?.status_reason || ""
-    };
-  }
   function accessLogPresentation(entry) {
     const action = entry?.action || "unknown";
     const source = entry?.source || "";
@@ -1369,7 +1359,6 @@
         this._editingSlot = null;
         this._currentLockEntityId = null;
         this._settingsModalOpen = false;
-        this._zwaveCodeCache = {};
         this._zones = [];
         this._unhomedLocks = [];
         this._observeOnly = false;
@@ -1502,9 +1491,7 @@
           }
         }
       }
-      handleZWaveCodesRead(eventData) {
-        const { entity_id, codes } = eventData;
-        this._zwaveCodeCache[entity_id] = codes;
+      handleZWaveCodesRead() {
         this.requestUpdate();
       }
       // Automatically refresh Z-Wave codes for sync validation
@@ -1515,9 +1502,6 @@
       }
       // Removed getSlotStatusColor and getSlotStatusText methods
       // All logic now handled by backend - frontend just displays
-      getSlotDisplayInfo(lock, slot) {
-        return slotDisplayInfo(lock, slot);
-      }
       // Build the icon + meta for a single access-log action/source.
       getAccessLogPresentation(entry) {
         return accessLogPresentation(entry);

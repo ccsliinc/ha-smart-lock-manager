@@ -36,7 +36,12 @@ def _as_aware_utc(value: Optional[datetime]) -> Optional[datetime]:
     """
     if value is None:
         return None
-    return dt_util.as_utc(value)
+    # ``dt_util.as_utc`` is untyped to mypy under --ignore-missing-imports, so
+    # its result arrives as ``Any``. Bind it to an annotated local so the
+    # declared return type is actually enforced rather than laundered through
+    # an implicit Any return. No runtime effect.
+    aware: datetime = dt_util.as_utc(value)
+    return aware
 
 
 class SlotStatus:

@@ -30,9 +30,10 @@ human-readable messages only — never PIN codes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Set
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
@@ -62,6 +63,7 @@ from .alert_sweeps import AlertSweepsMixin
 from .alert_topology import AlertTopologyMixin
 from .const import DOMAIN
 from .dev_mock import is_dev_mock
+from .engine_tasks import cancel_tracked_tasks, track_task
 from .gating import current_engine_mode, real_notify_enabled
 from .notifications import NotificationDispatcher
 from .storage import get_cached_global_settings, load_alert_log, save_alert_log
@@ -126,6 +128,10 @@ class AlertEngine(
         self._unsubs: List[Callable[[], None]] = []
         self._sustained_timers: Dict[str, Callable[[], None]] = {}
         self._offline_timers: Dict[str, Callable[[], None]] = {}
+        # Strong references to in-flight dispatch tasks. Without this a task
+        # launched from a sync callback can be garbage-collected mid-flight, and
+        # a stop cannot cancel work that is still running. See engine_tasks.
+        self._tasks: Set["asyncio.Task[Any]"] = set()
         self._started = False
 
     # -- lifecycle ----------------------------------------------------------
@@ -219,12 +225,15 @@ class AlertEngine(
 
     @callback
     def async_stop(self) -> None:
-        """Release all listeners and pending timers.
+        """Release all listeners, pending timers and in-flight dispatch tasks.
 
+        - Description: Tears down subscriptions, then CANCELS any notification
+          dispatch still running so an unload cannot race an in-flight send.
         - Inputs: none.
         - Outputs: None.
         """
         self._teardown_subscriptions()
+        cancel_tracked_tasks(self._tasks, "AlertEngine")
         self._started = False
         _LOGGER.info("AlertEngine stopped")
 
@@ -348,7 +357,12 @@ class AlertEngine(
         # Route to the DRY-RUN dispatcher for the owning zone (records intents,
         # sends nothing), then persist. The dispatch is async and mutates the
         # record in place before the final persist.
-        self.hass.async_create_task(self._notify(entity_id, record))
+        track_task(
+            self.hass,
+            self._tasks,
+            self._notify(entity_id, record),
+            f"slm_alert_notify_{entity_id}",
+        )
 
     # -- nag throttle (shared by the detector cores) ------------------------
 
