@@ -9,7 +9,7 @@
     "lint": "eslint src"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.1",
     "eslint": "^8.57.0"
   }
 }
