@@ -22,6 +22,7 @@ from email.utils import formatdate, make_msgid
 from typing import Any, Dict, List, Optional
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util.ssl import client_context
 
 from .notifications_config import load_smtp_creds_sync
 
@@ -152,8 +153,9 @@ class RenderedEmail:
 class EmailNotifier:
     """Builds (and, only when real-send is enabled, dispatches) SMTP2GO emails.
 
-    Replicates the user's ``lib_email`` send EXACTLY: same SMTP host/port,
-    STARTTLS, subject/marker format and ``kind="alert"`` recipient routing. In
+    Replicates the user's ``lib_email`` send: same SMTP host/port, STARTTLS
+    (with a VERIFYING context, which lib_email does not use), subject/marker
+    format and ``kind="alert"`` recipient routing. In
     DRY-RUN it renders + logs the payload and returns an intent without touching
     the network.
     """
@@ -319,7 +321,13 @@ class EmailNotifier:
             port = int(creds.get("port") or 587)
             with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT) as smtp:
                 smtp.ehlo()
-                smtp.starttls()
+                # An explicit context is REQUIRED, not optional: bare
+                # starttls() builds an unverified context, so the stdlib
+                # checks neither the certificate chain nor the hostname and
+                # anyone on the path can intercept the login below. HA's
+                # client_context() verifies both. Built here (executor thread,
+                # never the event loop) because it does blocking CA file IO.
+                smtp.starttls(context=client_context())
                 smtp.ehlo()
                 smtp.login(creds["user"], creds["pass"])
                 smtp.sendmail(creds["from"], email.recipients, msg.as_string())

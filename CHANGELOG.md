@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.8.6] - Verified SMTP TLS and attribute escaping (HACS review round 3)
+
+### Security
+- **SMTP credentials were sent over an unverified TLS session.** `EmailNotifier._smtp_send`
+  called `smtp.starttls()` with no SSL context, so the stdlib checked neither the
+  certificate chain nor the hostname before the `LOGIN` that follows. Anyone on the
+  path to the relay could impersonate it and collect the credentials read from
+  `secrets.yaml`. It now passes Home Assistant's own verifying context
+  (`homeassistant.util.ssl.client_context()`), built in the executor thread.
+- **A lock's display name could inject markup into the admin panel.** The
+  `#friendly_name` input interpolated `friendly_name` (falling back to `lock_name`)
+  into `value="..."` unescaped, inside a `shadowRoot.innerHTML` template, so a name
+  containing a double quote broke out of the attribute. Both that input and the
+  adjacent slot-count input now go through `_esc()`, and the bundle is rebuilt.
+
+### Fixed
+- Two day-of-week tests in `test_integration_frontend.py` patched
+  `models.lock.datetime`, which stopped being the time source when slot validity
+  moved to `models.slot._utcnow()`. The patch bound nothing, so both tests read the
+  real clock and passed only Monday to Friday. They now use `freeze_time`.
+
 ## [2026.7.2] - Remove engine-status banner
 
 ### Changed

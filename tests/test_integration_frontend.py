@@ -1,7 +1,12 @@
-"""Integration tests for frontend-backend communication."""
+"""Integration tests for frontend-backend communication.
 
-from datetime import datetime
-from unittest.mock import patch
+The two day-of-week tests freeze the clock with ``freeze_time``. They used to
+patch ``models.lock.datetime``, which stopped being the time source when slot
+validity moved to ``models.slot._utcnow()``: the patch silently bound nothing,
+so both tests read the REAL clock and only passed Monday to Friday.
+"""
+
+from freezegun import freeze_time
 
 from custom_components.smart_lock_manager.models.lock import (
     CodeSlot,
@@ -28,12 +33,8 @@ class TestFrontendBackendIntegration:
         )
         lock.code_slots[2] = weekend_slot
 
-        # Mock current time as Thursday
-        with patch(
-            "custom_components.smart_lock_manager.models.lock.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = datetime(2024, 1, 4, 10, 0)  # Thursday
-
+        # Thursday, so the weekend-only slot must read as not-valid-now.
+        with freeze_time("2024-01-04 10:00:00"):
             # Get valid slots (should exclude weekend-only slot on Thursday)
             valid_slots = lock.get_valid_slots_now()
 
@@ -152,12 +153,8 @@ class TestFrontendBackendIntegration:
         lock.code_slots[1] = slot_1
         lock.code_slots[2] = slot_2
 
-        # Test on Wednesday (weekday=2)
-        with patch(
-            "custom_components.smart_lock_manager.models.lock.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = datetime(2024, 8, 14, 11, 0)  # Wednesday
-
+        # Wednesday (weekday=2), so the weekend slot must read as scheduled.
+        with freeze_time("2024-08-14 11:00:00"):
             valid_slots = lock.get_valid_slots_now()
 
             # Slot 1 should be valid (no restrictions)

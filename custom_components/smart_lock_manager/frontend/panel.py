@@ -46,7 +46,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
                     "embed_iframe": False,
                     "trust": False,
                     "js_url": f"/smart_lock_manager_static/"
-                    f"smart-lock-manager-panel.js?v=2026.8.5&t="
+                    f"smart-lock-manager-panel.js?v=2026.8.6&t="
                     f"{int(__import__('time').time())}",
                 }
             },

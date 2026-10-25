@@ -1800,7 +1800,7 @@ class SmartLockManagerPanel extends HTMLElement {
             <!-- FRIENDLY NAME -->
             <div class="form-group">
               <label for="friendly_name">Friendly Name</label>
-              <input type="text" id="friendly_name" name="friendly_name" value="${this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.friendly_name || this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.lock_name || ''}" placeholder="Lock display name" onkeypress="if(event.key==='Enter') SmartLockManagerPanel.saveSettings()">
+              <input type="text" id="friendly_name" name="friendly_name" value="${this._esc(this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.friendly_name || this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.lock_name || '')}" placeholder="Lock display name" onkeypress="if(event.key==='Enter') SmartLockManagerPanel.saveSettings()">
               <small>Custom name for this lock (appears on cards and in lists)</small>
             </div>
 
@@ -1809,7 +1809,7 @@ class SmartLockManagerPanel extends HTMLElement {
               <!-- NUMBER OF SLOTS -->
               <div class="form-group">
                 <label for="slot_count">Number of Slots: <span id="slot_count_display">${this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.total_slots || 10}</span></label>
-                <input type="range" id="slot_count" name="slot_count" value="${this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.total_slots || 10}" min="1" max="30" class="slider" oninput="document.getElementById('slot_count_display').textContent = this.value">
+                <input type="range" id="slot_count" name="slot_count" value="${this._esc(this._locks?.find(l => l.attributes.lock_entity_id === this._currentLockEntityId)?.attributes?.total_slots || 10)}" min="1" max="30" class="slider" oninput="document.getElementById('slot_count_display').textContent = this.value">
                 <div class="slider-labels">
                   <span>1</span>
                   <span>30</span>
