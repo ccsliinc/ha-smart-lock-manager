@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.8.7] - The SMTP host is now required, with no default relay
+
+### Breaking
+- **`slm_smtp_host` (or `smtp2go_host`) is now REQUIRED.** An install that supplied
+  SMTP credentials but no host previously inherited a built-in default pointing at a
+  specific vendor's relay. There is no default any more: with no host key the
+  notifier logs `missing required SMTP creds: ['slm_smtp_host']` and sends nothing.
+  Add the key to `secrets.yaml` before upgrading if you relied on the old default.
+
+### Security
+- **The integration shipped a default SMTP relay, and that is a security decision
+  made on the installer's behalf.** Any install that supplied only credentials
+  authenticated against a third party's server that the installer never chose, and
+  kept doing so after that relay changed hands or was retired. The host must now
+  come from the install's own configuration.
+- **A second copy of the same hostname literal lived in the send path** as an
+  `or "..."` fallback in `EmailNotifier._smtp_send`. Removing the config default
+  alone would have changed nothing, because this one would have re-supplied the
+  retired relay. Both are gone, and a test now fails on any default-hostname
+  literal anywhere in the package.
+
+### Fixed
+- **A failed send now names the relay it was talking to.** The error line was
+  `SMTP send failed: (535, b'Incorrect authentication data')`, which reads
+  identically whether the credentials are wrong or the endpoint is. It is now
+  `SMTP send failed via <host>:<port>: ...`. This is the diagnostic that would have
+  caught the case below in a day instead of two months.
+
+### Context
+This release came out of a real outage, not a code read. One install had credentials
+but no host key, so it used the old default. When that relay was decommissioned the
+credentials stopped being valid there, and 454 alert sends failed `535` between
+2026-08-24 and 2026-09-22, each about a second after a recorded CRIT door alert. The
+hostname still resolved and still accepted connections, so only the login failed and
+nothing ever appeared unreachable. The test suite was green throughout, because it
+asserted the default endpoint as a regression guarantee: it was testing that the
+wrong thing happened reliably. Those tests now assert the absence of a default.
+
+
 ## [2026.8.6] - Verified SMTP TLS and attribute escaping (HACS review round 3)
 
 ### Security

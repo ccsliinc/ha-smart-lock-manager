@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from homeassistant.core import HomeAssistant
 from homeassistant.util.ssl import client_context
 
-from .notifications_config import load_smtp_creds_sync
+from .notifications_config import DEFAULT_SMTP_PORT, load_smtp_creds_sync
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class RenderedEmail:
 
 
 class EmailNotifier:
-    """Builds (and, only when real-send is enabled, dispatches) SMTP2GO emails.
+    """Builds (and, only when real-send is enabled, dispatches) alert emails.
 
     Replicates the user's ``lib_email`` send: same SMTP host/port, STARTTLS
     (with a VERIFYING context, which lib_email does not use), subject/marker
@@ -308,17 +308,25 @@ class EmailNotifier:
         return msg
 
     def _smtp_send(self, creds: Dict[str, Any], email: RenderedEmail) -> bool:
-        """Connect to SMTP2GO, STARTTLS, login and send (parity with lib_email).
+        """Connect to the configured relay, STARTTLS, login and send.
 
         - Description: Only ever reached when real-send is explicitly enabled
-          AND dry-run is not forced. Never called in dev/dry-run.
-        - Inputs: creds (dict), email (RenderedEmail).
+          AND dry-run is not forced. Never called in dev/dry-run. The host comes
+          from the install's own config and is never defaulted here: a fallback
+          at this layer would silently re-point the send at a relay the
+          installer did not choose, defeating the required-host check in
+          :mod:`.notifications_config`. A failure names the host it was talking
+          to, because "535 Incorrect authentication data" with no host in it
+          reads identically whether the credentials are wrong or the endpoint
+          is.
+        - Inputs: creds (dict, with a non-empty ``host``), email
+          (RenderedEmail).
         - Outputs: bool — True on success.
         """
         msg = self._build_mime(creds, email)
+        host = creds["host"]
+        port = int(creds.get("port") or DEFAULT_SMTP_PORT)
         try:
-            host = creds.get("host") or "mail.smtp2go.com"
-            port = int(creds.get("port") or 587)
             with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT) as smtp:
                 smtp.ehlo()
                 # An explicit context is REQUIRED, not optional: bare
@@ -333,11 +341,13 @@ class EmailNotifier:
                 smtp.sendmail(creds["from"], email.recipients, msg.as_string())
             return True
         except (smtplib.SMTPException, OSError) as exc:
-            _LOGGER.error("notifications: SMTP send failed: %s", exc)
+            _LOGGER.error(
+                "notifications: SMTP send failed via %s:%s: %s", host, port, exc
+            )
             return False
 
     async def send_real(self, email: RenderedEmail) -> bool:
-        """Actually send a rendered email via SMTP2GO (executor).
+        """Actually send a rendered email via the configured relay (executor).
 
         - Description: The ONLY path that touches the network. Callers must have
           already confirmed real-send is enabled and dry-run is not forced.

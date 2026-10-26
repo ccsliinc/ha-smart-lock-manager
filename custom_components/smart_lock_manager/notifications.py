@@ -12,11 +12,12 @@ notification *intents* and, in a future production build, into real sends.
   :data:`REAL_NOTIFY_ENV` (``SLM_ENABLE_REAL_NOTIFY``, default OFF) AND requires
   that dry-run is NOT forced. So dev never sends, and prod stays silent until
   that flag is explicitly turned on. This phase ships it OFF.
-* **Byte-compatible email format.** SMTP2GO request shape and subject line
-  mirror the user's ``lib_email`` pyscript: subject
+* **Byte-compatible email format.** Message shape and subject line mirror the
+  user's ``lib_email`` pyscript: subject
   ``[fleet/internal/<kind>] <marker> <subject>``, ``kind="alert"`` routing
-  (base ``smtp2go_to`` + ``smtp2go_alert_to``), STARTTLS to
-  ``mail.smtp2go.com:587`` — making parity comparison trivial.
+  (base ``smtp2go_to`` + ``smtp2go_alert_to``), STARTTLS on port 587 — making
+  parity comparison trivial. The relay itself is whatever the install
+  configures; this integration ships no default host.
 
 SECURITY: payloads carry door names, severities, human messages and recipient
 addresses (non-secret user config) only — never PIN codes.
